@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+venv/
+.venv/
+env/
+
+# ESP-IDF / PlatformIO
+.pio/
+.vscode/
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+*.map
+output.map
+
+# Recordings / test output
+sim/server/recordings/
+sim/device/recordings/
+*.wav
+*.opus
+*.raw
+*.pcm
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+*.swp
+*.swo
