@@ -116,8 +116,8 @@ void DisplayDriver::setBacklight(bool on)
     {
         const uint32_t duty_max = (1u << LEDC_TIMER_13_BIT) - 1;
         uint32_t duty = on ? (bl_level_percent_ * duty_max) / 100 : 0;
-        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
-        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     }
     else
     {
@@ -142,8 +142,8 @@ void DisplayDriver::setBacklightLevel(uint8_t percent)
     {
         const uint32_t duty_max = (1u << LEDC_TIMER_13_BIT) - 1;
         uint32_t duty = (bl_level_percent_ * duty_max) / 100;
-        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
-        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     }
     else
     {
@@ -622,7 +622,7 @@ void DisplayDriver::initBacklightPwm()
 
     // Configure a simple LEDC channel for backlight dimming
     ledc_timer_config_t tcfg = {};
-    tcfg.speed_mode = LEDC_HIGH_SPEED_MODE;
+    tcfg.speed_mode = LEDC_LOW_SPEED_MODE;
     tcfg.timer_num = LEDC_TIMER_0;
     tcfg.duty_resolution = LEDC_TIMER_13_BIT;
     tcfg.freq_hz = 5000; // 5 kHz
@@ -636,7 +636,7 @@ void DisplayDriver::initBacklightPwm()
     }
 
     ledc_channel_config_t ccfg = {};
-    ccfg.speed_mode = LEDC_HIGH_SPEED_MODE;
+    ccfg.speed_mode = LEDC_LOW_SPEED_MODE;
     ccfg.channel = LEDC_CHANNEL_0;
     ccfg.timer_sel = LEDC_TIMER_0;
     ccfg.intr_type = LEDC_INTR_DISABLE;
