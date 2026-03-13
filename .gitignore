@@ -10,6 +10,7 @@ venv/
 env/
 
 # ESP-IDF / PlatformIO
+.claude/
 .pio/
 .vscode/
 build/
