@@ -27,7 +27,7 @@ public:
         int pin_mosi = -1;
         int pin_sclk = -1;
 
-        int dma_chan = 1;
+        int dma_chan = SPI_DMA_CH_AUTO;
 
         uint16_t width = 240;
         uint16_t height = 320;
