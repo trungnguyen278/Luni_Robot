@@ -21,15 +21,14 @@ bool NetworkManager::init(const Config& cfg)
 
     wifi_ = std::make_unique<WifiService>();
     ws_   = std::make_unique<WebSocketClient>();
-    mqtt_ = std::make_unique<MqttClient>();
+    // MQTT is lazy-initialized: created only after WS is connected
+    // to avoid wasting ~9KB RAM and blocking esp-tls during WS setup
 
     wifi_->init();
     ws_->init();
-    mqtt_->init();
 
     setupWifi();
     setupWebSocket();
-    setupMqtt();
 
     return true;
 }
@@ -90,13 +89,7 @@ void NetworkManager::setupWifi()
                 ws_->connect();
             }
 
-            // Connect MQTT
-            if (mqtt_ && !cfg_.mqtt_url.empty()) {
-                mqtt_->setUri(cfg_.mqtt_url);
-                std::string user = cfg_.user_id.empty() ? std::string(getDeviceEfuseID()) : cfg_.user_id;
-                mqtt_->setCredentials(user, cfg_.tx_key);
-                mqtt_->start();
-            }
+            // MQTT is lazy-started after WS connects (see setupWebSocket)
             break;
 
         case 0: // DISCONNECTED
@@ -129,7 +122,24 @@ void NetworkManager::setupWebSocket()
             // Start uplink task
             if (!uplink_task_ && mic_buf_) {
                 xTaskCreatePinnedToCore(&NetworkManager::uplinkTaskEntry,
-                    "Uplink", 4096, this, 4, &uplink_task_, 0);
+                    "Uplink", 3072, this, 4, &uplink_task_, 0);
+            }
+
+            // Lazy MQTT: only start if enough heap (MQTT needs ~9KB, keep 15KB for WiFi/WS)
+            if (!mqtt_ && !cfg_.mqtt_url.empty()) {
+                size_t free_heap = esp_get_free_heap_size();
+                if (free_heap > 24000) {
+                    ESP_LOGI(TAG, "Lazy MQTT init (free heap: %lu)", (unsigned long)free_heap);
+                    mqtt_ = std::make_unique<MqttClient>();
+                    mqtt_->init();
+                    setupMqtt();
+                    mqtt_->setUri(cfg_.mqtt_url);
+                    std::string user = cfg_.user_id.empty() ? std::string(getDeviceEfuseID()) : cfg_.user_id;
+                    mqtt_->setCredentials(user, cfg_.tx_key);
+                    mqtt_->start();
+                } else {
+                    ESP_LOGW(TAG, "MQTT skipped - low heap (%lu bytes), need >24KB", (unsigned long)free_heap);
+                }
             }
             break;
 
@@ -262,19 +272,80 @@ void NetworkManager::uplinkTaskEntry(void* arg)
 void NetworkManager::uplinkLoop()
 {
     ESP_LOGI(TAG, "Uplink task started");
-    uint8_t buf[512];
+    // Batch buffer: accumulate multiple length-prefixed Opus frames
+    // then send as one WS binary message to reduce overhead
+    static uint8_t batch_buf[2048];
+    size_t batch_pos = 0;
+    uint32_t frame_count = 0;
+    static uint32_t send_count = 0;
 
     while (started_) {
         if (!ws_connected_ ||
             StateManager::instance().getInteractionState() != state::InteractionState::LISTENING) {
+            // Flush remaining data before going idle
+            if (batch_pos > 0) {
+                sendBinary(batch_buf, batch_pos);
+                batch_pos = 0;
+            }
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
-        size_t got = xStreamBufferReceive(mic_buf_, buf, sizeof(buf), pdMS_TO_TICKS(20));
-        if (got > 0) {
-            sendBinary(buf, got);
+        // Read 2-byte length prefix
+        uint8_t header[2];
+        size_t got = xStreamBufferReceive(mic_buf_, header, 2, pdMS_TO_TICKS(20));
+        if (got < 2) {
+            // Timeout — flush whatever we have
+            if (batch_pos > 0) {
+                sendBinary(batch_buf, batch_pos);
+                send_count++;
+                if (send_count == 1 || send_count % 50 == 0) {
+                    ESP_LOGI(TAG, "Uplink: batch #%lu, %zu bytes, %lu frames",
+                             (unsigned long)send_count, batch_pos, (unsigned long)frame_count);
+                }
+                batch_pos = 0;
+                frame_count = 0;
+            }
+            continue;
         }
+
+        uint16_t frame_len = header[0] | ((uint16_t)header[1] << 8);
+        if (frame_len == 0 || frame_len > 256) {
+            ESP_LOGE(TAG, "Uplink: bad frame len %u, resetting", frame_len);
+            xStreamBufferReset(mic_buf_);
+            batch_pos = 0;
+            frame_count = 0;
+            continue;
+        }
+
+        // Check if this frame fits in the batch
+        size_t total_frame = 2 + frame_len;
+        if (batch_pos + total_frame > sizeof(batch_buf)) {
+            // Flush current batch first
+            sendBinary(batch_buf, batch_pos);
+            send_count++;
+            if (send_count == 1 || send_count % 50 == 0) {
+                ESP_LOGI(TAG, "Uplink: batch #%lu, %zu bytes, %lu frames",
+                         (unsigned long)send_count, batch_pos, (unsigned long)frame_count);
+            }
+            batch_pos = 0;
+            frame_count = 0;
+        }
+
+        // Copy header
+        batch_buf[batch_pos] = header[0];
+        batch_buf[batch_pos + 1] = header[1];
+
+        // Read Opus data
+        size_t data_got = xStreamBufferReceive(mic_buf_, batch_buf + batch_pos + 2,
+                                                frame_len, pdMS_TO_TICKS(50));
+        if (data_got < frame_len) {
+            ESP_LOGW(TAG, "Uplink: incomplete frame (%zu/%u)", data_got, frame_len);
+            continue;
+        }
+
+        batch_pos += total_frame;
+        frame_count++;
     }
 
     ESP_LOGW(TAG, "Uplink task ended");
