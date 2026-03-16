@@ -38,8 +38,9 @@ void WebSocketClient::connect()
 
     esp_websocket_client_config_t cfg = {};
     cfg.uri = ws_url.c_str();
-    cfg.buffer_size = 4096; // Reduced from 8KB - we now have freed 115KB from Framebuffer removal
-    cfg.disable_auto_reconnect = true;
+    cfg.buffer_size = 2048; // Balance between audio batches and RAM
+    cfg.disable_auto_reconnect = false;
+    cfg.reconnect_timeout_ms = 3000;  // Retry every 3s
     // --- CẤU HÌNH ĐỂ PHÁT HIỆN SERVER NGẮT KẾT NỐI ---
     cfg.ping_interval_sec = 5;     // Cứ 5 giây gửi 1 gói Ping
     cfg.pingpong_timeout_sec = 10; // Nếu sau 10 giây không thấy Server phản hồi Pong thì đóng kết nối
@@ -104,7 +105,7 @@ bool WebSocketClient::sendBinary(const uint8_t *data, size_t len)
     if (!client || !connected)
         return false;
 
-    int sent = esp_websocket_client_send_bin(client, (const char *)data, len, 100);
+    int sent = esp_websocket_client_send_bin(client, (const char *)data, len, pdMS_TO_TICKS(500));
     if (sent != (int)len)
     {
         ESP_LOGE(TAG, "WS send failed -> force close");
