@@ -22,6 +22,9 @@ bool TouchInput::init(const Config &cfg)
     ESP_ERROR_CHECK(gpio_config(&io));
 
     last_state = readRaw();
+    int raw_level = gpio_get_level(cfg_.pin);
+    ESP_LOGI(TAG, "Init: pin=%d, raw_level=%d, active_low=%d, initial_state=%s",
+             cfg_.pin, raw_level, cfg_.active_low, last_state ? "PRESSED" : "RELEASED");
     return true;
 }
 
@@ -102,6 +105,8 @@ void TouchInput::loop()
                 //         if (cb_) cb_(Event::RELEASE);
                 //     }
                 // }
+                ESP_LOGI(TAG, "State change: %s (raw=%d)", state ? "PRESSED" : "RELEASED",
+                         gpio_get_level(cfg_.pin));
                 if (cb_)
                 {
                     cb_(state ? Event::PRESS : Event::RELEASE);
