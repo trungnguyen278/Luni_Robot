@@ -39,11 +39,11 @@ bool OpusCodec::initCodec()
 
     // Configure encoder for low-latency voice
     opus_encoder_ctl(encoder_, OPUS_SET_BITRATE(DEFAULT_BITRATE));
-    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(3));          // Lower complexity for embedded
+    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(1));          // Minimal complexity for RISC-V stack
     opus_encoder_ctl(encoder_, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
     opus_encoder_ctl(encoder_, OPUS_SET_DTX(0));                 // Disable DTX for real-time
     opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(0));
-    opus_encoder_ctl(encoder_, OPUS_SET_VBR(1));                 // Variable bitrate
+    opus_encoder_ctl(encoder_, OPUS_SET_VBR(1));                 // Variable bitrate (better quality)
 
     // Create decoder
     decoder_ = opus_decoder_create(16000, 1, &err);

@@ -37,7 +37,7 @@ public:
 private:
     static constexpr size_t FRAME_SAMPLES      = 320;   // 20ms @ 16kHz
     static constexpr size_t MAX_ENCODED_BYTES   = 256;   // Max Opus frame (typical ~40-80 bytes for voice)
-    static constexpr int    DEFAULT_BITRATE     = 16000; // 16 kbps
+    static constexpr int    DEFAULT_BITRATE     = 24000; // 24 kbps
 
     OpusEncoder* encoder_ = nullptr;
     OpusDecoder* decoder_ = nullptr;
