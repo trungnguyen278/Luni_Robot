@@ -36,6 +36,7 @@ public:
     bool init(const std::string &adv_name, const std::vector<WifiInfo> &cached_networks = {}, const ConfigData *current_config = nullptr);
     bool start();
     void stop();
+    void deinit();  // Full teardown: stop + release BLE controller memory
 
     void onConfigComplete(OnConfigComplete cb) { config_cb_ = cb; }
 

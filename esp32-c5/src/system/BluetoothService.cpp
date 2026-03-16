@@ -11,6 +11,7 @@
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "esp_bt.h"
 
 static const char *TAG = "BT_SVC";
 
@@ -391,4 +392,26 @@ void BluetoothService::stop()
     ble_gap_adv_stop();
     started_ = false;
     ESP_LOGI(TAG, "BLE Advertising stopped");
+}
+
+void BluetoothService::deinit()
+{
+    stop();
+
+    // Shut down NimBLE host — this causes nimble_port_run() to return
+    int rc = nimble_port_stop();
+    if (rc == 0) {
+        nimble_port_deinit();
+        ESP_LOGI(TAG, "NimBLE port deinitialized");
+    } else {
+        ESP_LOGW(TAG, "nimble_port_stop failed: %d", rc);
+    }
+
+    // Release BLE controller memory back to heap
+    esp_bt_controller_disable();
+    esp_bt_controller_deinit();
+    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    ESP_LOGI(TAG, "BLE controller memory released");
+
+    s_instance = nullptr;
 }
