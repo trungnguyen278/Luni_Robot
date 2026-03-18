@@ -3,6 +3,7 @@
 #include "system/PowerManager.hpp"
 #include "system/AudioManager.hpp"
 #include "system/SpiBridge.hpp"
+#include "system/UartBridge.hpp"
 #include "TouchInput.hpp"
 
 #include "esp_log.h"
@@ -55,6 +56,7 @@ void AppController::attachModules(std::unique_ptr<DisplayManager> displayIn,
                                    std::unique_ptr<PowerManager> powerIn,
                                    std::unique_ptr<AudioManager> audioIn,
                                    std::unique_ptr<SpiBridge> spiIn,
+                                   std::unique_ptr<UartBridge> uartIn,
                                    std::unique_ptr<TouchInput> touchIn)
 {
     if (started.load()) return;
@@ -62,6 +64,7 @@ void AppController::attachModules(std::unique_ptr<DisplayManager> displayIn,
     power   = std::move(powerIn);
     audio   = std::move(audioIn);
     spi     = std::move(spiIn);
+    uart    = std::move(uartIn);
     touch   = std::move(touchIn);
 }
 
@@ -129,6 +132,7 @@ void AppController::start()
     if (display) display->start();
     if (power) power->start();
     if (spi) spi->start();
+    if (uart) uart->start();
     if (audio) audio->start();
     if (touch) touch->start();
 
@@ -142,6 +146,7 @@ void AppController::stop()
 
     if (audio) audio->stop();
     if (touch) touch->stop();
+    if (uart) uart->stop();
     if (spi) spi->stop();
     if (display) display->stop();
     if (power) power->stop();
@@ -154,7 +159,7 @@ void AppController::stop()
 void AppController::reboot()
 {
     ESP_LOGW(TAG, "Reboot requested");
-    if (spi) spi->sendControlCmd(spi_proto::ControlCmd::REBOOT);
+    if (uart) uart->sendControlCmd(uart_proto::ControlCmd::REBOOT);
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
 }
@@ -237,13 +242,12 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
 {
     ESP_LOGI(TAG, "Interaction: %d (src=%d)", (int)s, (int)src);
 
-    // Forward interaction state to C5 via SPI
-    if (spi) {
-        auto& sm = StateManager::instance();
+    // Forward interaction state to C5 via UART
+    if (uart) {
         if (s == state::InteractionState::LISTENING && src == state::InputSource::BUTTON) {
-            spi->sendControlCmd(spi_proto::ControlCmd::START);
+            uart->sendControlCmd(uart_proto::ControlCmd::START);
         } else if (s == state::InteractionState::IDLE && src == state::InputSource::BUTTON) {
-            spi->sendControlCmd(spi_proto::ControlCmd::END);
+            uart->sendControlCmd(uart_proto::ControlCmd::END);
         }
     }
 
@@ -263,10 +267,15 @@ void AppController::onConnectivityStateChanged(state::ConnectivityState s)
 {
     ESP_LOGI(TAG, "Connectivity: %d", (int)s);
 
-    if (s == state::ConnectivityState::OFFLINE && audio) {
-        audio->stopAll();
-        StateManager::instance().setInteractionState(
-            state::InteractionState::IDLE, state::InputSource::UNKNOWN);
+    // Stop audio if not ONLINE — no point streaming mic when C5 can't relay to server
+    if (s != state::ConnectivityState::ONLINE && audio) {
+        auto interaction = StateManager::instance().getInteractionState();
+        if (interaction == state::InteractionState::LISTENING ||
+            interaction == state::InteractionState::PROCESSING) {
+            audio->stopAll();
+            StateManager::instance().setInteractionState(
+                state::InteractionState::IDLE, state::InputSource::UNKNOWN);
+        }
     }
 }
 

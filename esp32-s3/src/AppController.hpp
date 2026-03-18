@@ -22,6 +22,7 @@ class DisplayManager;
 class PowerManager;
 class AudioManager;
 class SpiBridge;
+class UartBridge;
 class TouchInput;
 
 // AppController for ESP32-S3: orchestrates Display, Power, Audio, SPI Bridge, Touch.
@@ -41,6 +42,7 @@ public:
                        std::unique_ptr<PowerManager> powerIn,
                        std::unique_ptr<AudioManager> audioIn,
                        std::unique_ptr<SpiBridge> spiIn,
+                       std::unique_ptr<UartBridge> uartIn,
                        std::unique_ptr<TouchInput> touchIn);
 
 private:
@@ -68,6 +70,7 @@ private:
     std::unique_ptr<PowerManager>     power;
     std::unique_ptr<AudioManager>     audio;
     std::unique_ptr<SpiBridge>        spi;
+    std::unique_ptr<UartBridge>       uart;
     std::unique_ptr<TouchInput>       touch;
 
     QueueHandle_t app_queue = nullptr;
