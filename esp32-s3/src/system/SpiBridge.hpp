@@ -20,12 +20,10 @@ public:
         gpio_num_t pin_sclk;      // SPI3 SCLK
         gpio_num_t pin_cs;        // SPI3 CS
         gpio_num_t pin_handshake; // Input from C5 (HIGH = C5 has data)
-        int clock_speed_hz = 10 * 1000 * 1000; // 10 MHz
+        int clock_speed_hz = 8 * 1000 * 1000; // 8 MHz (256B frames reliable on dupont wires)
     };
 
     using AudioDownlinkCb = std::function<void(const uint8_t* data, size_t len)>;
-    using StatusUpdateCb  = std::function<void(uint8_t interaction, uint8_t connectivity,
-                                               uint8_t system_state, uint8_t emotion)>;
 
     SpiBridge() = default;
     ~SpiBridge();
@@ -37,12 +35,12 @@ public:
     // Send audio uplink (Opus frames) to C5
     bool sendAudioUplink(const uint8_t* data, size_t len);
 
-    // Send control command to C5
-    bool sendControlCmd(spi_proto::ControlCmd cmd, const uint8_t* data = nullptr, size_t len = 0);
-
-    // Callbacks for data received from C5
+    // Callback for audio downlink received from C5
     void onAudioDownlink(AudioDownlinkCb cb) { audio_dl_cb_ = std::move(cb); }
-    void onStatusUpdate(StatusUpdateCb cb)   { status_cb_ = std::move(cb); }
+
+    // Flow control: C5 reports WS tx_buffer free space (KB) in EMPTY frames.
+    // S3 uses this to throttle audio uplink — wait instead of dropping frames.
+    uint8_t getC5BufferFreeKB() const { return c5_ws_free_kb_.load(); }
 
 private:
     static void pollTaskEntry(void* arg);
@@ -62,5 +60,7 @@ private:
     uint8_t tx_seq_ = 0;
 
     AudioDownlinkCb audio_dl_cb_;
-    StatusUpdateCb  status_cb_;
+
+    // C5 WS tx_buffer free space in KB (reported in EMPTY frames)
+    std::atomic<uint8_t> c5_ws_free_kb_{255};  // Assume full initially
 };

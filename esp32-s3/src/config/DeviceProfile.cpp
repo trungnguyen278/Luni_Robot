@@ -1,11 +1,13 @@
 #include "DeviceProfile.hpp"
 #include "AppController.hpp"
+#include "esp_log.h"
 
 // System managers
 #include "system/DisplayManager.hpp"
 #include "system/PowerManager.hpp"
 #include "system/AudioManager.hpp"
 #include "system/SpiBridge.hpp"
+#include "system/UartBridge.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
 
@@ -207,8 +209,11 @@ bool DeviceProfile::setup(AppController& app)
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         (i2s_port_t)PinConfig::I2S_NUM, I2S_ROLE_MASTER);
-    chan_cfg.dma_desc_num  = 4;
-    chan_cfg.dma_frame_num = 240;
+    // Larger DMA buffer to prevent underrun during Opus decode jitter.
+    // 6 descriptors × 480 frames = 2880 samples (~60ms @ 48kHz).
+    // With only 4×240 (960 samples = 20ms), a single decode stall causes audible pop.
+    chan_cfg.dma_desc_num  = 6;
+    chan_cfg.dma_frame_num = 480;
 
     esp_err_t err = i2s_new_channel(&chan_cfg, &tx_chan, &rx_chan);
     if (err != ESP_OK) {
@@ -272,31 +277,51 @@ bool DeviceProfile::setup(AppController& app)
     // Wire SpiBridge to AudioManager
     audio_mgr->setSpiBridge(spi_bridge.get());
 
-    // SPI downlink: C5 sends audio -> speaker encoded buffer
-    // Each SPI payload is exactly one complete [2-byte LE len][opus data] frame
-    // (C5 now sends frame-aligned data, never split across SPI transactions)
+    // SPI downlink: C5 sends raw audio bytes -> speaker encoded stream buffer.
+    // C5 streams raw bytes (up to MAX_PAYLOAD per SPI transaction, NOT frame-aligned).
+    // The stream buffer accumulates bytes; AudioRecv parses [2B len][opus] from it.
+    // This handles Opus frames of any size (including >250 bytes from server).
     StreamBufferHandle_t spk_sb = audio_mgr->getSpeakerEncodedBuffer();
     spi_bridge->onAudioDownlink([spk_sb](const uint8_t* data, size_t len) {
-        if (!data || len < 3) return;  // minimum: 2-byte header + 1 byte data
-        auto interaction = StateManager::instance().getInteractionState();
+        if (!data || len == 0) return;
+        auto& sm = StateManager::instance();
+        auto interaction = sm.getInteractionState();
         if (interaction == state::InteractionState::LISTENING) return;
 
-        // Validate the frame
-        uint16_t frame_len = data[0] | ((uint16_t)data[1] << 8);
-        if (frame_len == 0 || frame_len > 500 || (size_t)(2 + frame_len) > len) return;
+        // Auto-trigger SPEAKING if audio arrives during PROCESSING/IDLE
+        if (interaction != state::InteractionState::SPEAKING) {
+            ESP_LOGI("SpiBridge", "Audio downlink auto-trigger SPEAKING (was %d)", (int)interaction);
+            sm.setInteractionState(state::InteractionState::SPEAKING, state::InputSource::SERVER_COMMAND);
+        }
 
-        size_t total = 2 + frame_len;
+        // Write raw bytes — no frame validation needed here.
+        // AudioRecv reads [2B len][opus] boundaries from the stream buffer.
         size_t space = xStreamBufferSpacesAvailable(spk_sb);
-        if (space >= total) {
-            xStreamBufferSend(spk_sb, data, total, 0);
+        size_t to_write = (len <= space) ? len : space;
+        if (to_write > 0) {
+            xStreamBufferSend(spk_sb, data, to_write, 0);
         }
     });
 
-    // SPI status: C5 sends connectivity/emotion state
-    spi_bridge->onStatusUpdate([](uint8_t interaction, uint8_t connectivity,
-                                   uint8_t system_state, uint8_t emotion) {
+    // =========================================================
+    // 6. UART BRIDGE (Control/status with C5 via UART1)
+    // =========================================================
+    auto uart_bridge = std::make_unique<UartBridge>();
+    UartBridge::Config uart_cfg{
+        .pin_tx = (gpio_num_t)PinConfig::UART_TX,
+        .pin_rx = (gpio_num_t)PinConfig::UART_RX,
+    };
+
+    if (!uart_bridge->init(uart_cfg)) {
+        ESP_LOGE(TAG, "UartBridge init failed");
+        return false;
+    }
+
+    // UART status: C5 sends connectivity/emotion state via UART
+    uart_bridge->onStatusUpdate([](uint8_t interaction, uint8_t connectivity,
+                                    uint8_t system_state, uint8_t emotion) {
         auto& sm = StateManager::instance();
-        
+
         // C5 dictates the connectivity, system, and emotion states
         sm.setConnectivityState(static_cast<state::ConnectivityState>(connectivity));
         sm.setEmotionState(static_cast<state::EmotionState>(emotion));
@@ -304,7 +329,6 @@ bool DeviceProfile::setup(AppController& app)
 
         // Let C5 drive the interaction state as well (so Server can trigger SPEAKING)
         auto new_inter = static_cast<state::InteractionState>(interaction);
-        // Only override if C5 sends a state we care about for playback
         if (new_inter == state::InteractionState::PROCESSING || new_inter == state::InteractionState::SPEAKING) {
             sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
         } else if (new_inter == state::InteractionState::IDLE && sm.getInteractionState() == state::InteractionState::SPEAKING) {
@@ -313,7 +337,7 @@ bool DeviceProfile::setup(AppController& app)
     });
 
     // =========================================================
-    // 6. TOUCH INPUT (Button)
+    // 7. TOUCH INPUT (Button)
     // =========================================================
     auto touch_input = std::make_unique<TouchInput>();
     TouchInput::Config touch_cfg{
@@ -333,13 +357,14 @@ bool DeviceProfile::setup(AppController& app)
     });
 
     // =========================================================
-    // 7. ATTACH MODULES -> APP CONTROLLER
+    // 8. ATTACH MODULES -> APP CONTROLLER
     // =========================================================
     app.attachModules(
         std::move(display_mgr),
         std::move(power_mgr),
         std::move(audio_mgr),
         std::move(spi_bridge),
+        std::move(uart_bridge),
         std::move(touch_input));
 
     ESP_LOGI(TAG, "DeviceProfile setup OK (ESP32-S3)");

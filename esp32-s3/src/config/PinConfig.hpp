@@ -38,6 +38,10 @@ static constexpr int I2S_NUM   = 0;   // I2S0
 static constexpr int SPK_SD    = 40;  // MAX98357 shutdown (LOW=off, HIGH=on)
 static constexpr int SPK_GAIN  = 41;  // MAX98357 GAIN (LOW=15dB, float=9dB, HIGH=12dB)
 
+// --- UART Bridge to ESP32-C5 (control/status messages) ---
+static constexpr int UART_TX       = 18;  // S3 GPIO18 -> C5 GPIO7   (RX)
+static constexpr int UART_RX       = 17;  // S3 GPIO17 <- C5 GPIO6   (TX)
+
 // --- SPI3 Bridge to ESP32-C5 (S3=Master, C5=Slave) ---
 static constexpr int SPI3_MOSI      = 35;  // S3 GPIO35 -> C5 GPIO2  (MOSI)
 static constexpr int SPI3_MISO      = 36;  // S3 GPIO36 <- C5 GPIO3  (MISO)

@@ -69,7 +69,11 @@ void SpiBridge::start()
     if (started_) return;
     started_ = true;
 
-    xTaskCreatePinnedToCore(&SpiBridge::pollTaskEntry, "SpiBridge", 4096, this, 3, &poll_task_, 1);
+    // Core 0: away from audio tasks (MicRead/MicStream/AudioRecv/SpkPlay all on Core 1).
+    // Core 0 only has AppCtrl (event-driven), TouchInput, DisplayLoop — plenty of CPU.
+    // Priority 5: higher than TouchInput(3)/AppCtrl(4), won't be starved.
+    // This eliminates SPI vs audio CPU contention that caused TX queue overflow.
+    xTaskCreatePinnedToCore(&SpiBridge::pollTaskEntry, "SpiBridge", 4096, this, 5, &poll_task_, 0);
     ESP_LOGI(TAG, "SpiBridge started");
 }
 
@@ -90,25 +94,13 @@ bool SpiBridge::sendAudioUplink(const uint8_t* data, size_t len)
     spi_proto::buildFrame(frame, (uint8_t)spi_proto::MsgFromS3::AUDIO_UPLINK,
                           data, (uint16_t)len, tx_seq_++);
 
-    // Wait up to 10ms — gives poll loop time to drain one frame
-    return xQueueSend(tx_queue_, frame, pdMS_TO_TICKS(10)) == pdTRUE;
-}
+    // Flow control: if C5's WS tx_buffer has < 4KB free, wait longer.
+    // This creates backpressure: S3 mic encode blocks → I2S DMA buffers → natural throttle.
+    // Prevents frame drops when WS can't drain as fast as SPI delivers.
+    uint8_t c5_free = c5_ws_free_kb_.load();
+    TickType_t wait = (c5_free < 4) ? pdMS_TO_TICKS(100) : pdMS_TO_TICKS(20);
 
-bool SpiBridge::sendControlCmd(spi_proto::ControlCmd cmd, const uint8_t* data, size_t len)
-{
-    if (!tx_queue_) return false;
-
-    uint8_t payload[spi_proto::MAX_PAYLOAD];
-    payload[0] = (uint8_t)cmd;
-    if (data && len > 0 && len < spi_proto::MAX_PAYLOAD) {
-        memcpy(&payload[1], data, len);
-    }
-
-    uint8_t frame[spi_proto::FRAME_SIZE];
-    spi_proto::buildFrame(frame, (uint8_t)spi_proto::MsgFromS3::CONTROL_CMD,
-                          payload, (uint16_t)(1 + len), tx_seq_++);
-
-    return xQueueSend(tx_queue_, frame, 0) == pdTRUE;
+    return xQueueSend(tx_queue_, frame, wait) == pdTRUE;
 }
 
 // === SPI Transaction ===
@@ -136,27 +128,33 @@ void SpiBridge::handleRxFrame(const uint8_t* rx_buf)
     uint8_t seq;
 
     if (!spi_proto::parseFrame(rx_buf, msg_type, payload, payload_len, seq)) {
-        return; // Invalid frame or EMPTY
+        // Count CRC/magic failures for debugging SPI signal integrity
+        static uint32_t parse_fail_count = 0;
+        parse_fail_count++;
+        if (parse_fail_count == 1 || parse_fail_count % 500 == 0) {
+            ESP_LOGW(TAG, "parseFrame failed #%lu (magic=0x%02X)",
+                     (unsigned long)parse_fail_count, rx_buf[0]);
+        }
+        return;
     } else if (msg_type == (uint8_t)spi_proto::MsgFromC5::EMPTY) {
-        // ESP_LOGD(TAG, "RX EMPTY");
+        // EMPTY frames carry flow control: payload[0] = WS tx_buffer free KB
+        if (payload_len >= 1) {
+            c5_ws_free_kb_.store(payload[0]);
+        }
         return;
     }
 
     if (msg_type == (uint8_t)spi_proto::MsgFromC5::AUDIO_DOWNLINK) {
+        static uint32_t dl_count = 0;
+        dl_count++;
+        if (dl_count == 1 || dl_count % 200 == 0) {
+            ESP_LOGI(TAG, "RX AUDIO_DOWNLINK #%lu: %u bytes", (unsigned long)dl_count, payload_len);
+        }
         if (audio_dl_cb_ && payload_len > 0) {
             audio_dl_cb_(payload, payload_len);
         }
-    } else if (msg_type == (uint8_t)spi_proto::MsgFromC5::STATUS_UPDATE) {
-        if (status_cb_ && payload_len >= sizeof(spi_proto::StatusPayload)) {
-            auto* sp = reinterpret_cast<const spi_proto::StatusPayload*>(payload);
-            ESP_LOGI(TAG, "RX STATUS_UPDATE: int=%d, conn=%d, sys=%d, emo=%d", 
-                     sp->interaction, sp->connectivity, sp->system_state, sp->emotion);
-            status_cb_(sp->interaction, sp->connectivity, sp->system_state, sp->emotion);
-        } else {
-            ESP_LOGW(TAG, "RX STATUS_UPDATE failed: status_cb_=%d, payload_len=%d (expected %d)", 
-                     status_cb_ != nullptr, payload_len, sizeof(spi_proto::StatusPayload));
-        }
     }
+    // STATUS_UPDATE now comes via UART, not SPI
 }
 
 // === Poll Task ===

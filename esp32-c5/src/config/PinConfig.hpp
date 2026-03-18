@@ -20,7 +20,11 @@ static constexpr int SPI_HANDSHAKE = 8;   // C5 GPIO8  -> S3 GPIO39  (HIGH = C5 
 // --- SPI Configuration ---
 static constexpr int SPI_NUM       = 2;   // SPI2
 
+// --- UART Bridge to S3 (control/status messages) ---
+static constexpr int UART_TX       = 6;   // C5 GPIO6  -> S3 GPIO17  (RX)
+static constexpr int UART_RX       = 7;   // C5 GPIO7  <- S3 GPIO18  (TX)
+
 // --- Free GPIOs ---
-// GPIO 6, 7, 9, 10 are available for future use
+// GPIO 9, 10 are available for future use
 
 } // namespace PinConfig

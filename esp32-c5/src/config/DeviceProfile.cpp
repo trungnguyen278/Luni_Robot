@@ -4,6 +4,7 @@
 // System managers
 #include "system/NetworkManager.hpp"
 #include "system/SpiBridge.hpp"
+#include "system/UartBridge.hpp"
 #include "system/BluetoothService.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
@@ -253,39 +254,57 @@ bool DeviceProfile::setup(AppController& app)
         return false;
     }
 
-    // Wire SPI to NetworkManager
+    // Wire SPI to NetworkManager (audio only)
     network_mgr->setSpiBridge(spi_bridge.get());
 
-    // SPI uplink: S3 sends audio -> WS binary
+    // Flow control: SPI EMPTY frames include WS tx_buffer free space (KB)
+    // so S3 can throttle audio uplink when C5's WS buffer is full
     NetworkManager* net_ptr = network_mgr.get();
+    spi_bridge->setUplinkSpaceQuery([net_ptr]() -> size_t {
+        return net_ptr->getWsTxFreeSpace();
+    });
     spi_bridge->onAudioUplink([net_ptr](const uint8_t* data, size_t len) {
         net_ptr->sendBinary(data, len);
     });
 
-    // SPI control: S3 sends START/END/config commands
-    spi_bridge->onControlCmd([net_ptr](spi_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
+    // =========================================================
+    // 4. UART BRIDGE (Control/status with S3 via UART1)
+    // =========================================================
+    auto uart_bridge = std::make_unique<UartBridge>();
+    UartBridge::Config uart_cfg{
+        .pin_tx = (gpio_num_t)PinConfig::UART_TX,
+        .pin_rx = (gpio_num_t)PinConfig::UART_RX,
+    };
+
+    if (!uart_bridge->init(uart_cfg)) {
+        ESP_LOGE(TAG, "UartBridge init failed");
+        return false;
+    }
+
+    // UART control: S3 sends START/END/config commands via UART
+    uart_bridge->onControlCmd([net_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
         switch (cmd) {
-        case spi_proto::ControlCmd::START:
+        case uart_proto::ControlCmd::START:
             net_ptr->endSpeakingSession();
             net_ptr->sendText("START");
             StateManager::instance().setInteractionState(
                 state::InteractionState::LISTENING, state::InputSource::BUTTON);
             break;
-        case spi_proto::ControlCmd::END:
+        case uart_proto::ControlCmd::END:
+            net_ptr->waitTxDrain(1000);
             net_ptr->sendText("END");
             StateManager::instance().setInteractionState(
                 state::InteractionState::IDLE, state::InputSource::BUTTON);
             break;
-        case spi_proto::ControlCmd::SET_VOLUME:
+        case uart_proto::ControlCmd::SET_VOLUME:
             if (len >= 1) {
-                // Volume is managed on S3 now, but relay if needed
                 ESP_LOGI(TAG, "Volume command from S3: %d", data[0]);
             }
             break;
-        case spi_proto::ControlCmd::REBOOT:
+        case uart_proto::ControlCmd::REBOOT:
             esp_restart();
             break;
-        case spi_proto::ControlCmd::WIFI_CONFIG: {
+        case uart_proto::ControlCmd::WIFI_CONFIG: {
             if (len < 2) break;
             size_t pos = 0;
             uint8_t ssid_len = data[pos++];
@@ -296,7 +315,7 @@ bool DeviceProfile::setup(AppController& app)
             uint8_t pass_len = data[pos++];
             if (pos + pass_len > len) break;
             std::string pass(reinterpret_cast<const char*>(&data[pos]), pass_len);
-            ESP_LOGI(TAG, "SPI: WiFi config from S3: ssid='%s'", ssid.c_str());
+            ESP_LOGI(TAG, "UART: WiFi config from S3: ssid='%s'", ssid.c_str());
             nvs_handle_t h;
             if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
                 nvs_set_str(h, "ssid", ssid.c_str());
@@ -312,19 +331,19 @@ bool DeviceProfile::setup(AppController& app)
         }
     });
 
-    // Forward emotion state changes to S3 via SPI
-    SpiBridge* spi_ptr = spi_bridge.get();
-    StateManager::instance().subscribeEmotion([spi_ptr](state::EmotionState e) {
-        spi_ptr->sendStatusUpdate(
+    // Forward emotion state changes to S3 via UART
+    UartBridge* uart_ptr = uart_bridge.get();
+    StateManager::instance().subscribeEmotion([uart_ptr](state::EmotionState e) {
+        uart_ptr->sendStatusUpdate(
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)StateManager::instance().getConnectivityState(),
             (uint8_t)StateManager::instance().getSystemState(),
             (uint8_t)e);
     });
 
-    // Forward connectivity state changes to S3 via SPI
-    StateManager::instance().subscribeConnectivity([spi_ptr](state::ConnectivityState c) {
-        spi_ptr->sendStatusUpdate(
+    // Forward connectivity state changes to S3 via UART
+    StateManager::instance().subscribeConnectivity([uart_ptr](state::ConnectivityState c) {
+        uart_ptr->sendStatusUpdate(
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)c,
             (uint8_t)StateManager::instance().getSystemState(),
@@ -332,11 +351,12 @@ bool DeviceProfile::setup(AppController& app)
     });
 
     // =========================================================
-    // 4. ATTACH MODULES -> APP CONTROLLER
+    // 5. ATTACH MODULES -> APP CONTROLLER
     // =========================================================
     app.attachModules(
         std::move(network_mgr),
-        std::move(spi_bridge));
+        std::move(spi_bridge),
+        std::move(uart_bridge));
 
     ESP_LOGI(TAG, "DeviceProfile setup OK (ESP32-C5)");
     return true;
