@@ -37,9 +37,9 @@ bool OpusCodec::initCodec()
         return false;
     }
 
-    // Configure encoder for low-latency voice
+    // Configure encoder — S3 has 240MHz Xtensa dual-core, plenty of CPU on Core 1
     opus_encoder_ctl(encoder_, OPUS_SET_BITRATE(DEFAULT_BITRATE));
-    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(1));          // Minimal complexity for RISC-V stack
+    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(3));          // Balanced: better than 1, won't starve IDLE1 watchdog
     opus_encoder_ctl(encoder_, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
     opus_encoder_ctl(encoder_, OPUS_SET_DTX(0));                 // Disable DTX for real-time
     opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(0));
