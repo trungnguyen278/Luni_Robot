@@ -48,12 +48,9 @@ bool AudioManager::init()
         return false;
     }
 
-    // S3 has PSRAM — use larger buffers than C5
-    // sb_mic_encoded is unused (MicStream sends directly to SPI, no intermediate buffer)
-    // Speaker encoded buffer is 16KB to absorb SPI jitter from C5 relay
     sb_mic_pcm     = xStreamBufferCreate(4 * 1024, 1);
-    sb_spk_pcm     = xStreamBufferCreate(8 * 1024, 1);
-    sb_spk_encoded = xStreamBufferCreate(16 * 1024, 1);
+    sb_spk_pcm     = xStreamBufferCreate(16 * 1024, 1);
+    sb_spk_encoded = xStreamBufferCreate(64 * 1024, 1);
 
     if (!sb_mic_pcm || !sb_spk_pcm || !sb_spk_encoded) {
         ESP_LOGE(TAG, "Failed to create stream buffers");
@@ -319,13 +316,25 @@ void AudioManager::audioRecvLoop()
 
         uint16_t frame_len = header[0] | ((uint16_t)header[1] << 8);
         if (frame_len == 0 || frame_len > 960) {
-            // Bad frame length — likely stream corruption. Skip this header pair.
-            ESP_LOGE(TAG, "AudioRecv: bad frame len %u, skipping", frame_len);
-            // Put header[1] back as potential start of next header by treating
-            // header[0] as junk. Read one more byte into header[0] and retry.
-            // Since stream buffer can't "unread", just skip this pair and
-            // hope the next 2 bytes form a valid header.
-            continue;
+            // Stream misaligned — drain up to 1KB of garbage searching for
+            // a valid [2B len] header. Slide one byte at a time: keep header[1]
+            // as the next candidate header[0], read one fresh byte into header[1].
+            ESP_LOGE(TAG, "AudioRecv: bad frame len %u, resyncing", frame_len);
+            bool resynced = false;
+            for (int skip = 0; skip < 1024; skip++) {
+                header[0] = header[1];
+                size_t r = xStreamBufferReceive(sb_spk_encoded, &header[1], 1, pdMS_TO_TICKS(50));
+                if (r == 0) break;
+                uint16_t candidate = header[0] | ((uint16_t)header[1] << 8);
+                if (candidate > 0 && candidate <= 960) {
+                    ESP_LOGI(TAG, "AudioRecv: resynced after skipping %d bytes (len=%u)", skip + 1, candidate);
+                    frame_len = candidate;
+                    codec->reset();
+                    resynced = true;
+                    break;
+                }
+            }
+            if (!resynced) continue;
         }
 
         // Read payload — loop until we get all bytes or timeout.

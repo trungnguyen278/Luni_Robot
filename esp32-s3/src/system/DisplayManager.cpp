@@ -168,6 +168,10 @@ void DisplayManager::enableStateBinding(bool enable)
                                       { this->handleEmotion(s); });
 
     ESP_LOGI(TAG, "DisplayManager state binding enabled");
+
+    // Trigger initial state display — default states (BOOTING, OFFLINE) never
+    // fire callbacks because setXxxState() guards against same-value writes.
+    handleSystem(sm.getSystemState());
 }
 
 // (public show* helpers removed; UI is driven via handlers)
@@ -380,8 +384,7 @@ void DisplayManager::handleSystem(state::SystemState s)
         break;
 
     case state::SystemState::RUNNING:
-        // ESP_LOGI(TAG, "Displaying Running message");
-        playEmotion("idle");
+        handleConnectivity(StateManager::instance().getConnectivityState());
         break;
 
     case state::SystemState::ERROR:

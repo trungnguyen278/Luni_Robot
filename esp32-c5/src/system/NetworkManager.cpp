@@ -3,9 +3,12 @@
 #include "WebSocketClient.hpp"
 #include "MqttClient.hpp"
 #include "SpiBridge.hpp"
+#include "UartBridge.hpp"
+#include "UartProtocol.hpp"
 #include "Version.hpp"
 
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "cJSON.h"
 #include <cstring>
 
@@ -64,7 +67,8 @@ void NetworkManager::setCredentials(const std::string& ssid, const std::string& 
     if (wifi_) wifi_->connectWithCredentials(ssid.c_str(), pass.c_str());
 }
 
-void NetworkManager::setSpiBridge(SpiBridge* bridge) { spi_bridge_ = bridge; }
+void NetworkManager::setSpiBridge(SpiBridge* bridge)   { spi_bridge_ = bridge; }
+void NetworkManager::setUartBridge(UartBridge* bridge) { uart_bridge_ = bridge; }
 
 // === WiFi setup ===
 
@@ -197,6 +201,44 @@ void NetworkManager::setupWebSocket()
 
 // === MQTT setup ===
 
+void NetworkManager::mqttPublishResponse(const char* cmd, const char* status, const char* extra_json)
+{
+    std::string topic = "devices/" + std::string(getDeviceEfuseID()) + "/status";
+    char buf[256];
+    if (extra_json) {
+        snprintf(buf, sizeof(buf),
+            "{\"cmd\":\"%s\",\"status\":\"%s\",\"device_id\":\"%s\",%s}",
+            cmd, status, getDeviceEfuseID(), extra_json);
+    } else {
+        snprintf(buf, sizeof(buf),
+            "{\"cmd\":\"%s\",\"status\":\"%s\",\"device_id\":\"%s\"}",
+            cmd, status, getDeviceEfuseID());
+    }
+    ESP_LOGI(TAG, "MQTT TX: topic=%s", topic.c_str());
+    bool ok = mqtt_->publish(topic, buf);
+    ESP_LOGI(TAG, "MQTT TX result: %s payload=%s", ok ? "OK" : "FAIL", buf);
+}
+
+bool NetworkManager::nvsSetU8(const char* key, uint8_t val)
+{
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_set_u8(h, key, val);
+    if (err == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK;
+}
+
+bool NetworkManager::nvsSetString(const char* key, const char* val)
+{
+    nvs_handle_t h;
+    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_set_str(h, key, val);
+    if (err == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK;
+}
+
 void NetworkManager::setupMqtt()
 {
     mqtt_->onConnected([this]() {
@@ -206,35 +248,153 @@ void NetworkManager::setupMqtt()
     });
 
     mqtt_->onMessage([this](const std::string& topic, const std::string& payload) {
-        ESP_LOGI(TAG, "MQTT: topic=%s", topic.c_str());
+        ESP_LOGI(TAG, "MQTT RX: topic=%s", topic.c_str());
+        ESP_LOGI(TAG, "MQTT RX: payload=%.*s", (int)payload.size(), payload.c_str());
 
         cJSON* root = cJSON_Parse(payload.c_str());
-        if (!root) return;
+        if (!root) {
+            ESP_LOGE(TAG, "MQTT RX: JSON parse FAILED");
+            return;
+        }
 
         cJSON* cmd_item = cJSON_GetObjectItem(root, "cmd");
-        if (cmd_item && cJSON_IsString(cmd_item)) {
-            std::string cmd = cmd_item->valuestring;
-
-            if (cmd == "set_volume") {
-                cJSON* vol = cJSON_GetObjectItem(root, "volume");
-                if (vol && cJSON_IsNumber(vol)) {
-                    uint8_t v = (uint8_t)vol->valueint;
-                    ESP_LOGI(TAG, "MQTT set_volume: %d (relay to S3 via UART TODO)", v);
-                }
-            } else if (cmd == "reboot") {
-                esp_restart();
-            } else if (cmd == "request_status") {
-                std::string status_topic = "devices/" + std::string(getDeviceEfuseID()) + "/status";
-                auto& sm = StateManager::instance();
-                char buf[256];
-                snprintf(buf, sizeof(buf),
-                    "{\"status\":\"ok\",\"device_id\":\"%s\",\"firmware_version\":\"%s\","
-                    "\"connectivity\":%d,\"interaction\":%d}",
-                    getDeviceEfuseID(), app_meta::APP_VERSION,
-                    (int)sm.getConnectivityState(), (int)sm.getInteractionState());
-                mqtt_->publish(status_topic, buf);
-            }
+        if (!cmd_item || !cJSON_IsString(cmd_item)) {
+            ESP_LOGW(TAG, "MQTT RX: missing or invalid 'cmd' field");
+            cJSON_Delete(root);
+            return;
         }
+
+        std::string cmd = cmd_item->valuestring;
+        ESP_LOGI(TAG, "MQTT CMD: '%s'", cmd.c_str());
+
+        // ----- set_volume -----
+        if (cmd == "set_volume") {
+            cJSON* vol = cJSON_GetObjectItem(root, "volume");
+            if (!vol || !cJSON_IsNumber(vol)) {
+                mqttPublishResponse("set_volume", "error", "\"message\":\"missing volume param\"");
+            } else {
+                uint8_t v = (uint8_t)vol->valueint;
+                nvsSetU8("volume", v);
+
+                if (uart_bridge_) {
+                    uint8_t frame_payload[] = { (uint8_t)uart_proto::ControlCmd::SET_VOLUME, v };
+                    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+                    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::CONTROL_CMD,
+                                                        frame_payload, sizeof(frame_payload));
+                    if (len > 0) {
+                        uart_write_bytes(UART_NUM_1, frame, len);
+                        ESP_LOGI(TAG, "UART TX: SET_VOLUME %d -> S3", v);
+                    }
+                }
+
+                char extra[32];
+                snprintf(extra, sizeof(extra), "\"volume\":%d", v);
+                mqttPublishResponse("set_volume", "ok", extra);
+            }
+
+        // ----- set_brightness -----
+        } else if (cmd == "set_brightness") {
+            cJSON* br = cJSON_GetObjectItem(root, "brightness");
+            if (!br || !cJSON_IsNumber(br)) {
+                mqttPublishResponse("set_brightness", "error", "\"message\":\"missing brightness param\"");
+            } else {
+                uint8_t b = (uint8_t)br->valueint;
+                nvsSetU8("brightness", b);
+
+                if (uart_bridge_) {
+                    uint8_t frame_payload[] = { (uint8_t)uart_proto::ControlCmd::SET_BRIGHTNESS, b };
+                    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+                    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::CONTROL_CMD,
+                                                        frame_payload, sizeof(frame_payload));
+                    if (len > 0) {
+                        uart_write_bytes(UART_NUM_1, frame, len);
+                        ESP_LOGI(TAG, "UART TX: SET_BRIGHTNESS %d -> S3", b);
+                    }
+                }
+
+                char extra[40];
+                snprintf(extra, sizeof(extra), "\"brightness\":%d", b);
+                mqttPublishResponse("set_brightness", "ok", extra);
+            }
+
+        // ----- set_device_name -----
+        } else if (cmd == "set_device_name") {
+            cJSON* name = cJSON_GetObjectItem(root, "device_name");
+            if (!name || !cJSON_IsString(name)) {
+                mqttPublishResponse("set_device_name", "error", "\"message\":\"missing device_name param\"");
+            } else {
+                nvsSetString("device_name", name->valuestring);
+
+                char extra[96];
+                snprintf(extra, sizeof(extra), "\"device_name\":\"%s\"", name->valuestring);
+                mqttPublishResponse("set_device_name", "ok", extra);
+            }
+
+        // ----- set_emotion -----
+        } else if (cmd == "set_emotion") {
+            cJSON* code = cJSON_GetObjectItem(root, "code");
+            if (!code || !cJSON_IsString(code)) {
+                mqttPublishResponse("set_emotion", "error", "\"message\":\"missing code param\"");
+            } else {
+                auto emotion = parseEmotionCode(code->valuestring);
+                StateManager::instance().setEmotionState(emotion);
+
+                char extra[48];
+                snprintf(extra, sizeof(extra), "\"code\":\"%s\"", code->valuestring);
+                mqttPublishResponse("set_emotion", "ok", extra);
+            }
+
+        // ----- reboot -----
+        } else if (cmd == "reboot") {
+            mqttPublishResponse("reboot", "ok", "\"message\":\"rebooting\"");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_restart();
+
+        // ----- request_status -----
+        } else if (cmd == "request_status") {
+            auto& sm = StateManager::instance();
+            std::string resp_topic = "devices/" + std::string(getDeviceEfuseID()) + "/status";
+            char buf[300];
+            snprintf(buf, sizeof(buf),
+                "{\"cmd\":\"request_status\",\"status\":\"ok\","
+                "\"device_id\":\"%s\",\"firmware_version\":\"%s\","
+                "\"connectivity\":%d,\"interaction\":%d,"
+                "\"free_heap\":%lu,\"uptime_ms\":%lu}",
+                getDeviceEfuseID(), app_meta::APP_VERSION,
+                (int)sm.getConnectivityState(), (int)sm.getInteractionState(),
+                (unsigned long)esp_get_free_heap_size(),
+                (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+            ESP_LOGI(TAG, "MQTT TX: topic=%s", resp_topic.c_str());
+            bool ok = mqtt_->publish(resp_topic, buf);
+            ESP_LOGI(TAG, "MQTT TX result: %s payload=%s", ok ? "OK" : "FAIL", buf);
+
+        // ----- request_ble_config -----
+        } else if (cmd == "request_ble_config") {
+            mqttPublishResponse("request_ble_config", "ok", "\"message\":\"BLE config mode not yet implemented\"");
+
+        // ----- set_wifi -----
+        } else if (cmd == "set_wifi") {
+            mqttPublishResponse("set_wifi", "not_supported", "\"message\":\"Use BLE provisioning\"");
+
+        // ----- set_ws_url -----
+        } else if (cmd == "set_ws_url") {
+            mqttPublishResponse("set_ws_url", "not_supported", "\"message\":\"Use BLE provisioning\"");
+
+        // ----- stop_audio -----
+        } else if (cmd == "stop_audio") {
+            endSpeakingSession();
+            StateManager::instance().setInteractionState(
+                state::InteractionState::IDLE, state::InputSource::SERVER_COMMAND);
+            mqttPublishResponse("stop_audio", "ok");
+
+        // ----- unknown -----
+        } else {
+            ESP_LOGW(TAG, "MQTT CMD unknown: '%s'", cmd.c_str());
+            char extra[96];
+            snprintf(extra, sizeof(extra), "\"message\":\"unknown command: %s\"", cmd.c_str());
+            mqttPublishResponse(cmd.c_str(), "invalid_command", extra);
+        }
+
         cJSON_Delete(root);
     });
 }

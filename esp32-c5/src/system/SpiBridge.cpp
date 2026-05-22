@@ -61,10 +61,7 @@ bool SpiBridge::init(const Config& cfg)
         return false;
     }
 
-    // Audio downlink stream buffer: 32KB — stores raw [len][opus] frames
-    // At ~150 bytes/frame, holds ~200 frames (~4 seconds of audio)
-    // C5 no longer runs audio/Opus/I2S, so heap is plentiful
-    dl_audio_sb_ = xStreamBufferCreate(32 * 1024, 1);
+    dl_audio_sb_ = xStreamBufferCreate(48 * 1024, 1);
     if (!dl_audio_sb_) {
         ESP_LOGE(TAG, "DL audio stream buffer create failed");
         return false;
@@ -232,12 +229,13 @@ void SpiBridge::slaveLoop()
         if (err == ESP_OK) {
             handleRxFrame(rx_buf);
 
-            // Pull handshake LOW after transaction. post_setup_cb will raise
-            // it HIGH again on the next iteration when DMA is loaded.
-            gpio_set_level(cfg_.pin_handshake, 0);
+            // Only pull handshake LOW when buffer is empty. Keeping it HIGH
+            // while data is pending prevents S3 from entering its 5ms idle
+            // poll delay between back-to-back transactions.
+            if (!dl_audio_sb_ || xStreamBufferBytesAvailable(dl_audio_sb_) == 0) {
+                gpio_set_level(cfg_.pin_handshake, 0);
+            }
 
-            // CRITICAL on single-core C5: yield after every transaction so the
-            // WS TX task (same priority) can drain the tx_buffer and send data.
             taskYIELD();
         }
     }

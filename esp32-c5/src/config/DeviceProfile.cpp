@@ -23,6 +23,10 @@
 
 static const char* TAG = "DeviceProfile";
 
+// Uncomment to erase all NVS data on next boot (clears stored WiFi, WS, MQTT config).
+// Re-comment and reflash after testing.
+// #define ERASE_NVS_ON_BOOT
+
 // =============================================================================
 // User settings from NVS
 // =============================================================================
@@ -103,6 +107,10 @@ bool DeviceProfile::setup(AppController& app)
              (unsigned long)esp_get_free_heap_size());
 
     // Init NVS
+#ifdef ERASE_NVS_ON_BOOT
+    ESP_LOGW(TAG, "*** ERASE_NVS_ON_BOOT enabled — wiping all NVS data ***");
+    nvs_flash_erase();
+#endif
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -113,78 +121,14 @@ bool DeviceProfile::setup(AppController& app)
     auto user = user_cfg::load();
 
     // =========================================================
-    // 1. BOOT WIFI TEST & BLE PROVISIONING
+    // 1. BLE PROVISIONING (if no WiFi credentials in NVS)
     // =========================================================
-    static constexpr int MAX_BOOT_WIFI_RETRIES = 5;
-    bool need_ble = user.wifi_ssid.empty();
-
-    // If credentials exist, test WiFi connection at boot
-    if (!need_ble) {
-        ESP_LOGI(TAG, "Testing WiFi at boot: SSID=%s", user.wifi_ssid.c_str());
-
-        esp_netif_init();
-        esp_event_loop_create_default();
-        esp_netif_t* boot_netif = esp_netif_create_default_wifi_sta();
-        wifi_init_config_t test_wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
-        esp_wifi_init(&test_wifi_cfg);
-        esp_wifi_set_mode(WIFI_MODE_STA);
-
-        wifi_config_t sta_cfg = {};
-        strncpy((char*)sta_cfg.sta.ssid, user.wifi_ssid.c_str(), sizeof(sta_cfg.sta.ssid) - 1);
-        strncpy((char*)sta_cfg.sta.password, user.wifi_pass.c_str(), sizeof(sta_cfg.sta.password) - 1);
-        esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-        esp_wifi_start();
-
-        static volatile bool boot_got_ip = false;
-        static volatile int  boot_disconnects = 0;
-        boot_got_ip = false;
-        boot_disconnects = 0;
-
-        esp_event_handler_instance_t h_disconnect, h_got_ip;
-        esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-            [](void*, esp_event_base_t, int32_t, void*) {
-                boot_disconnects++;
-                ESP_LOGW(TAG, "Boot WiFi disconnect #%d/%d",
-                         (int)boot_disconnects, MAX_BOOT_WIFI_RETRIES);
-                if (boot_disconnects < MAX_BOOT_WIFI_RETRIES) {
-                    esp_wifi_connect();
-                }
-            }, nullptr, &h_disconnect);
-        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-            [](void*, esp_event_base_t, int32_t, void*) {
-                boot_got_ip = true;
-            }, nullptr, &h_got_ip);
-
-        esp_wifi_connect();
-
-        while (!boot_got_ip && boot_disconnects < MAX_BOOT_WIFI_RETRIES) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-        }
-
-        esp_event_handler_instance_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, h_disconnect);
-        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, h_got_ip);
-
-        if (!boot_got_ip) {
-            ESP_LOGW(TAG, "WiFi failed after %d attempts, falling back to BLE",
-                     (int)boot_disconnects);
-            need_ble = true;
-        } else {
-            ESP_LOGI(TAG, "WiFi connected at boot");
-        }
-
-        esp_wifi_disconnect();
-        esp_wifi_stop();
-        esp_wifi_deinit();
-        esp_netif_destroy(boot_netif);
-    }
-
-    // BLE provisioning: no credentials OR boot WiFi connection failed
-    if (need_ble) {
+    if (user.wifi_ssid.empty()) {
         ESP_LOGI(TAG, "Starting BLE provisioning");
 
         esp_netif_init();
         esp_event_loop_create_default();
-        esp_netif_create_default_wifi_sta();
+        esp_netif_t* scan_netif = esp_netif_create_default_wifi_sta();
         wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
         esp_wifi_init(&wifi_cfg);
         esp_wifi_set_mode(WIFI_MODE_STA);
@@ -208,6 +152,7 @@ bool DeviceProfile::setup(AppController& app)
 
         esp_wifi_stop();
         esp_wifi_deinit();
+        esp_netif_destroy(scan_netif);
         ESP_LOGI(TAG, "Scanned %d WiFi networks for BLE listing", (int)networks.size());
 
         BluetoothService::ConfigData ble_cfg;
@@ -282,15 +227,15 @@ bool DeviceProfile::setup(AppController& app)
     auto network_mgr = std::make_unique<NetworkManager>();
 
     const std::string default_ws   = "ws://171.226.10.121:8000/v2/ws";
-    const std::string default_mqtt = "171.226.10.121:1883";
+    const std::string default_mqtt = "171.226.10.121:8443";
 
     NetworkManager::Config net_cfg{};
     net_cfg.wifi_ssid = user.wifi_ssid;
     net_cfg.wifi_pass = user.wifi_pass;
     net_cfg.ws_url    = normalize_ws_url(user.ws_url.empty() ? default_ws : user.ws_url);
     net_cfg.mqtt_url  = normalize_mqtt_url(user.mqtt_url.empty() ? default_mqtt : user.mqtt_url);
-    net_cfg.user_id   = user.user_id;
-    net_cfg.tx_key    = user.tx_key;
+    net_cfg.user_id   = user.user_id.empty() ? "ptalk_admin" : user.user_id;
+    net_cfg.tx_key    = user.tx_key.empty() ? "PTalkAdmin@2026!" : user.tx_key;
 
     ESP_LOGI(TAG, "Before NetworkManager init, free heap: %lu",
              (unsigned long)esp_get_free_heap_size());
@@ -344,6 +289,9 @@ bool DeviceProfile::setup(AppController& app)
         ESP_LOGE(TAG, "UartBridge init failed");
         return false;
     }
+
+    // Wire UART to NetworkManager (MQTT commands relay to S3)
+    network_mgr->setUartBridge(uart_bridge.get());
 
     // UART control: S3 sends START/END/config commands via UART
     uart_bridge->onControlCmd([net_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
@@ -403,15 +351,6 @@ bool DeviceProfile::setup(AppController& app)
             (uint8_t)StateManager::instance().getConnectivityState(),
             (uint8_t)StateManager::instance().getSystemState(),
             (uint8_t)e);
-    });
-
-    // Forward connectivity state changes to S3 via UART
-    StateManager::instance().subscribeConnectivity([uart_ptr](state::ConnectivityState c) {
-        uart_ptr->sendStatusUpdate(
-            (uint8_t)StateManager::instance().getInteractionState(),
-            (uint8_t)c,
-            (uint8_t)StateManager::instance().getSystemState(),
-            (uint8_t)StateManager::instance().getEmotionState());
     });
 
     // =========================================================
