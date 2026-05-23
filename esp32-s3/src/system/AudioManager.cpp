@@ -277,7 +277,7 @@ void AudioManager::audioRecvLoop()
     const size_t pcm_frame = codec->pcmFrameSamples();
     constexpr size_t ENC_PREBUF = 2000;
     constexpr int MAX_CONSECUTIVE_ERRORS = 3;
-    constexpr uint32_t STALE_TIMEOUT_MS = 15000;
+    constexpr uint32_t STALE_TIMEOUT_MS = 5000;
     constexpr uint32_t DRAIN_MS = 500;
     uint8_t* frame_data = new uint8_t[1024];
     int16_t* pcm_out = new int16_t[pcm_frame];
@@ -348,7 +348,12 @@ void AudioManager::audioRecvLoop()
             if (r == 0) break;
             h_got += r;
         }
-        if (h_got < 2) continue;
+        if (h_got < 2) {
+            if (xStreamBufferBytesAvailable(sb_spk_encoded) < ENC_PREBUF) {
+                enc_prebuffered = false;
+            }
+            continue;
+        }
 
         uint16_t frame_len = header[0] | ((uint16_t)header[1] << 8);
         if (frame_len == 0 || frame_len > 512) {
