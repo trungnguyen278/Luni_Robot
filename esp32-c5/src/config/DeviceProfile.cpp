@@ -294,10 +294,12 @@ bool DeviceProfile::setup(AppController& app)
     network_mgr->setUartBridge(uart_bridge.get());
 
     // UART control: S3 sends START/END/config commands via UART
-    uart_bridge->onControlCmd([net_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
+    SpiBridge* spi_ptr = spi_bridge.get();
+    uart_bridge->onControlCmd([net_ptr, spi_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
         switch (cmd) {
         case uart_proto::ControlCmd::START:
             net_ptr->endSpeakingSession();
+            spi_ptr->resetDownlink();
             net_ptr->sendText("START");
             StateManager::instance().setInteractionState(
                 state::InteractionState::LISTENING, state::InputSource::BUTTON);

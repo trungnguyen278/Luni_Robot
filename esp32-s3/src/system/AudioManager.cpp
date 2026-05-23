@@ -150,27 +150,19 @@ void AudioManager::startSpeaking()
     if (spk_play_task) xTaskNotifyGive(spk_play_task);
 }
 
-void AudioManager::stopSpeaking()
+void AudioManager::stopSpeaking(bool user_interrupt)
 {
     if (!speaking) return;
-
-    // Check if this is a user-initiated interrupt (LISTENING/IDLE from button)
-    // vs server-initiated end (IDLE from server after audio completes).
-    // User interrupts should be immediate; server ends can drain briefly.
-    auto cur = StateManager::instance().getInteractionState();
-    bool user_interrupt = (cur == state::InteractionState::LISTENING ||
-                           cur == state::InteractionState::CANCELLING);
 
     if (user_interrupt) {
         ESP_LOGI(TAG, "Stop speaking - user interrupt, immediate stop");
     } else {
-        ESP_LOGI(TAG, "Stop speaking - draining buffers");
-        for (int i = 0; i < 50; ++i) {
-            size_t enc_bytes = sb_spk_encoded ? xStreamBufferBytesAvailable(sb_spk_encoded) : 0;
+        ESP_LOGI(TAG, "Stop speaking - draining PCM");
+        for (int i = 0; i < 15; ++i) {
             size_t pcm_bytes = sb_spk_pcm ? xStreamBufferBytesAvailable(sb_spk_pcm) : 0;
-            if (enc_bytes == 0 && pcm_bytes == 0) break;
+            if (pcm_bytes == 0) break;
             if (i == 0) {
-                ESP_LOGI(TAG, "Draining: enc=%zu pcm=%zu bytes", enc_bytes, pcm_bytes);
+                ESP_LOGI(TAG, "Draining PCM: %zu bytes", pcm_bytes);
             }
             vTaskDelay(pdMS_TO_TICKS(20));
         }
@@ -498,6 +490,7 @@ void AudioManager::spkPlayLoop()
     while (started) {
         if (!speaking) {
             if (i2s_started) {
+                output->flushSilence();
                 output->stopPlayback();
                 i2s_started = false;
             }

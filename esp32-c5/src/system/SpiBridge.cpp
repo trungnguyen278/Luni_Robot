@@ -93,6 +93,15 @@ void SpiBridge::stop()
     ESP_LOGI(TAG, "SpiBridge stopped");
 }
 
+void SpiBridge::resetDownlink()
+{
+    if (dl_audio_sb_) {
+        xStreamBufferReset(dl_audio_sb_);
+        gpio_set_level(cfg_.pin_handshake, 0);
+        ESP_LOGI(TAG, "Downlink buffer reset");
+    }
+}
+
 bool SpiBridge::sendAudioDownlink(const uint8_t* data, size_t len)
 {
     if (!dl_audio_sb_ || len == 0) return false;

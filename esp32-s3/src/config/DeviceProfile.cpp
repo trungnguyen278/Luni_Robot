@@ -191,7 +191,7 @@ bool DeviceProfile::setup(AppController& app)
     spk_sd_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
     spk_sd_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     gpio_config(&spk_sd_cfg);
-    gpio_set_level((gpio_num_t)PinConfig::SPK_SD, 1);
+    gpio_set_level((gpio_num_t)PinConfig::SPK_SD, 0);
 
     gpio_config_t spk_gain_cfg = {};
     spk_gain_cfg.pin_bit_mask = (1ULL << PinConfig::SPK_GAIN);
@@ -199,7 +199,7 @@ bool DeviceProfile::setup(AppController& app)
     spk_gain_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
     spk_gain_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     gpio_config(&spk_gain_cfg);
-    ESP_LOGI(TAG, "MAX98357 SD=HIGH (enabled), GAIN=float (9dB)");
+    ESP_LOGI(TAG, "MAX98357 SD=LOW (muted until playback), GAIN=float (9dB)");
 
     // =========================================================
     // 4. I2S FULL-DUPLEX AUDIO (shared BCLK/WS for mic+speaker)
@@ -235,6 +235,7 @@ bool DeviceProfile::setup(AppController& app)
         .pin_bclk    = (gpio_num_t)PinConfig::I2S_BCLK,
         .pin_ws      = (gpio_num_t)PinConfig::I2S_WS,
         .pin_dout    = (gpio_num_t)PinConfig::I2S_DOUT,
+        .pin_sd      = (gpio_num_t)PinConfig::SPK_SD,
         .sample_rate = 48000
     };
     auto speaker = std::make_unique<I2SAudioOutput_MAX98357>(tx_chan, spk_cfg);
@@ -357,11 +358,18 @@ bool DeviceProfile::setup(AppController& app)
             sm.setSystemState(new_sys);
         }
 
-        // Let C5 drive the interaction state as well (so Server can trigger SPEAKING)
+        // Let C5 drive the interaction state, but don't regress SPEAKING→PROCESSING.
+        // UART status carries C5's interaction state at the moment of the emotion change,
+        // which can be stale (e.g. emotion fires before SPEAKING command is processed).
         auto new_inter = static_cast<state::InteractionState>(interaction);
-        if (new_inter == state::InteractionState::PROCESSING || new_inter == state::InteractionState::SPEAKING) {
+        auto cur_inter = sm.getInteractionState();
+        if (new_inter == state::InteractionState::SPEAKING) {
             sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
-        } else if (new_inter == state::InteractionState::IDLE && sm.getInteractionState() == state::InteractionState::SPEAKING) {
+        } else if (new_inter == state::InteractionState::PROCESSING &&
+                   cur_inter != state::InteractionState::SPEAKING) {
+            sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
+        } else if (new_inter == state::InteractionState::IDLE &&
+                   cur_inter == state::InteractionState::SPEAKING) {
             sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::UNKNOWN);
         }
     });
