@@ -23,7 +23,7 @@ struct AppMessage {
 
     state::InteractionState  interaction_state;
     state::InputSource       interaction_source;
-    state::ConnectivityState connectivity_state;
+    state::ConnectionState   connection_state;
     state::SystemState       system_state;
     state::PowerState        power_state;
     state::EmotionState      emotion_state;
@@ -90,9 +90,9 @@ bool AppController::init()
         });
 
     sub_conn_id = sm.subscribeConnectivity(
-        [this](state::ConnectivityState s) {
+        [this](state::ConnectionState s) {
             AppMessage msg{}; msg.type = AppMessage::Type::CONNECTIVITY;
-            msg.connectivity_state = s;
+            msg.connection_state = s;
             if (app_queue) xQueueSend(app_queue, &msg, 0);
         });
 
@@ -190,7 +190,7 @@ void AppController::processQueue()
                 onInteractionStateChanged(msg.interaction_state, msg.interaction_source);
                 break;
             case AppMessage::Type::CONNECTIVITY:
-                onConnectivityStateChanged(msg.connectivity_state);
+                onConnectionStateChanged(msg.connection_state);
                 break;
             case AppMessage::Type::SYSTEM:
                 onSystemStateChanged(msg.system_state);
@@ -205,7 +205,7 @@ void AppController::processQueue()
                 switch (msg.app_event) {
                 case event::AppEvent::USER_BUTTON:
                     // Button press: check connectivity (received from C5 via SPI)
-                    if (StateManager::instance().getConnectivityState() != state::ConnectivityState::ONLINE) {
+                    if (StateManager::instance().getConnectionState() != state::ConnectionState::ONLINE) {
                         ESP_LOGW(TAG, "Button ignored - not online");
                         break;
                     }
@@ -263,12 +263,12 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
     }
 }
 
-void AppController::onConnectivityStateChanged(state::ConnectivityState s)
+void AppController::onConnectionStateChanged(state::ConnectionState s)
 {
-    ESP_LOGI(TAG, "Connectivity: %d", (int)s);
+    ESP_LOGI(TAG, "Connection: %d", (int)s);
 
     // Stop audio if not ONLINE — no point streaming mic when C5 can't relay to server
-    if (s != state::ConnectivityState::ONLINE && audio) {
+    if (s != state::ConnectionState::ONLINE && audio) {
         auto interaction = StateManager::instance().getInteractionState();
         if (interaction == state::InteractionState::LISTENING ||
             interaction == state::InteractionState::PROCESSING) {

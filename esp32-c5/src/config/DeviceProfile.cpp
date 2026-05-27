@@ -1,7 +1,6 @@
-#include "DLuniceProfile.hpp"
+#include "DeviceProfile.hpp"
 #include "AppController.hpp"
 
-// System managers
 #include "system/NetworkManager.hpp"
 #include "system/SpiBridge.hpp"
 #include "system/UartBridge.hpp"
@@ -9,7 +8,6 @@
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
 
-// Pin config
 #include "config/PinConfig.hpp"
 
 #include "WifiService.hpp"
@@ -22,9 +20,8 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 
-static const char* TAG = "DLuniceProfile";
+static const char* TAG = "DeviceProfile";
 
-// Check if NVS reset button is held LOW at boot
 static bool shouldEraseNvs()
 {
     constexpr int pin = PinConfig::NVS_RESET_BTN;
@@ -48,19 +45,15 @@ static bool shouldEraseNvs()
     return pressed;
 }
 
-// =============================================================================
-// User settings from NVS
-// =============================================================================
 namespace user_cfg {
     struct UserSettings {
-        std::string dLunice_name = "Luni";
+        std::string device_name = "Luni";
         uint8_t  volume = 30;
         std::string wifi_ssid;
         std::string wifi_pass;
         std::string ws_url;
-        std::string mqtt_url;
+        std::string device_token;
         std::string user_id;
-        std::string tx_key;
     };
 
     static std::string get_string(nvs_handle_t h, const char* key) {
@@ -85,21 +78,19 @@ namespace user_cfg {
             ESP_LOGI(TAG, "NVS storage not found, using defaults");
             return cfg;
         }
-        cfg.dLunice_name = get_string(h, "dLunice_name");
-        if (cfg.dLunice_name.empty()) cfg.dLunice_name = "Luni";
-        cfg.wifi_ssid = get_string(h, "ssid");
-        cfg.wifi_pass = get_string(h, "pass");
-        cfg.ws_url    = get_string(h, "ws_url");
-        cfg.mqtt_url  = get_string(h, "mqtt_url");
-        cfg.user_id   = get_string(h, "user_id");
-        cfg.tx_key    = get_string(h, "tx_key");
-        cfg.volume    = get_u8(h, "volume", cfg.volume);
+        cfg.device_name  = get_string(h, "device_name");
+        if (cfg.device_name.empty()) cfg.device_name = "Luni";
+        cfg.wifi_ssid    = get_string(h, "ssid");
+        cfg.wifi_pass    = get_string(h, "pass");
+        cfg.ws_url       = get_string(h, "ws_url");
+        cfg.device_token = get_string(h, "device_token");
+        cfg.user_id      = get_string(h, "user_id");
+        cfg.volume       = get_u8(h, "volume", cfg.volume);
         nvs_close(h);
         return cfg;
     }
 }
 
-// URL normalization helpers
 static std::string normalize_ws_url(std::string val) {
     while (!val.empty() && (val.front() == ' ' || val.front() == '\n')) val.erase(val.begin());
     while (!val.empty() && (val.back() == ' ' || val.back() == '\n')) val.pop_back();
@@ -111,23 +102,11 @@ static std::string normalize_ws_url(std::string val) {
     return "ws://" + val + "/ws";
 }
 
-static std::string normalize_mqtt_url(std::string val) {
-    while (!val.empty() && (val.front() == ' ' || val.front() == '\n')) val.erase(val.begin());
-    while (!val.empty() && (val.back() == ' ' || val.back() == '\n')) val.pop_back();
-    if (val.empty()) return {};
-    if (val.rfind("mqtt://", 0) == 0 || val.rfind("mqtts://", 0) == 0) return val;
-    return "mqtt://" + val;
-}
-
-// =============================================================================
-// Setup
-// =============================================================================
-bool DLuniceProfile::setup(AppController& app)
+bool DeviceProfile::setup(AppController& app)
 {
-    ESP_LOGI(TAG, "DLuniceProfile setup begin (ESP32-C5), free heap: %lu",
+    ESP_LOGI(TAG, "DeviceProfile setup begin (ESP32-C5), free heap: %lu",
              (unsigned long)esp_get_free_heap_size());
 
-    // Init NVS (erase if reset button held)
     if (shouldEraseNvs()) {
         ESP_LOGW(TAG, "*** Erasing all NVS data (reset button held) ***");
         nvs_flash_erase();
@@ -143,11 +122,6 @@ bool DLuniceProfile::setup(AppController& app)
 
     // =========================================================
     // 1. BOOT WIFI CHECK + BLE PROVISIONING (if needed)
-    //    - No credentials in NVS          -> BLE immediately
-    //    - Credentials exist, WiFi fails  -> BLE after timeout
-    //    - Credentials exist, WiFi OK     -> skip BLE
-    //    - Already running & WiFi drops   -> retry only (handled
-    //      by WifiService auto-reconnect, no BLE)
     // =========================================================
     bool need_ble = user.wifi_ssid.empty();
 
@@ -225,15 +199,13 @@ bool DLuniceProfile::setup(AppController& app)
         esp_wifi_deinit();
         esp_netif_destroy(boot_netif);
         boot_netif = nullptr;
-        ESP_LOGI(TAG, "Scanned %d WiFi networks for BLE listing", (int)networks.size());
 
         BluetoothService::ConfigData ble_cfg;
-        ble_cfg.dLunice_name = user.dLunice_name;
-        ble_cfg.volume = user.volume;
-        ble_cfg.ws_url = user.ws_url;
-        ble_cfg.mqtt_url = user.mqtt_url;
-        ble_cfg.mqtt_user = user.user_id;
-        ble_cfg.mqtt_pass = user.tx_key;
+        ble_cfg.device_name  = user.device_name;
+        ble_cfg.volume       = user.volume;
+        ble_cfg.ws_url       = user.ws_url;
+        ble_cfg.device_token = user.device_token;
+        ble_cfg.user_id      = user.user_id;
 
         static BluetoothService ble;
         if (!ble.init("Luni", networks, &ble_cfg)) {
@@ -269,27 +241,26 @@ bool DLuniceProfile::setup(AppController& app)
                 nvs_set_str(h, "pass", received_cfg.pass.c_str());
             if (!received_cfg.ws_url.empty())
                 nvs_set_str(h, "ws_url", received_cfg.ws_url.c_str());
-            if (!received_cfg.mqtt_url.empty())
-                nvs_set_str(h, "mqtt_url", received_cfg.mqtt_url.c_str());
-            if (!received_cfg.mqtt_user.empty())
-                nvs_set_str(h, "user_id", received_cfg.mqtt_user.c_str());
-            if (!received_cfg.mqtt_pass.empty())
-                nvs_set_str(h, "tx_key", received_cfg.mqtt_pass.c_str());
-            if (!received_cfg.dLunice_name.empty())
-                nvs_set_str(h, "dLunice_name", received_cfg.dLunice_name.c_str());
+            if (!received_cfg.device_token.empty())
+                nvs_set_str(h, "device_token", received_cfg.device_token.c_str());
+            if (!received_cfg.user_id.empty())
+                nvs_set_str(h, "user_id", received_cfg.user_id.c_str());
+            if (!received_cfg.admin_secret.empty())
+                nvs_set_str(h, "admin_secret", received_cfg.admin_secret.c_str());
+            if (!received_cfg.device_name.empty())
+                nvs_set_str(h, "device_name", received_cfg.device_name.c_str());
             nvs_set_u8(h, "volume", received_cfg.volume);
             nvs_commit(h);
             nvs_close(h);
         }
 
-        user.wifi_ssid = received_cfg.ssid;
-        user.wifi_pass = received_cfg.pass;
+        user.wifi_ssid    = received_cfg.ssid;
+        user.wifi_pass    = received_cfg.pass;
         if (!received_cfg.ws_url.empty()) user.ws_url = received_cfg.ws_url;
-        if (!received_cfg.mqtt_url.empty()) user.mqtt_url = received_cfg.mqtt_url;
-        if (!received_cfg.mqtt_user.empty()) user.user_id = received_cfg.mqtt_user;
-        if (!received_cfg.mqtt_pass.empty()) user.tx_key = received_cfg.mqtt_pass;
-        user.dLunice_name = received_cfg.dLunice_name;
-        user.volume = received_cfg.volume;
+        if (!received_cfg.device_token.empty()) user.device_token = received_cfg.device_token;
+        if (!received_cfg.user_id.empty()) user.user_id = received_cfg.user_id;
+        user.device_name  = received_cfg.device_name;
+        user.volume       = received_cfg.volume;
 
         ESP_LOGI(TAG, "BLE provisioning complete, continuing with WiFi connect");
     } else {
@@ -299,29 +270,23 @@ bool DLuniceProfile::setup(AppController& app)
     }
 
     // =========================================================
-    // 2. NETWORK (WiFi + WebSocket + MQTT)
+    // 2. NETWORK (WiFi + WebSocket only — no MQTT)
     // =========================================================
     auto network_mgr = std::make_unique<NetworkManager>();
 
-    const std::string default_ws   = "ws://171.226.10.121:8000/v2/ws";
-    const std::string default_mqtt = "171.226.10.121:8443";
+    const std::string default_ws = "ws://171.226.10.121:8000/v2/ws";
 
     NetworkManager::Config net_cfg{};
-    net_cfg.wifi_ssid = user.wifi_ssid;
-    net_cfg.wifi_pass = user.wifi_pass;
-    net_cfg.ws_url    = normalize_ws_url(user.ws_url.empty() ? default_ws : user.ws_url);
-    net_cfg.mqtt_url  = normalize_mqtt_url(user.mqtt_url.empty() ? default_mqtt : user.mqtt_url);
-    net_cfg.user_id   = user.user_id.empty() ? "Luni_admin" : user.user_id;
-    net_cfg.tx_key    = user.tx_key.empty() ? "LuniAdmin@2026!" : user.tx_key;
+    net_cfg.wifi_ssid    = user.wifi_ssid;
+    net_cfg.wifi_pass    = user.wifi_pass;
+    net_cfg.ws_url       = normalize_ws_url(user.ws_url.empty() ? default_ws : user.ws_url);
+    net_cfg.device_token = user.device_token;
+    net_cfg.device_name  = user.device_name;
 
-    ESP_LOGI(TAG, "Before NetworkManager init, free heap: %lu",
-             (unsigned long)esp_get_free_heap_size());
     if (!network_mgr->init(net_cfg)) {
         ESP_LOGE(TAG, "NetworkManager init failed");
         return false;
     }
-    ESP_LOGI(TAG, "After NetworkManager init, free heap: %lu",
-             (unsigned long)esp_get_free_heap_size());
 
     // =========================================================
     // 3. SPI BRIDGE (Communication with S3 via SPI2 slave)
@@ -340,11 +305,8 @@ bool DLuniceProfile::setup(AppController& app)
         return false;
     }
 
-    // Wire SPI to NetworkManager (audio only)
     network_mgr->setSpiBridge(spi_bridge.get());
 
-    // Flow control: SPI EMPTY frames include WS tx_buffer free space (KB)
-    // so S3 can throttle audio uplink when C5's WS buffer is full
     NetworkManager* net_ptr = network_mgr.get();
     spi_bridge->setUplinkSpaceQuery([net_ptr]() -> size_t {
         return net_ptr->getWsTxFreeSpace();
@@ -367,10 +329,8 @@ bool DLuniceProfile::setup(AppController& app)
         return false;
     }
 
-    // Wire UART to NetworkManager (MQTT commands relay to S3)
     network_mgr->setUartBridge(uart_bridge.get());
 
-    // UART control: S3 sends START/END/config commands via UART
     SpiBridge* spi_ptr = spi_bridge.get();
     uart_bridge->onControlCmd([net_ptr, spi_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
         switch (cmd) {
@@ -406,7 +366,6 @@ bool DLuniceProfile::setup(AppController& app)
             uint8_t pass_len = data[pos++];
             if (pos + pass_len > len) break;
             std::string pass(reinterpret_cast<const char*>(&data[pos]), pass_len);
-            ESP_LOGI(TAG, "UART: WiFi config from S3: ssid='%s'", ssid.c_str());
             nvs_handle_t h;
             if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
                 nvs_set_str(h, "ssid", ssid.c_str());
@@ -422,14 +381,19 @@ bool DLuniceProfile::setup(AppController& app)
         }
     });
 
-    // Forward emotion state changes to S3 via UART
+    // Forward state changes to S3 via UART
     UartBridge* uart_ptr = uart_bridge.get();
     StateManager::instance().subscribeEmotion([uart_ptr](state::EmotionState e) {
         uart_ptr->sendStatusUpdate(
             (uint8_t)StateManager::instance().getInteractionState(),
-            (uint8_t)StateManager::instance().getConnectivityState(),
+            (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)StateManager::instance().getSystemState(),
             (uint8_t)e);
+    });
+
+    // Forward LOG_ENTRY from S3 to server via WS
+    uart_bridge->onLogEntry([net_ptr](const uint8_t* data, size_t len) {
+        net_ptr->sendText(reinterpret_cast<const char*>(data), len);
     });
 
     // =========================================================
@@ -440,6 +404,6 @@ bool DLuniceProfile::setup(AppController& app)
         std::move(spi_bridge),
         std::move(uart_bridge));
 
-    ESP_LOGI(TAG, "DLuniceProfile setup OK (ESP32-C5)");
+    ESP_LOGI(TAG, "DeviceProfile setup OK (ESP32-C5)");
     return true;
 }

@@ -7,7 +7,7 @@
 #include "ui/VariantRegistry.hpp"
 
 struct SceneData {
-    // Time (NTP via C5)
+    // Time (from server sync via C5)
     uint8_t  hours = 0;
     uint8_t  minutes = 0;
     uint8_t  seconds = 0;
@@ -16,12 +16,22 @@ struct SceneData {
     uint8_t  month = 1;
     uint16_t year = 2026;
     bool     time_valid = false;
+    int64_t  unix_time = 0;
+    int8_t   utc_offset = 0;
 
-    // Weather (API via C5)
-    int16_t  weather_temp_c = 0;
-    uint8_t  weather_condition = 0;
-    char     weather_desc[16] = {};
+    // Weather (from server sync via C5)
+    int8_t   temperature = 0;
+    uint8_t  humidity = 0;
+    uint8_t  weather_condition = 0;  // enum: 0=unknown, 1=clear, ...
+    uint8_t  aqi = 0;
     bool     weather_valid = false;
+
+    // Calendar (from server sync via C5)
+    uint8_t  lunar_day = 0;
+    uint8_t  lunar_month = 0;
+
+    // Location (from server sync via C5)
+    char     city[32] = {};
 
     // Boot
     uint8_t  boot_progress_pct = 0;
@@ -32,6 +42,11 @@ struct SceneData {
     uint8_t  retry_attempt = 0;
     uint8_t  retry_max = 3;
     uint16_t error_code = 0;
+
+    // Local sensors (S3)
+    uint8_t  battery_percent = 0;
+    bool     is_charging = false;
+    int8_t   wifi_rssi = 0;
 };
 
 class SceneManager {

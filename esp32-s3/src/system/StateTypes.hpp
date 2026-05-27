@@ -4,68 +4,104 @@
 namespace state
 {
 
-    // ---------- Interaction (S3 owns: has button+audio) ----------
-    enum class InteractionState : uint8_t
-    {
-        IDLE,
-        TRIGGERED,
-        LISTENING,
-        PROCESSING,
-        SPEAKING,
-        CANCELLING,
-        MUTED,
-        SLEEPING
-    };
+// === Connection State (mirrored from C5 via UART) ===
+enum class ConnectionState : uint8_t
+{
+    OFFLINE,
+    WIFI_CONNECTING,
+    WIFI_CONNECTED,
+    WS_CONNECTING,
+    WS_AUTHENTICATING,
+    ONLINE,
+    RECONNECTING,
+    BLE_PROVISIONING,
+};
 
-    // ---------- Connectivity (mirrored from C5 via SPI) ----------
-    enum class ConnectivityState : uint8_t
-    {
-        OFFLINE,
-        CONNECTING_WIFI,
-        WIFI_CONNECTED,
-        CONNECTING_WS,
-        ONLINE
-    };
+// === Interaction State (shared S3 + C5) ===
+enum class InteractionState : uint8_t
+{
+    IDLE,
+    TRIGGERED,
+    LISTENING,
+    PROCESSING,
+    SPEAKING,
+    CANCELLING,
+};
 
-    // ---------- System ----------
-    enum class SystemState : uint8_t
-    {
-        BOOTING,
-        RUNNING,
-        ERROR,
-        MAINTENANCE
-    };
+// === OTA State (C5 manages, S3 displays) ===
+enum class OtaState : uint8_t
+{
+    IDLE,
+    CHECKING,
+    AVAILABLE,
+    DOWNLOADING,
+    VERIFYING,
+    FLASHING,
+    REBOOTING,
+    FAILED,
+};
 
-    // ---------- Power (S3 manages battery) ----------
-    enum class PowerState : uint8_t
-    {
-        NORMAL,
-        LOW_BATTERY,
-        CRITICAL,
-        CHARGING,
-        FULL
-    };
+// === System State ===
+enum class SystemState : uint8_t
+{
+    BOOTING,
+    RUNNING,
+    ERROR,
+    MAINTENANCE,
+    DEEP_SLEEP,
+};
 
-    // ---------- Input Source ----------
-    enum class InputSource : uint8_t
-    {
-        BUTTON,
-        SERVER_COMMAND,
-        SYSTEM,
-        UNKNOWN
-    };
+// === Power State (S3 manages battery) ===
+enum class PowerState : uint8_t
+{
+    NORMAL,
+    LOW,
+    CRITICAL,
+    CHARGING,
+    FULL,
+};
 
-    // ---------- Emotion (received from C5 via SPI) ----------
-    enum class EmotionState : uint8_t
-    {
-        NEUTRAL,
-        HAPPY,
-        SAD,
-        ANGRY,
-        CONFUSED,
-        EXCITED,
-        CALM,
-        THINKING
-    };
+// === Emotion State (S3 renders, C5 relays from server) ===
+enum class EmotionState : uint8_t
+{
+    NEUTRAL,
+    HAPPY,
+    SAD,
+    ANGRY,
+    CONFUSED,
+    EXCITED,
+    CALM,
+    THINKING,
+    DISGUSTED,
+    NERVOUS,
+    EMBARRASSED,
+    CURIOUS,
+    ANNOYED,
+    COOL,
+    SUSPICIOUS,
+    DETERMINED,
+};
+
+// === Input Source ===
+enum class InputSource : uint8_t
+{
+    BUTTON,
+    SERVER_COMMAND,
+    SYSTEM,
+    UNKNOWN
+};
+
+// === Sync Data Packet (decoded from UART SYNC_DATA message) ===
+struct SyncDataPacket {
+    int8_t  temperature;
+    uint8_t humidity;
+    uint8_t condition;
+    uint8_t aqi;
+    uint32_t unix_time;
+    int8_t  utc_offset;
+    uint8_t lunar_day;
+    uint8_t lunar_month;
+    char    city[32];
+};
 
 } // namespace state

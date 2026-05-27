@@ -63,8 +63,7 @@ static void cmd_help() {
     ESP_LOGI(TAG, "  config              Show all NVS config");
     ESP_LOGI(TAG, "  set wifi <s> [p]    Set WiFi SSID & password");
     ESP_LOGI(TAG, "  set ws <url>        Set WebSocket URL");
-    ESP_LOGI(TAG, "  set mqtt <url>      Set MQTT URL");
-    ESP_LOGI(TAG, "  set user <id> <key> Set user_id & tx_key");
+    ESP_LOGI(TAG, "  set token <tok>     Set device token");
     ESP_LOGI(TAG, "  set name <name>     Set device name");
     ESP_LOGI(TAG, "  erase_nvs           Erase all NVS & restart");
     ESP_LOGI(TAG, "  restart             Restart device");
@@ -89,41 +88,42 @@ static void cmd_status() {
 
     const char* interaction_names[] = {
         "IDLE", "TRIGGERED", "LISTENING", "PROCESSING",
-        "SPEAKING", "CANCELLING", "MUTED", "SLEEPING"
+        "SPEAKING", "CANCELLING"
     };
     const char* conn_names[] = {
-        "OFFLINE", "CONNECTING_WIFI", "WIFI_CONNECTED",
-        "CONNECTING_WS", "ONLINE"
+        "OFFLINE", "WIFI_CONNECTING", "WIFI_CONNECTED",
+        "WS_CONNECTING", "WS_AUTHENTICATING", "ONLINE",
+        "RECONNECTING", "BLE_PROVISIONING"
     };
-    const char* sys_names[] = { "BOOTING", "RUNNING", "ERROR", "MAINTENANCE" };
+    const char* sys_names[] = { "BOOTING", "RUNNING", "ERROR", "MAINTENANCE", "DEEP_SLEEP" };
     const char* emo_names[] = {
         "NEUTRAL", "HAPPY", "SAD", "ANGRY",
-        "CONFUSED", "EXCITED", "CALM", "THINKING"
+        "CONFUSED", "EXCITED", "CALM", "THINKING",
+        "DISGUSTED", "NERVOUS", "EMBARRASSED", "CURIOUS",
+        "ANNOYED", "COOL", "SUSPICIOUS", "DETERMINED"
     };
 
     ESP_LOGI(TAG, "──── Status ────");
     ESP_LOGI(TAG, "  Free heap  : %lu bytes", (unsigned long)esp_get_free_heap_size());
     ESP_LOGI(TAG, "  Min heap   : %lu bytes", (unsigned long)esp_get_minimum_free_heap_size());
     ESP_LOGI(TAG, "  Interaction: %s", interaction_names[(int)sm.getInteractionState()]);
-    ESP_LOGI(TAG, "  Connectivity: %s", conn_names[(int)sm.getConnectivityState()]);
+    ESP_LOGI(TAG, "  Connection : %s", conn_names[(int)sm.getConnectionState()]);
     ESP_LOGI(TAG, "  System     : %s", sys_names[(int)sm.getSystemState()]);
     ESP_LOGI(TAG, "  Emotion    : %s", emo_names[(int)sm.getEmotionState()]);
 }
 
 static void cmd_config() {
     ESP_LOGI(TAG, "──── NVS Config ────");
-    ESP_LOGI(TAG, "  device_name: %s", nvs_get("device_name").c_str());
-    ESP_LOGI(TAG, "  ssid       : %s", nvs_get("ssid").c_str());
-    ESP_LOGI(TAG, "  pass       : %s", nvs_get("pass").empty() ? "<empty>" : "****");
-    ESP_LOGI(TAG, "  ws_url     : %s", nvs_get("ws_url").c_str());
-    ESP_LOGI(TAG, "  mqtt_url   : %s", nvs_get("mqtt_url").c_str());
-    ESP_LOGI(TAG, "  user_id    : %s", nvs_get("user_id").c_str());
-    ESP_LOGI(TAG, "  tx_key     : %s", nvs_get("tx_key").empty() ? "<empty>" : "****");
+    ESP_LOGI(TAG, "  device_name : %s", nvs_get("device_name").c_str());
+    ESP_LOGI(TAG, "  ssid        : %s", nvs_get("ssid").c_str());
+    ESP_LOGI(TAG, "  pass        : %s", nvs_get("pass").empty() ? "<empty>" : "****");
+    ESP_LOGI(TAG, "  ws_url      : %s", nvs_get("ws_url").c_str());
+    ESP_LOGI(TAG, "  device_token: %s", nvs_get("device_token").empty() ? "<empty>" : "****");
 }
 
 static void cmd_set(const std::vector<std::string>& args) {
     if (args.size() < 3) {
-        ESP_LOGW(TAG, "Usage: set wifi|ws|mqtt|user|name <value...>");
+        ESP_LOGW(TAG, "Usage: set wifi|ws|token|name <value...>");
         return;
     }
     const auto& sub = args[1];
@@ -135,17 +135,9 @@ static void cmd_set(const std::vector<std::string>& args) {
     } else if (sub == "ws") {
         nvs_put("ws_url", args[2].c_str());
         ESP_LOGI(TAG, "WS URL saved: '%s'. Restart to apply.", args[2].c_str());
-    } else if (sub == "mqtt") {
-        nvs_put("mqtt_url", args[2].c_str());
-        ESP_LOGI(TAG, "MQTT URL saved: '%s'. Restart to apply.", args[2].c_str());
-    } else if (sub == "user") {
-        if (args.size() < 4) {
-            ESP_LOGW(TAG, "Usage: set user <id> <key>");
-            return;
-        }
-        nvs_put("user_id", args[2].c_str());
-        nvs_put("tx_key", args[3].c_str());
-        ESP_LOGI(TAG, "User saved: id='%s'. Restart to apply.", args[2].c_str());
+    } else if (sub == "token") {
+        nvs_put("device_token", args[2].c_str());
+        ESP_LOGI(TAG, "Device token saved. Restart to apply.");
     } else if (sub == "name") {
         nvs_put("device_name", args[2].c_str());
         ESP_LOGI(TAG, "Device name saved: '%s'. Restart to apply.", args[2].c_str());

@@ -1,325 +1,386 @@
 #include "WebSocketClient.hpp"
+#include "WsProtocol.hpp"
+#include "config/ServerConfig.hpp"
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include <cstring>
 
-static const char *TAG = "WebSocketClient";
+static const char* TAG = "WebSocketClient";
 
 WebSocketClient::WebSocketClient() = default;
 
 WebSocketClient::~WebSocketClient()
 {
-    close();
+    disconnect();
 }
 
 void WebSocketClient::init()
 {
-    if (!tx_buffer) {
-        tx_buffer = xStreamBufferCreate(48 * 1024, 1);  // 48KB — room for uplink bursts
+    if (!tx_buffer_) {
+        tx_buffer_ = xStreamBufferCreate(48 * 1024, 1);
+    }
+    if (!auth_event_) {
+        auth_event_ = xEventGroupCreate();
     }
 }
 
-void WebSocketClient::setUrl(const std::string &url)
+esp_err_t WebSocketClient::connect(const char* url, const char* device_token)
 {
-    ws_url = url;
-}
+    if (!url || !device_token) return ESP_ERR_INVALID_ARG;
 
-void WebSocketClient::connect()
-{
-    if (ws_url.empty())
-    {
-        ESP_LOGE(TAG, "WebSocket URL not set");
-        return;
-    }
+    url_ = url;
+    device_token_ = device_token;
+    authenticated_ = false;
+    last_close_code_ = 0;
 
-    if (client != nullptr)
-    {
-        ESP_LOGW(TAG, "WS already created, closing old instance");
-        close();
+    if (client_) {
+        ESP_LOGW(TAG, "Already connected, closing old instance");
+        disconnect();
     }
 
     esp_websocket_client_config_t cfg = {};
-    cfg.uri = ws_url.c_str();
-    cfg.buffer_size = 8192; // 8KB buffer — C5 has spare heap now (no audio/Opus)
-    cfg.disable_auto_reconnect = false;
-    cfg.reconnect_timeout_ms = 3000;  // Retry every 3s
-    // --- CẤU HÌNH ĐỂ PHÁT HIỆN SERVER NGẮT KẾT NỐI ---
-    cfg.ping_interval_sec = 10;     // Cứ 10 giây gửi 1 gói Ping
-    cfg.pingpong_timeout_sec = 120; // Chờ 120s mới disconnect để tránh rớt mạng oan khi TCP nghẽn
-
-    // Tùy chọn: Bật TCP Keep-alive để tầng mạng bền bỉ hơn
+    cfg.uri = url_.c_str();
+    cfg.buffer_size = server_cfg::WS_BUFFER_SIZE;
+    cfg.disable_auto_reconnect = true;  // We manage reconnect in NetworkManager
+    cfg.ping_interval_sec = server_cfg::WS_PING_INTERVAL_SEC;
+    cfg.pingpong_timeout_sec = server_cfg::WS_PINGPONG_TIMEOUT_SEC;
     cfg.keep_alive_enable = true;
-    cfg.keep_alive_idle = 5;     // Thời gian chờ rảnh rỗi (giây)
-    cfg.keep_alive_interval = 5; // Khoảng cách giữa các gói probe (giây)
-    cfg.keep_alive_count = 3;    // Số lần thử lại trước khi báo lỗi
-    client = esp_websocket_client_init(&cfg);
-    if (!client)
-    {
+    cfg.keep_alive_idle = server_cfg::TCP_KEEPALIVE_IDLE_SEC;
+    cfg.keep_alive_interval = server_cfg::TCP_KEEPALIVE_INTERVAL_SEC;
+    cfg.keep_alive_count = server_cfg::TCP_KEEPALIVE_COUNT;
+
+    client_ = esp_websocket_client_init(&cfg);
+    if (!client_) {
         ESP_LOGE(TAG, "Failed to init websocket");
-        return;
+        return ESP_FAIL;
     }
 
     ESP_ERROR_CHECK(esp_websocket_register_events(
-        client,
-        WEBSOCKET_EVENT_ANY,
-        &WebSocketClient::eventHandlerStatic,
-        this));
+        client_, WEBSOCKET_EVENT_ANY,
+        &WebSocketClient::eventHandlerStatic, this));
 
-    ESP_LOGI(TAG, "Free heap before ws_start: %d bytes", esp_get_free_heap_size());
-    ESP_LOGI(TAG, "Connecting to WS: %s", ws_url.c_str());
-    esp_websocket_client_start(client);
-    ESP_LOGI(TAG, "Free heap after ws_start: %d bytes", esp_get_free_heap_size());
-
-    if (!tx_task) {
-        run_tx_task = true;
-        // Priority 6 — higher than SPI slave (4) on single-core C5.
-        // When tx_buffer has data, this task preempts SPI to drain frames
-        // over the network, preventing WS write timeout / disconnect.
-        xTaskCreate(&WebSocketClient::wsTxTaskEntry, "ws_tx", 6144, this, 6, &tx_task);
+    ESP_LOGI(TAG, "Connecting to %s", url_.c_str());
+    esp_err_t err = esp_websocket_client_start(client_);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WS start failed: %s", esp_err_to_name(err));
+        esp_websocket_client_destroy(client_);
+        client_ = nullptr;
+        return err;
     }
 
-    if (status_cb)
-        status_cb(1); // CONNECTING
+    if (!tx_task_) {
+        run_tx_task_ = true;
+        xTaskCreate(&WebSocketClient::txTaskEntry, "ws_tx", 6144, this, 6, &tx_task_);
+    }
+
+    return ESP_OK;
 }
 
-void WebSocketClient::close()
+void WebSocketClient::disconnect()
 {
-    if (client)
-    {
-        ESP_LOGI(TAG, "Free heap before close: %d bytes", esp_get_free_heap_size());
-        ESP_LOGI(TAG, "Closing WebSocket...");
-        esp_websocket_client_close(client, 100);
-        // Give internal task time to cleanup
+    run_tx_task_ = false;
+
+    if (client_) {
+        ESP_LOGI(TAG, "Disconnecting WebSocket");
+        esp_websocket_client_close(client_, 100);
         vTaskDelay(pdMS_TO_TICKS(200));
-        esp_websocket_client_destroy(client);
-        client = nullptr;
-        connected = false;
-        ESP_LOGI(TAG, "Free heap after close: %d bytes", esp_get_free_heap_size());
+        esp_websocket_client_destroy(client_);
+        client_ = nullptr;
     }
 
-    run_tx_task = false;
-    if (tx_task) {
+    connected_ = false;
+    authenticated_ = false;
+
+    if (tx_task_) {
         vTaskDelay(pdMS_TO_TICKS(100));
-        tx_task = nullptr;
-    }
-    if (tx_buffer) {
-        vStreamBufferDelete(tx_buffer);
-        tx_buffer = nullptr;
+        tx_task_ = nullptr;
     }
 
-    if (status_cb)
-        status_cb(0); // CLOSED
+    if (tx_buffer_) {
+        xStreamBufferReset(tx_buffer_);
+    }
+
+    if (state_cb_) state_cb_(false);
 }
 
-bool WebSocketClient::sendText(const std::string &msg)
+void WebSocketClient::setDeviceInfo(const char* mac, const char* fw_version, const char* model)
 {
-    if (!client || !connected)
-        return false;
-
-    // Use longer timeout (1s) — text commands like START/END are critical
-    // and must not be dropped due to audio send_bin holding the WS mutex
-    int sent = esp_websocket_client_send_text(client, msg.c_str(), msg.size(), pdMS_TO_TICKS(1000));
-    if (sent != (int)msg.size()) {
-        ESP_LOGW("WebSocketClient", "sendText failed: '%s' (sent=%d)", msg.c_str(), sent);
-    }
-    return sent == (int)msg.size();
+    if (mac) mac_ = mac;
+    if (fw_version) fw_version_ = fw_version;
+    if (model) model_ = model;
 }
 
-bool WebSocketClient::sendBinary(const uint8_t *data, size_t len)
+// === Authentication ===
+
+esp_err_t WebSocketClient::authenticate()
 {
-    if (!client || !connected || !tx_buffer)
-        return false;
+    if (!connected_ || !client_) return ESP_FAIL;
 
-    // Atomic: check space BEFORE writing to prevent partial frames.
-    // A partial [len][opus] write corrupts the stream buffer framing,
-    // causing wsTxLoop to misinterpret data as headers → cascade failure.
-    size_t space = xStreamBufferSpacesAvailable(tx_buffer);
-    if (space < len) {
-        // Drop the entire frame rather than writing partial data
-        return false;
+    cJSON* auth_msg = ws::createAuthMessage(
+        device_token_.c_str(), mac_.c_str(),
+        fw_version_.c_str(), model_.c_str());
+    if (!auth_msg) return ESP_ERR_NO_MEM;
+
+    char* json = cJSON_PrintUnformatted(auth_msg);
+    cJSON_Delete(auth_msg);
+    if (!json) return ESP_ERR_NO_MEM;
+
+    int sent = esp_websocket_client_send_text(client_, json, strlen(json), pdMS_TO_TICKS(1000));
+    cJSON_free(json);
+
+    if (sent < 0) {
+        ESP_LOGE(TAG, "Failed to send auth message");
+        return ESP_FAIL;
     }
 
-    size_t sent = xStreamBufferSend(tx_buffer, data, len, 0);
-    return sent == len;
+    ESP_LOGI(TAG, "Auth message sent, waiting for result...");
+
+    xEventGroupClearBits(auth_event_, AUTH_SUCCESS_BIT | AUTH_FAIL_BIT);
+    EventBits_t bits = xEventGroupWaitBits(auth_event_,
+        AUTH_SUCCESS_BIT | AUTH_FAIL_BIT,
+        pdTRUE, pdFALSE,
+        pdMS_TO_TICKS(server_cfg::WS_AUTH_TIMEOUT_MS));
+
+    if (bits & AUTH_SUCCESS_BIT) {
+        authenticated_ = true;
+        ESP_LOGI(TAG, "Authentication successful");
+        return ESP_OK;
+    }
+
+    ESP_LOGW(TAG, "Authentication failed (bits=0x%lx, close_code=%d)",
+             (unsigned long)bits, last_close_code_);
+    return ESP_FAIL;
 }
+
+// === Send methods ===
+
+esp_err_t WebSocketClient::sendText(const char* json, size_t len)
+{
+    if (!client_ || !connected_) return ESP_FAIL;
+
+    int sent = esp_websocket_client_send_text(client_, json, len, pdMS_TO_TICKS(1000));
+    if (sent != (int)len) {
+        ESP_LOGW(TAG, "sendText incomplete: %d/%zu", sent, len);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+esp_err_t WebSocketClient::sendMessage(cJSON* msg)
+{
+    if (!msg) return ESP_ERR_INVALID_ARG;
+
+    char* json = cJSON_PrintUnformatted(msg);
+    cJSON_Delete(msg);
+    if (!json) return ESP_ERR_NO_MEM;
+
+    esp_err_t err = sendText(json, strlen(json));
+    cJSON_free(json);
+    return err;
+}
+
+esp_err_t WebSocketClient::sendBinary(const uint8_t* data, size_t len)
+{
+    if (!client_ || !connected_ || !tx_buffer_) return ESP_FAIL;
+
+    size_t space = xStreamBufferSpacesAvailable(tx_buffer_);
+    if (space < len) return ESP_ERR_NO_MEM;
+
+    size_t sent = xStreamBufferSend(tx_buffer_, data, len, 0);
+    return (sent == len) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t WebSocketClient::sendAudioFrame(uint16_t seq, const uint8_t* opus_data, size_t opus_len)
+{
+    if (!opus_data || opus_len == 0) return ESP_ERR_INVALID_ARG;
+
+    uint8_t header[5];
+    header[0] = ws::AUDIO_UPLINK;
+    header[1] = (uint8_t)(seq & 0xFF);
+    header[2] = (uint8_t)((seq >> 8) & 0xFF);
+    header[3] = (uint8_t)(opus_len & 0xFF);
+    header[4] = (uint8_t)((opus_len >> 8) & 0xFF);
+
+    size_t total = 5 + opus_len;
+    if (!tx_buffer_ || xStreamBufferSpacesAvailable(tx_buffer_) < total) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    xStreamBufferSend(tx_buffer_, header, 5, 0);
+    xStreamBufferSend(tx_buffer_, opus_data, opus_len, 0);
+    return ESP_OK;
+}
+
+// === TX buffer ===
 
 void WebSocketClient::waitTxDrain(uint32_t timeout_ms)
 {
-    if (!tx_buffer) return;
+    if (!tx_buffer_) return;
 
     uint32_t elapsed = 0;
     while (elapsed < timeout_ms) {
-        size_t pending = xStreamBufferBytesAvailable(tx_buffer);
-        if (pending == 0) return;
+        if (xStreamBufferBytesAvailable(tx_buffer_) == 0) return;
         vTaskDelay(pdMS_TO_TICKS(10));
         elapsed += 10;
     }
-    // Timeout — force flush remaining data
-    ESP_LOGW("WebSocketClient", "TX drain timeout (%lu bytes left), flushing",
-             (unsigned long)xStreamBufferBytesAvailable(tx_buffer));
-    xStreamBufferReset(tx_buffer);
+    ESP_LOGW(TAG, "TX drain timeout (%lu bytes left)",
+             (unsigned long)xStreamBufferBytesAvailable(tx_buffer_));
+    xStreamBufferReset(tx_buffer_);
 }
 
-void WebSocketClient::wsTxTaskEntry(void *arg)
+size_t WebSocketClient::getTxFreeSpace() const
 {
-    static_cast<WebSocketClient *>(arg)->wsTxLoop();
+    return tx_buffer_ ? xStreamBufferSpacesAvailable(tx_buffer_) : 0;
 }
 
-void WebSocketClient::wsTxLoop()
+void WebSocketClient::resetTxBuffer()
 {
-    ESP_LOGI(TAG, "WS TX Task started");
+    if (tx_buffer_) xStreamBufferReset(tx_buffer_);
+}
 
-    // Batch buffer: accumulate multiple [2B len][opus] frames into one send_bin() call.
-    // At ~80-160 bytes/frame, fits 6-12 frames per batch → 6-12x fewer TCP writes.
-    // Must match WS cfg.buffer_size (8KB) to avoid fragmentation.
+// === TX Task ===
+
+void WebSocketClient::txTaskEntry(void* arg)
+{
+    static_cast<WebSocketClient*>(arg)->txLoop();
+}
+
+void WebSocketClient::txLoop()
+{
+    ESP_LOGI(TAG, "TX task started");
+
     constexpr size_t BATCH_BUF_SIZE = 2048;
     uint8_t* buf = (uint8_t*)malloc(BATCH_BUF_SIZE);
     if (!buf) {
-        ESP_LOGE(TAG, "WS TX: failed to allocate batch buffer");
+        ESP_LOGE(TAG, "TX: failed to allocate batch buffer");
         vTaskDelete(nullptr);
         return;
     }
+
     int consecutive_failures = 0;
 
-    while (run_tx_task) {
-        if (!connected || !client || !tx_buffer) {
-            if (tx_buffer && !connected) {
-                xStreamBufferReset(tx_buffer);
+    while (run_tx_task_) {
+        if (!connected_ || !client_ || !tx_buffer_) {
+            if (tx_buffer_ && !connected_) {
+                xStreamBufferReset(tx_buffer_);
             }
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
-        // === Phase 1: Wait for first frame (block up to 20ms) ===
-        size_t batch_len = 0;
-        uint8_t header[2];
-        size_t h_got = xStreamBufferReceive(tx_buffer, header, 2, pdMS_TO_TICKS(20));
-        if (h_got < 2) continue;
+        size_t batch_len = xStreamBufferReceive(tx_buffer_, buf, BATCH_BUF_SIZE, pdMS_TO_TICKS(20));
+        if (batch_len == 0) continue;
 
-        uint16_t frame_len = header[0] | ((uint16_t)header[1] << 8);
-        if (frame_len == 0 || frame_len > 500) {
-            ESP_LOGE(TAG, "WS TX: bad frame len %u, flushing", frame_len);
-            xStreamBufferReset(tx_buffer);
-            continue;
-        }
+        if (!connected_ || !client_) continue;
 
-        buf[0] = header[0];
-        buf[1] = header[1];
-        size_t d_got = xStreamBufferReceive(tx_buffer, buf + 2, frame_len, pdMS_TO_TICKS(20));
-        if (d_got < frame_len) {
-            ESP_LOGE(TAG, "WS TX: incomplete payload (%zu/%u), flushing", d_got, frame_len);
-            xStreamBufferReset(tx_buffer);
-            continue;
-        }
-        batch_len = 2 + frame_len;
-
-        // === Phase 2: Greedily read more available bytes (non-blocking) ===
-        // sendBinary() writes complete [2B len][opus] frames atomically,
-        // so everything in the stream buffer is frame-aligned. Just bulk-read
-        // as much as fits into buf — no per-frame parsing needed here.
-        // The server parses [2B len][opus] boundaries from the WS binary payload.
-        {
-            size_t room = BATCH_BUF_SIZE - batch_len;
-            if (room > 0) {
-                size_t extra = xStreamBufferReceive(tx_buffer, buf + batch_len, room, 0);
-                batch_len += extra;
-            }
-        }
-
-        if (!connected || batch_len == 0) continue;
-
-        // === Phase 3: Send entire batch in one TCP write ===
-        int sent = esp_websocket_client_send_bin(client, (const char *)buf, batch_len, pdMS_TO_TICKS(200));
+        int sent = esp_websocket_client_send_bin(client_, (const char*)buf, batch_len, pdMS_TO_TICKS(200));
         if (sent < 0) {
             consecutive_failures++;
             if (consecutive_failures <= 3) {
-                ESP_LOGW(TAG, "WS TX: send_bin failed (%d), batch=%zu bytes", consecutive_failures, batch_len);
+                ESP_LOGW(TAG, "TX: send_bin failed (%d), batch=%zu", consecutive_failures, batch_len);
             }
             if (consecutive_failures >= 5) {
-                ESP_LOGW(TAG, "WS TX: %d consecutive failures, flushing buffer", consecutive_failures);
-                xStreamBufferReset(tx_buffer);
+                ESP_LOGW(TAG, "TX: %d failures, flushing", consecutive_failures);
+                xStreamBufferReset(tx_buffer_);
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
         } else {
             consecutive_failures = 0;
         }
     }
+
     free(buf);
-    ESP_LOGI(TAG, "WS TX Task stopped");
+    ESP_LOGI(TAG, "TX task stopped");
     vTaskDelete(nullptr);
 }
 
-void WebSocketClient::onStatus(std::function<void(int)> cb)
-{
-    status_cb = cb;
-}
+// === Event handler ===
 
-void WebSocketClient::onText(std::function<void(const std::string &)> cb)
+void WebSocketClient::eventHandlerStatic(void* handler_args, esp_event_base_t base,
+                                          int32_t event_id, void* event_data)
 {
-    text_cb = cb;
-}
-
-void WebSocketClient::onBinary(std::function<void(const uint8_t *, size_t)> cb)
-{
-    binary_cb = cb;
-}
-
-// ======================================================================================
-// EVENT HANDLER
-// ======================================================================================
-void WebSocketClient::eventHandlerStatic(void *handler_args, esp_event_base_t base,
-                                         int32_t event_id, void *event_data)
-{
-    auto *self = static_cast<WebSocketClient *>(handler_args);
-    self->eventHandler(base, event_id, (esp_websocket_event_data_t *)event_data);
+    auto* self = static_cast<WebSocketClient*>(handler_args);
+    self->eventHandler(base, event_id, (esp_websocket_event_data_t*)event_data);
 }
 
 void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
-                                   esp_websocket_event_data_t *data)
+                                    esp_websocket_event_data_t* data)
 {
-    switch (event_id)
-    {
+    switch (event_id) {
     case WEBSOCKET_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "WS connected!");
-        connected = true;
-        if (status_cb)
-            status_cb(2);
+        ESP_LOGI(TAG, "WS connected");
+        connected_ = true;
+        authenticated_ = false;
+        if (state_cb_) state_cb_(true);
+
+        // Start auth flow
+        if (authenticate() != ESP_OK) {
+            ESP_LOGE(TAG, "Auth failed, disconnecting");
+            if (auth_cb_) auth_cb_(false, last_close_code_);
+        } else {
+            if (auth_cb_) auth_cb_(true, 0);
+        }
         break;
 
     case WEBSOCKET_EVENT_DATA:
-        if (!data)
-            break;
+        if (!data) break;
 
-        if (data->op_code == 0x1)
-        { // WS_OP_TEXT
-            if (text_cb)
-            {
-                text_cb(std::string((const char *)data->data_ptr, data->data_len));
+        if (data->op_code == 0x1) {  // TEXT
+            // Check if this is auth_result
+            if (!authenticated_) {
+                ws::ParsedMessage msg = ws::parseMessage(
+                    (const char*)data->data_ptr, data->data_len);
+                if (msg.valid && msg.type == ws::MsgType::AUTH_RESULT) {
+                    cJSON* status = cJSON_GetObjectItem(msg.payload, "status");
+                    if (status && cJSON_IsString(status) &&
+                        strcmp(status->valuestring, "ok") == 0) {
+                        xEventGroupSetBits(auth_event_, AUTH_SUCCESS_BIT);
+                    } else {
+                        xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+                    }
+                    if (msg.root) cJSON_Delete(msg.root);
+                    break;
+                }
+                if (msg.root) cJSON_Delete(msg.root);
+            }
+
+            if (text_cb_) {
+                text_cb_((const char*)data->data_ptr, data->data_len);
+            }
+        } else if (data->op_code == 0x2) {  // BINARY
+            if (binary_cb_) {
+                binary_cb_((const uint8_t*)data->data_ptr, data->data_len);
             }
         }
-        else if (data->op_code == 0x2)
-        { // WS_OP_BINARY
-            if (binary_cb)
-            {
-                binary_cb((const uint8_t *)data->data_ptr, data->data_len);
-            }
-        }
+        break;
+
+    case WEBSOCKET_EVENT_CLOSED:
+        ESP_LOGW(TAG, "WS closed (code=%d)", data ? data->op_code : -1);
+        if (data) last_close_code_ = data->op_code;
+        connected_ = false;
+        authenticated_ = false;
+        if (tx_buffer_) xStreamBufferReset(tx_buffer_);
+        xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+        if (state_cb_) state_cb_(false);
         break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "WS disconnected");
-        connected = false;
-        if (tx_buffer) xStreamBufferReset(tx_buffer);  // Flush stale audio
-        if (status_cb)
-            status_cb(0);
+        connected_ = false;
+        authenticated_ = false;
+        if (tx_buffer_) xStreamBufferReset(tx_buffer_);
+        xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+        if (state_cb_) state_cb_(false);
         break;
 
     case WEBSOCKET_EVENT_ERROR:
-        ESP_LOGE(TAG, "WS error event");
-        connected = false;
-        if (tx_buffer) xStreamBufferReset(tx_buffer);  // Flush stale audio
-        if (status_cb)
-            status_cb(0);
+        ESP_LOGE(TAG, "WS error");
+        connected_ = false;
+        authenticated_ = false;
+        if (tx_buffer_) xStreamBufferReset(tx_buffer_);
+        xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+        if (state_cb_) state_cb_(false);
         break;
 
     default:

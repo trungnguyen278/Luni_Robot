@@ -38,14 +38,14 @@ enum class ControlCmd : uint8_t {
     SET_VOLUME     = 0x03,  // +1 byte volume (0-100)
     REBOOT         = 0x04,
     WIFI_CONFIG    = 0x10,  // {ssid_len:1, ssid:N, pass_len:1, pass:N}
-    MQTT_CONFIG    = 0x11,  // {uri_len:1, uri:N, user_len:1, user:N, pass_len:1, pass:N}
+    TOKEN_CONFIG   = 0x11,  // {token_len:1, token:N}
     WS_CONFIG      = 0x12,  // {url_len:1, url:N}
 };
 
 // --- Status update fields ---
 struct StatusPayload {
     uint8_t interaction;    // InteractionState enum
-    uint8_t connectivity;   // ConnectivityState enum
+    uint8_t connection;     // ConnectionState enum
     uint8_t system_state;   // SystemState enum
     uint8_t emotion;        // EmotionState enum
 };

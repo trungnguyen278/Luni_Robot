@@ -100,6 +100,12 @@ public:
     // Play a procedural variant by category/variant ID
     void playProcedural(const char* categoryKey, const char* variantId = nullptr);
 
+    // Sync data from server (via C5 UART)
+    void handleSyncData(const state::SyncDataPacket& data);
+
+    // OTA status from C5 (via UART)
+    void handleOtaStatus(state::OtaState ota_state, uint8_t progress);
+
     // Access the scene manager for data injection
     SceneManager* getSceneManager() { return &scene_mgr_; }
 
@@ -123,7 +129,7 @@ private:
     void handleInteraction(state::InteractionState s, state::InputSource src);
 
     // Respond to connectivity state changes (WiFi/BLE/online).
-    void handleConnectivity(state::ConnectivityState s);
+    void handleConnectivity(state::ConnectionState s);
 
     // Respond to system lifecycle state changes (booting, running, updating).
     void handleSystem(state::SystemState s);

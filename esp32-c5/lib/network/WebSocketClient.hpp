@@ -2,76 +2,85 @@
 
 #include <string>
 #include <functional>
-#include <vector>
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/stream_buffer.h"
+#include "freertos/event_groups.h"
+#include "cJSON.h"
 
-/**
- * WebSocketClient
- * ---------------------------------------------------------
- * - Đóng gói esp_websocket_client
- * - Tự động callback status / text / binary
- * - Không xử lý logic ứng dụng (NetworkManager làm việc đó)
- */
 class WebSocketClient {
 public:
     WebSocketClient();
     ~WebSocketClient();
 
-    // Init sơ bộ, chưa connect
     void init();
 
-    // Kết nối tới ws_url (thiết lập trong setUrl)
-    void connect();
-    void close();
+    // Connect with device token authentication
+    esp_err_t connect(const char* url, const char* device_token);
+    void disconnect();
+    bool isConnected() const { return connected_; }
+    bool isAuthenticated() const { return authenticated_; }
 
-    // Get connection status
-    bool isConnected() const { return connected; }
+    // Text frames (JSON commands/status)
+    esp_err_t sendText(const char* json, size_t len);
+    esp_err_t sendMessage(cJSON* msg);  // Auto-serialize + delete
 
-    void setUrl(const std::string& url);
+    // Binary frames (audio)
+    esp_err_t sendBinary(const uint8_t* data, size_t len);
+    esp_err_t sendAudioFrame(uint16_t seq, const uint8_t* opus_data, size_t opus_len);
 
-    // Send
-    bool sendText(const std::string& msg);
-    bool sendBinary(const uint8_t* data, size_t len);
-
-    // Wait for TX buffer to drain (up to timeout_ms). Used before sending END.
+    // TX buffer management
     void waitTxDrain(uint32_t timeout_ms = 500);
-
-    // Returns free space in TX buffer (bytes). Used for SPI flow control.
-    size_t getTxFreeSpace() const {
-        return tx_buffer ? xStreamBufferSpacesAvailable(tx_buffer) : 0;
-    }
+    size_t getTxFreeSpace() const;
+    void resetTxBuffer();
 
     // Callbacks
-    void onStatus(std::function<void(int)> cb);   // 0=closed,1=connecting,2=open
-    void onText(std::function<void(const std::string&)> cb);
-    void onBinary(std::function<void(const uint8_t*, size_t)> cb);
+    using TextCallback   = std::function<void(const char* data, size_t len)>;
+    using BinaryCallback = std::function<void(const uint8_t* data, size_t len)>;
+    using StateCallback  = std::function<void(bool connected)>;
+    using AuthCallback   = std::function<void(bool success, int close_code)>;
+
+    void onText(TextCallback cb)       { text_cb_ = std::move(cb); }
+    void onBinary(BinaryCallback cb)   { binary_cb_ = std::move(cb); }
+    void onStateChange(StateCallback cb) { state_cb_ = std::move(cb); }
+    void onAuthResult(AuthCallback cb) { auth_cb_ = std::move(cb); }
+
+    // Device info for auth
+    void setDeviceInfo(const char* mac, const char* fw_version, const char* model);
 
 private:
     static void eventHandlerStatic(void* handler_args, esp_event_base_t base,
                                    int32_t event_id, void* event_data);
-
-    static void wsTxTaskEntry(void* arg);
-    void wsTxLoop();
-
     void eventHandler(esp_event_base_t base, int32_t event_id,
                       esp_websocket_event_data_t* data);
 
-private:
-    esp_websocket_client_handle_t client = nullptr;
+    static void txTaskEntry(void* arg);
+    void txLoop();
 
-    std::string ws_url;
+    esp_err_t authenticate();
 
-    bool connected = false;
+    esp_websocket_client_handle_t client_ = nullptr;
+    std::string url_;
+    std::string device_token_;
+    std::string mac_;
+    std::string fw_version_;
+    std::string model_;
 
-    // callbacks
-    std::function<void(int)> status_cb;               // status
-    std::function<void(const std::string&)> text_cb;  // text message
-    std::function<void(const uint8_t*, size_t)> binary_cb; // binary message
+    bool connected_ = false;
+    bool authenticated_ = false;
+    int last_close_code_ = 0;
 
-    StreamBufferHandle_t tx_buffer = nullptr;
-    TaskHandle_t tx_task = nullptr;
-    bool run_tx_task = false;
+    TextCallback   text_cb_;
+    BinaryCallback binary_cb_;
+    StateCallback  state_cb_;
+    AuthCallback   auth_cb_;
+
+    StreamBufferHandle_t tx_buffer_ = nullptr;
+    TaskHandle_t tx_task_ = nullptr;
+    bool run_tx_task_ = false;
+
+    EventGroupHandle_t auth_event_ = nullptr;
+    static constexpr int AUTH_SUCCESS_BIT = (1 << 0);
+    static constexpr int AUTH_FAIL_BIT    = (1 << 1);
 };

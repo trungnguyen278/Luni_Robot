@@ -22,6 +22,9 @@ public:
     using StatusUpdateCb = std::function<void(uint8_t interaction, uint8_t connectivity,
                                                uint8_t system_state, uint8_t emotion)>;
     using ControlCmdCb = std::function<void(uart_proto::ControlCmd cmd, const uint8_t* data, size_t len)>;
+    using SyncDataCb = std::function<void(const uint8_t* data, size_t len)>;
+    using OtaStatusCb = std::function<void(uint8_t state, uint8_t progress)>;
+    using DeviceCmdCb = std::function<void(uart_proto::ControlCmd cmd, const uint8_t* data, size_t len)>;
 
     UartBridge() = default;
     ~UartBridge();
@@ -34,9 +37,15 @@ public:
     bool sendControlCmd(uart_proto::ControlCmd cmd,
                         const uint8_t* data = nullptr, size_t len = 0);
 
-    // Callback for status updates received from C5
+    // Send log entry to C5 for forwarding to server
+    bool sendLogEntry(const uint8_t* data, size_t len);
+
+    // Callbacks for messages received from C5
     void onStatusUpdate(StatusUpdateCb cb) { status_cb_ = std::move(cb); }
     void onControlCmd(ControlCmdCb cb) { ctrl_cb_ = std::move(cb); }
+    void onSyncData(SyncDataCb cb) { sync_cb_ = std::move(cb); }
+    void onOtaStatus(OtaStatusCb cb) { ota_cb_ = std::move(cb); }
+    void onDeviceCmd(DeviceCmdCb cb) { devcmd_cb_ = std::move(cb); }
 
 private:
     static void rxTaskEntry(void* arg);
@@ -47,4 +56,7 @@ private:
     TaskHandle_t rx_task_ = nullptr;
     StatusUpdateCb status_cb_;
     ControlCmdCb ctrl_cb_;
+    SyncDataCb sync_cb_;
+    OtaStatusCb ota_cb_;
+    DeviceCmdCb devcmd_cb_;
 };

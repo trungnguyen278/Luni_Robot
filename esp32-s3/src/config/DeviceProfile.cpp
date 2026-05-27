@@ -238,53 +238,39 @@ bool DLuniceProfile::setup(AppController& app)
     // Wire SpiBridge to AudioManager
     audio_mgr->setSpiBridge(spi_bridge.get());
 
-    // SPI downlink: C5 sends raw audio bytes -> speaker encoded stream buffer.
-    // C5 streams raw bytes (up to MAX_PAYLOAD per SPI transaction, NOT frame-aligned).
-    // The stream buffer accumulates bytes; AudioRecv parses [2B len][opus] from it.
-    // This handles Opus frames of any size (including >250 bytes from server).
+    // SPI downlink: C5 sends frame-aligned opus data.
+    // Format: [frame_count:1] [2B len + opus data]...
+    // Each SPI payload contains only complete opus frames.
+    // Dropping an entire payload loses complete frames (Opus PLC handles gracefully)
+    // instead of breaking byte-stream alignment permanently.
     StreamBufferHandle_t spk_sb = audio_mgr->getSpeakerEncodedBuffer();
     spi_bridge->onAudioDownlink([spk_sb](const uint8_t* data, size_t len) {
-        if (!data || len == 0) return;
+        if (!data || len < 3) return;  // minimum: count(1) + header(2)
         auto& sm = StateManager::instance();
         auto interaction = sm.getInteractionState();
         if (interaction == state::InteractionState::LISTENING) return;
 
-        // Auto-trigger SPEAKING only from PROCESSING (audio binary arrives before
-        // the SPEAKING text command). Do NOT auto-trigger from IDLE — stale SPI data
-        // arriving during stopSpeaking() drain would regress the state back to SPEAKING.
         if (interaction == state::InteractionState::PROCESSING) {
-            ESP_LOGI("SpiBridge", "Audio downlink auto-trigger SPEAKING (was PROCESSING)");
             sm.setInteractionState(state::InteractionState::SPEAKING, state::InputSource::SERVER_COMMAND);
         } else if (interaction != state::InteractionState::SPEAKING) {
             return;
         }
 
-        // All-or-nothing write to preserve [2B len][opus] stream alignment.
-        // Partial writes or dropped SPI chunks corrupt frame boundaries and
-        // cause cascading Opus decode errors. Wait for AudioRecv (Core 1)
-        // to drain enough space — SPI poll runs on Core 0, no deadlock risk.
+        // Skip frame_count byte — write the complete [2B len][opus]... to stream buffer
+        const uint8_t* frames = data + 1;
+        size_t frames_len = len - 1;
+
         size_t space = xStreamBufferSpacesAvailable(spk_sb);
-        if (space >= len) {
-            xStreamBufferSend(spk_sb, data, len, 0);
+        if (space >= frames_len) {
+            xStreamBufferSend(spk_sb, frames, frames_len, 0);
         } else {
-            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(80);
-            bool wrote = false;
-            while (!wrote) {
-                TickType_t now = xTaskGetTickCount();
-                if (now >= deadline) break;
-                vTaskDelay(pdMS_TO_TICKS(2));
-                if (xStreamBufferSpacesAvailable(spk_sb) >= len) {
-                    xStreamBufferSend(spk_sb, data, len, 0);
-                    wrote = true;
-                }
-            }
-            if (!wrote) {
-                static uint32_t dl_drop_count = 0;
-                dl_drop_count++;
-                if (dl_drop_count <= 5 || dl_drop_count % 50 == 0) {
-                    ESP_LOGW("SpiBridge", "DL encoded buffer full after 80ms wait, dropped %zu bytes #%lu",
-                             len, (unsigned long)dl_drop_count);
-                }
+            // Buffer full: drop entire payload (all complete frames).
+            // Alignment preserved — next payload starts fresh.
+            static uint32_t dl_drop_count = 0;
+            dl_drop_count++;
+            if (dl_drop_count <= 5 || dl_drop_count % 50 == 0) {
+                ESP_LOGW("SpiBridge", "DL buffer full, dropped %zu bytes (complete frames) #%lu",
+                         frames_len, (unsigned long)dl_drop_count);
             }
         }
     });
@@ -303,12 +289,12 @@ bool DLuniceProfile::setup(AppController& app)
         return false;
     }
 
-    // UART status: C5 sends connectivity/emotion state via UART
+    // UART status: C5 sends connection/emotion state via UART
     uart_bridge->onStatusUpdate([](uint8_t interaction, uint8_t connectivity,
                                     uint8_t system_state, uint8_t emotion) {
         auto& sm = StateManager::instance();
 
-        sm.setConnectivityState(static_cast<state::ConnectivityState>(connectivity));
+        sm.setConnectionState(static_cast<state::ConnectionState>(connectivity));
         sm.setEmotionState(static_cast<state::EmotionState>(emotion));
 
         // Forward system state from C5, but never revert S3 to BOOTING

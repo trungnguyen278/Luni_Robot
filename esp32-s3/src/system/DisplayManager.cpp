@@ -3,6 +3,7 @@
 
 #include <utility>
 #include <atomic>
+#include <cstring>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -159,7 +160,7 @@ void DisplayManager::enableStateBinding(bool enable)
     sub_inter = sm.subscribeInteraction([this](state::InteractionState s, state::InputSource src)
                                         { this->handleInteraction(s, src); });
 
-    sub_conn = sm.subscribeConnectivity([this](state::ConnectivityState s)
+    sub_conn = sm.subscribeConnectivity([this](state::ConnectionState s)
                                         { this->handleConnectivity(s); });
 
     sub_sys = sm.subscribeSystem([this](state::SystemState s)
@@ -346,30 +347,37 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
     }
 }
 
-void DisplayManager::handleConnectivity(state::ConnectivityState s)
+void DisplayManager::handleConnectivity(state::ConnectionState s)
 {
     switch (s)
     {
-    case state::ConnectivityState::OFFLINE:
-        // show text "Offline"
-        playText("Offline", -1, -1, 0xFFFF, 1.5); // centered, white text
+    case state::ConnectionState::OFFLINE:
+        playText("Offline", -1, -1, 0xFFFF, 1.5);
         break;
 
-    case state::ConnectivityState::CONNECTING_WIFI:
-        // Show text "Connecting WiFi..."
-        playText("Connecting WiFi...", -1, -1, 0xFFFF, 1.8); // centered, white text
+    case state::ConnectionState::WIFI_CONNECTING:
+        playText("Connecting WiFi...", -1, -1, 0xFFFF, 1.8);
         break;
 
-    case state::ConnectivityState::WIFI_CONNECTED:
+    case state::ConnectionState::WIFI_CONNECTED:
         playText("WiFi Connected", -1, -1, 0xFFFF, 1.8);
         break;
 
-    case state::ConnectivityState::CONNECTING_WS:
+    case state::ConnectionState::WS_CONNECTING:
+    case state::ConnectionState::WS_AUTHENTICATING:
         playEmotion("stun");
         break;
 
-    case state::ConnectivityState::ONLINE:
+    case state::ConnectionState::ONLINE:
         playEmotion("idle");
+        break;
+
+    case state::ConnectionState::RECONNECTING:
+        playText("Reconnecting...", -1, -1, 0xFFFF, 1.5);
+        break;
+
+    case state::ConnectionState::BLE_PROVISIONING:
+        playText("BLE Setup", -1, -1, 0xFFFF, 1.8);
         break;
     }
 }
@@ -384,7 +392,7 @@ void DisplayManager::handleSystem(state::SystemState s)
         break;
 
     case state::SystemState::RUNNING:
-        handleConnectivity(StateManager::instance().getConnectivityState());
+        handleConnectivity(StateManager::instance().getConnectionState());
         break;
 
     case state::SystemState::ERROR:
@@ -447,6 +455,48 @@ void DisplayManager::handleEmotion(state::EmotionState s)
     case state::EmotionState::ANGRY:
     default:
         playEmotion("idle");
+        break;
+    }
+}
+
+void DisplayManager::handleSyncData(const state::SyncDataPacket& data)
+{
+    SceneData& sd = scene_mgr_.getSceneData();
+    sd.temperature = data.temperature;
+    sd.humidity = data.humidity;
+    sd.weather_condition = data.condition;
+    sd.aqi = data.aqi;
+    sd.unix_time = data.unix_time;
+    sd.utc_offset = data.utc_offset;
+    sd.lunar_day = data.lunar_day;
+    sd.lunar_month = data.lunar_month;
+    strncpy(sd.city, data.city, sizeof(sd.city) - 1);
+    sd.weather_valid = true;
+    sd.time_valid = true;
+}
+
+void DisplayManager::handleOtaStatus(state::OtaState ota_state, uint8_t progress)
+{
+    switch (ota_state) {
+    case state::OtaState::DOWNLOADING:
+        if (!ota_updating) showOTAUpdating();
+        setOTAProgress(progress);
+        setOTAStatus("Downloading...");
+        break;
+    case state::OtaState::VERIFYING:
+        setOTAStatus("Verifying...");
+        break;
+    case state::OtaState::FLASHING:
+        setOTAProgress(100);
+        setOTAStatus("Flashing...");
+        break;
+    case state::OtaState::REBOOTING:
+        showRebooting();
+        break;
+    case state::OtaState::FAILED:
+        showOTAError("Update failed");
+        break;
+    default:
         break;
     }
 }
