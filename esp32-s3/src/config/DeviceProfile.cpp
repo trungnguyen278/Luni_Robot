@@ -26,18 +26,6 @@
 #include "config/PinConfig.hpp"
 #include "Version.hpp"
 
-// Assets
-#include "assets/emotions/neutral.hpp"
-#include "assets/emotions/idle.hpp"
-#include "assets/emotions/listening.hpp"
-#include "assets/emotions/happy.hpp"
-#include "assets/emotions/sad.hpp"
-#include "assets/emotions/thinking.hpp"
-#include "assets/emotions/stun.hpp"
-#include "assets/icons/battery_charge.hpp"
-#include "assets/icons/battery_full.hpp"
-#include "assets/icons/critical_power.hpp"
-
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "nvs_flash.h"
@@ -88,33 +76,6 @@ namespace user_cfg {
 }
 
 // =============================================================================
-// Helper: register all emotion animations from assets
-// =============================================================================
-static void registerEmotions(DisplayManager* display)
-{
-    auto reg = [&](const char* name, const asset::emotion::Animation& a) {
-        Animation1Bit anim1bit;
-        anim1bit.width           = a.width;
-        anim1bit.height          = a.height;
-        anim1bit.frame_count     = a.frame_count;
-        anim1bit.fps             = a.fps;
-        anim1bit.loop            = a.loop;
-        anim1bit.max_packed_size = a.max_packed_size;
-        anim1bit.base_frame      = nullptr;
-        anim1bit.frames          = a.frames ? a.frames() : nullptr;
-        display->registerEmotion(name, anim1bit);
-    };
-
-    reg("neutral",   asset::emotion::NEUTRAL);
-    reg("idle",      asset::emotion::IDLE);
-    reg("listening", asset::emotion::LISTENING);
-    reg("happy",     asset::emotion::HAPPY);
-    reg("sad",       asset::emotion::SAD);
-    reg("thinking",  asset::emotion::THINKING);
-    reg("stun",      asset::emotion::STUN);
-}
-
-// =============================================================================
 // Setup
 // =============================================================================
 bool DLuniceProfile::setup(AppController& app)
@@ -157,7 +118,6 @@ bool DLuniceProfile::setup(AppController& app)
     }
 
     display_mgr->setBrightness(user.brightness);
-    registerEmotions(display_mgr.get());
     display_mgr->enableStateBinding(true);
 
     // =========================================================

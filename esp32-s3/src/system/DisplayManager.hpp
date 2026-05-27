@@ -9,7 +9,6 @@
 
 #include "StateTypes.hpp"
 #include "StateManager.hpp"
-#include "AnimationPlayer.hpp"
 #include "GfxEngine.hpp"
 #include "ui/SceneManager.hpp"
 
@@ -20,7 +19,6 @@
 
 // Forward declarations
 class DisplayDriver;       // ST7789 low-level driver
-class AnimationPlayer;     // Multi-frame animation engine (legacy 1-bit RLE)
 class GfxEngine;           // Procedural RGB565 rendering engine
 
 // ----------------------------------------------------------------------------
@@ -39,22 +37,6 @@ class GfxEngine;           // Procedural RGB565 rendering engine
 //
 class DisplayManager {
 public:
-   
-
-    // Icon asset descriptor
-    struct Icon {
-        int w = 0;
-        int h = 0;
-        const uint8_t* rle_data = nullptr;
-    };
-
-    enum class IconPlacement {
-        Custom,     // Use provided x,y
-        Center,     // Centered on screen
-        TopRight,   // Near top-right corner
-        Fullscreen  // Origin (0,0), icon sized to screen
-    };
-
 public:
     DisplayManager();
     ~DisplayManager();
@@ -114,13 +96,6 @@ public:
     void setBacklight(bool on);
     void setBrightness(uint8_t percent);
 
-    // --- Asset Registration ---------------------------------------------------
-    // Register an emotion animation by name (copied into registry).
-    void registerEmotion(const std::string& name, const Animation1Bit& anim);
-
-    // Register an icon asset by name (copied into registry).
-    void registerIcon(const std::string& name, const Icon& icon);
-    
     // --- Procedural rendering (GfxEngine) ---
     // Play a procedural variant by category/variant ID
     void playProcedural(const char* categoryKey, const char* variantId = nullptr);
@@ -159,30 +134,16 @@ private:
     // Respond to emotion state changes to map to animations.
     void handleEmotion(state::EmotionState s);
 
-    // Internal asset playback
-    // Render an icon with optional placement helper.
-    void playIcon(const std::string& name,
-                  IconPlacement placement = IconPlacement::Custom,
-                  int x = 0, int y = 0);
     static void taskEntry(void* arg);
     
 
 private:
     std::unique_ptr<DisplayDriver> drv; // owned low-level driver
-    std::unique_ptr<AnimationPlayer> anim_player; // legacy 1-bit RLE
     std::unique_ptr<GfxEngine> gfx_;              // procedural RGB565
     SceneManager scene_mgr_;
 
-    enum class RenderMode : uint8_t { LEGACY_RLE, PROCEDURAL };
-    RenderMode render_mode_ = RenderMode::LEGACY_RLE;
-
-    // asset tables
-    std::unordered_map<std::string, Animation1Bit> emotions;
-    std::unordered_map<std::string, Icon> icons;
-
     // battery
     uint8_t battery_percent = 255;
-    uint8_t prev_battery_percent = 255;  // Track previous value to avoid redraw
 
     // text playback state (mutually exclusive with animation)
     bool text_active_ = false;
@@ -193,9 +154,6 @@ private:
     uint16_t text_color_ = 0xFFFF;
     int text_scale_ = 1;
 
-    // icon playback state (mutually exclusive with animation)
-    bool icon_active_ = false;
-    bool icon_mode_cleared_ = false;  // Track if screen cleared for icon mode
 
     // (toast system removed)
 

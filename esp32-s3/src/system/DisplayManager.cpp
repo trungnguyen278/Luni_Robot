@@ -1,7 +1,5 @@
 #include "DisplayManager.hpp"
 #include "DisplayDriver.hpp"
-// Framebuffer.hpp removed - using direct rendering
-#include "AnimationPlayer.hpp"
 
 #include <utility>
 #include <atomic>
@@ -55,20 +53,14 @@ bool DisplayManager::init(std::unique_ptr<DisplayDriver> driver, int width, int 
     width_ = drv->width();
     height_ = drv->height();
 
-    // AnimationPlayer renders directly to display - no framebuffer needed!
-    anim_player = std::make_unique<AnimationPlayer>(drv.get());
-
     // GfxEngine: PSRAM-backed framebuffer for procedural RGB565 rendering
     gfx_ = std::make_unique<GfxEngine>(width_, height_);
-    if (gfx_->init()) {
-        render_mode_ = RenderMode::PROCEDURAL;
-        // Start idle loop with normal-steady
-        scene_mgr_.showEmotion("normal", "normal-steady");
-        ESP_LOGI(TAG, "GfxEngine initialized — procedural rendering active");
-    } else {
-        render_mode_ = RenderMode::LEGACY_RLE;
-        ESP_LOGW(TAG, "GfxEngine init failed (PSRAM?) — using legacy RLE mode");
+    if (!gfx_->init()) {
+        ESP_LOGE(TAG, "GfxEngine init failed (PSRAM?)");
+        return false;
     }
+    scene_mgr_.showEmotion("normal", "normal-steady");
+    ESP_LOGI(TAG, "GfxEngine initialized — procedural rendering active");
 
     ESP_LOGI(TAG, "DisplayManager init OK (%dx%d)", width_, height_);
     return true;
@@ -88,7 +80,7 @@ bool DisplayManager::startLoop(uint32_t interval_ms,
         update_interval_ms_ = interval_ms;
         return true;
     }
-    if (!drv || !anim_player)
+    if (!drv || !gfx_)
     {
         ESP_LOGE(TAG, "startLoop: not initialized");
         return false;
@@ -200,13 +192,10 @@ void DisplayManager::setBatteryPercent(uint8_t p)
 // ----------------------------------------------------------------------------
 void DisplayManager::setPowerSaveMode(bool enable)
 {
-    if (enable)
-    {
-        anim_player->pause();
-    }
-    else
-    {
-        anim_player->resume();
+    if (enable) {
+        setBacklight(false);
+    } else {
+        setBacklight(true);
     }
 }
 
@@ -229,15 +218,6 @@ void DisplayManager::setBrightness(uint8_t percent)
 // ----------------------------------------------------------------------------
 // Asset registration
 // ----------------------------------------------------------------------------
-void DisplayManager::registerEmotion(const std::string &name, const Animation1Bit &anim)
-{
-    emotions[name] = anim;
-}
-
-void DisplayManager::registerIcon(const std::string &name, const Icon &icon)
-{
-    icons[name] = icon;
-}
 
 // ----------------------------------------------------------------------------
 // Update (should be called from UI task)
@@ -279,54 +259,38 @@ void DisplayManager::update(uint32_t dt_ms)
         text_mode_cleared_ = false;
     }
 
-    // Dual-mode rendering
-    if (render_mode_ == RenderMode::PROCEDURAL && gfx_) {
-        // Procedural path: GfxEngine framebuffer
-        gfx_->clear(COLOR_BG);
+    // Procedural rendering via GfxEngine
+    gfx_->clear(COLOR_BG);
 
-        // Tick idle loop (picks new variant every 3-6s when idle)
-        scene_mgr_.tickIdle((float)dt_ms);
+    // Tick idle loop (picks new variant every 3-6s when idle)
+    scene_mgr_.tickIdle((float)dt_ms);
 
-        // Render current variant
-        scene_mgr_.update(*gfx_, (float)dt_ms);
+    // Render current variant
+    scene_mgr_.update(*gfx_, (float)dt_ms);
 
-        // Status bar (top 20px, always cyan)
-        gfx_->fillRect(0, 0, width_, geom::STATUS_H, COLOR_BG);
-        gfx_->drawLine(0, geom::STATUS_H, width_, geom::STATUS_H,
-                       TONE_LUT[TONE_CYAN], 1, 64); // 25% opacity separator
+    // Status bar (top 20px, always cyan)
+    gfx_->fillRect(0, 0, width_, geom::STATUS_H, COLOR_BG);
+    gfx_->drawLine(0, geom::STATUS_H, width_, geom::STATUS_H,
+                   TONE_LUT[TONE_CYAN], 1, 64); // 25% opacity separator
 
-        auto& sd = scene_mgr_.getSceneData();
-        if (sd.time_valid) {
-            char timeBuf[6];
-            snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", sd.hours, sd.minutes);
-            gfx_->drawText(timeBuf, 8, 4, TONE_LUT[TONE_CYAN], 1,
-                           GfxEngine::TextAlign::LEFT, 217);
-        }
-
-        // Battery overlay
-        if (battery_percent < 255) {
-            char buf[8];
-            snprintf(buf, sizeof(buf), "%d%%", battery_percent);
-            gfx_->drawText(buf, width_ - 40, 4, TONE_LUT[TONE_CYAN], 1,
-                           GfxEngine::TextAlign::LEFT, 217);
-        }
-
-        // Flush to display
-        gfx_->flush(drv.get());
-    } else {
-        // Legacy path: 1-bit RLE AnimationPlayer
-        anim_player->update(dt_ms);
-        anim_player->render();
-
-        if (battery_percent < 255 && battery_percent != prev_battery_percent) {
-            int text_x = width_ - 160;
-            drv->fillRect(text_x, 5, 40, 8, 0x0000);
-            char buf[8];
-            snprintf(buf, sizeof(buf), "%d%%", battery_percent);
-            drv->drawText(buf, 0xFFFF, text_x, 5, 1);
-            prev_battery_percent = battery_percent;
-        }
+    auto& sd = scene_mgr_.getSceneData();
+    if (sd.time_valid) {
+        char timeBuf[6];
+        snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", sd.hours, sd.minutes);
+        gfx_->drawText(timeBuf, 8, 4, TONE_LUT[TONE_CYAN], 1,
+                       GfxEngine::TextAlign::LEFT, 217);
     }
+
+    // Battery overlay
+    if (battery_percent < 255) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d%%", battery_percent);
+        gfx_->drawText(buf, width_ - 40, 4, TONE_LUT[TONE_CYAN], 1,
+                       GfxEngine::TextAlign::LEFT, 217);
+    }
+
+    // Flush to display
+    gfx_->flush(drv.get());
 }
 
 void DisplayManager::taskEntry(void *arg)
@@ -438,30 +402,19 @@ void DisplayManager::handlePower(state::PowerState s)
     switch (s)
     {
     case state::PowerState::NORMAL:
-        playIcon("battery");
         break;
 
-        // case state::PowerState::LOW_BATTERY:
-        //     playIcon("battery_low");
-        //     break;
-
     case state::PowerState::CHARGING:
-        playIcon("battery_charge", IconPlacement::Custom, width_ - 185, 0);
+        scene_mgr_.showScene("power", "power-charging");
         break;
 
     case state::PowerState::FULL:
-        playIcon("battery_full", IconPlacement::Custom, width_ - 185, 0);
+        scene_mgr_.showScene("power", "power-full");
         break;
 
-        // case state::PowerState::POWER_SAVING:
-        //     setPowerSaveMode(true);
-        //     break;
-
     case state::PowerState::CRITICAL:
-        ESP_LOGI(TAG, "CRITICAL: show critical battery icon");
-        // Show registered critical battery icon fullscreen
-        playIcon("battery_critical", IconPlacement::Custom, 51, 22);
-        // ✅ Removed blocking delay - icon stays visible via display loop
+        ESP_LOGI(TAG, "CRITICAL: low battery");
+        scene_mgr_.showScene("power", "power-critical");
         break;
 
     default:
@@ -502,31 +455,8 @@ void DisplayManager::handleEmotion(state::EmotionState s)
 // Internal asset playback
 void DisplayManager::playEmotion(const std::string &name, int x, int y)
 {
-    // Procedural mode: route through SceneManager
-    if (render_mode_ == RenderMode::PROCEDURAL) {
-        text_active_ = false;
-        icon_active_ = false;
-        scene_mgr_.showEmotion(name.c_str());
-        return;
-    }
-
-    // Legacy mode: use RLE animation map
-    auto it = emotions.find(name);
-    if (it == emotions.end())
-    {
-        ESP_LOGW(TAG, "Emotion '%s' not found", name.c_str());
-        return;
-    }
-
-    const Animation1Bit &anim = it->second;
     text_active_ = false;
-
-    if (y == 0)
-    {
-        y = 22;
-    }
-
-    anim_player->setAnimation(anim, x, y);
+    scene_mgr_.showEmotion(name.c_str());
 }
 
 void DisplayManager::playText(const std::string &text, int x, int y, uint16_t color, int scale)
@@ -541,8 +471,6 @@ void DisplayManager::playText(const std::string &text, int x, int y, uint16_t co
     text_scale_ = scale;
     text_active_ = true;
     text_mode_cleared_ = false;
-    // Stop animation to avoid overwriting text
-    anim_player->stop();
 }
 
 void DisplayManager::clearText()
@@ -552,62 +480,12 @@ void DisplayManager::clearText()
     text_msg_.clear();
 }
 
-void DisplayManager::playIcon(const std::string &name,
-                              IconPlacement placement,
-                              int x,
-                              int y)
-{
-
-    // Small icons (height ~22) typically shown near the battery percentage row
-    auto it = icons.find(name);
-    if (it == icons.end())
-    {
-        ESP_LOGW(TAG, "Icon '%s' not found", name.c_str());
-        return;
-    }
-    const Icon &ico = it->second;
-    int draw_x = 0;
-    int draw_y = 0;
-
-    switch (placement)
-    {
-    case IconPlacement::Custom:
-        draw_x = x;
-        draw_y = y;
-        break;
-
-    case IconPlacement::Center:
-        draw_x = (width_ - ico.w) / 2;
-        draw_y = (height_ - ico.h) / 2;
-        break;
-
-    case IconPlacement::TopRight:
-        draw_x = width_ - ico.w - 40;
-        draw_y = 0;
-        break;
-
-    case IconPlacement::Fullscreen:
-        draw_x = 0;
-        draw_y = 0;
-        break;
-    }
-    if (drv)
-    {
-        drv->drawRLE2bitIcon(draw_x, draw_y, ico.w, ico.h, ico.rle_data);
-    }
-}
-
 // ----------------------------------------------------------------------------
 // Procedural rendering control
 // ----------------------------------------------------------------------------
 void DisplayManager::playProcedural(const char* categoryKey, const char* variantId)
 {
-    if (render_mode_ != RenderMode::PROCEDURAL) {
-        ESP_LOGW(TAG, "playProcedural: not in procedural mode");
-        return;
-    }
     text_active_ = false;
-    icon_active_ = false;
     scene_mgr_.showScene(categoryKey, variantId);
 }
 
