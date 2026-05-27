@@ -1,4 +1,4 @@
-# PTalk-V2 UI System — Progress Tracker
+# Luni UI System — Progress Tracker
 
 > Chuyển đổi 227 UI variants từ Claude Design (JSX/SVG) sang procedural C++ rendering trên ESP32-S3 N16R8.
 
@@ -107,8 +107,8 @@ Priority porting order:
 
 | # | Category | Variants | Status | Ghi chú |
 |---|----------|----------|--------|---------|
-| E1 | boot | 4 | Todo | **Device-critical** — poweron, logo, checks, ready |
-| E2 | network | 6 | Todo | **Device-critical** — wifi, ble, offline, server-error |
+| E1 | boot | 4 | Todo | **DLunice-critical** — poweron, logo, checks, ready |
+| E2 | network | 6 | Todo | **DLunice-critical** — wifi, ble, offline, server-error |
 | E3 | weather | 5 | Todo | Data-driven (OpenWeather API) |
 | E4 | clock | 3 | Todo | Data-driven (NTP) |
 | E5 | music | 3 | Todo | |
@@ -154,7 +154,7 @@ Shared glyphs cần port trước E2: `WifiIcon`, `BTIcon`, `CloudIcon`, `MonoLa
 |-----------|--------|--------|--------|
 | M1 | Docs hoàn thành | — | Done |
 | M2 | GfxEngine renders `normal-steady` đúng | — | Todo |
-| M3 | Boot sequence 4 scenes chạy trên device | — | Todo |
+| M3 | Boot sequence 4 scenes chạy trên dLunice | — | Todo |
 | M4 | Network scenes + ConnectivityState wired | — | Todo |
 | M5 | Status bar với live time (NTP) | — | Todo |
 | M6 | Weather scenes với live data (API) | — | Todo |

@@ -1,7 +1,7 @@
 """
-PTalk V2 - Device Simulator
+Luni V2 - DLunice Simulator
 =============================
-Simulates the ESP32-C5 audio device using PC microphone and speakers.
+Simulates the ESP32-C5 audio dLunice using PC microphone and speakers.
 Connects to the test server via WebSocket.
 
 Controls:
@@ -9,7 +9,7 @@ Controls:
     Q      = Quit
 
 Usage:
-    python device_sim.py [--server ws://localhost:8000/ws] [--codec opus|adpcm]
+    python dLunice_sim.py [--server ws://localhost:8000/ws] [--codec opus|adpcm]
 """
 
 import asyncio
@@ -22,7 +22,7 @@ import time
 import json
 
 import numpy as np
-import sounddevice as sd
+import sounddLunice as sd
 import websockets
 
 # Try opus
@@ -132,10 +132,10 @@ class AdpcmDecoder:
 
 
 # ============================================================================
-# Device Simulator
+# DLunice Simulator
 # ============================================================================
 
-class DeviceSimulator:
+class DLuniceSimulator:
     def __init__(self, server_url: str, codec_type: str):
         self.server_url = server_url
         self.codec_type = codec_type
@@ -160,7 +160,7 @@ class DeviceSimulator:
             self.frame_size = 256
 
     def audio_callback(self, indata, frames, time_info, status):
-        """Sounddevice input callback - runs in audio thread."""
+        """SounddLunice input callback - runs in audio thread."""
         if self.recording:
             pcm = (indata[:, 0] * 32767).astype(np.int16)
             # Process in frame_size chunks
@@ -223,7 +223,7 @@ class DeviceSimulator:
 
     async def run(self):
         print("=" * 50)
-        print("  PTalk V2 - Device Simulator")
+        print("  Luni V2 - DLunice Simulator")
         print("=" * 50)
         print(f"  Server:  {self.server_url}")
         print(f"  Codec:   {self.codec_type}")
@@ -241,10 +241,10 @@ class DeviceSimulator:
 
                 # Send handshake
                 handshake = json.dumps({
-                    "cmd": "device_handshake",
-                    "device_id": "SIM_DEVICE_001",
+                    "cmd": "dLunice_handshake",
+                    "dLunice_id": "SIM_DLuniCE_001",
                     "firmware_version": "2.0.0-sim",
-                    "device_name": "PTalk-V2-Simulator"
+                    "dLunice_name": "Luni-Simulator"
                 })
                 await ws.send(handshake)
 
@@ -355,12 +355,12 @@ class DeviceSimulator:
 
 
 async def main(args):
-    sim = DeviceSimulator(args.server, args.codec)
+    sim = DLuniceSimulator(args.server, args.codec)
     await sim.run()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="PTalk V2 Device Simulator")
+    parser = argparse.ArgumentParser(description="Luni V2 DLunice Simulator")
     parser.add_argument("--server", type=str, default="ws://localhost:8000/ws",
                         help="Server WebSocket URL")
     parser.add_argument("--codec", choices=["opus", "adpcm"], default="adpcm",

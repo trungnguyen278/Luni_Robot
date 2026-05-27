@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-// PTalk V2 - ESP32-S3 Pin Configuration
+// Luni V2 - ESP32-S3 Pin Configuration
 // =============================================================================
 // Responsibilities: Display, Battery, I2S Audio (Mic+Speaker), Opus codec,
 //                   Button, SPI3 master bridge to C5

@@ -42,7 +42,7 @@ static void render_boot_poweron(GfxEngine& gfx, float t, const ColorContext& col
     }
 }
 
-// boot-logo: "PTIT" text with sweeping ring
+// boot-logo: "Luni" text with sweeping ring
 static void render_boot_logo(GfxEngine& gfx, float t, const ColorContext& colors) {
     float enter = clamp(t / 0.4f, 0.0f, 1.0f);
     float scale = lerp(0.5f, 1.0f, ease::out(enter));
@@ -54,16 +54,16 @@ static void render_boot_logo(GfxEngine& gfx, float t, const ColorContext& colors
     gfx.drawArc(SCX, SCY - 6, 64, sweepAngle - 1.4f, sweepAngle,
                 colors.accent, 3, op);
 
-    // PTIT text centered (scale 2 = 16px height)
+    // Luni text centered (scale 2 = 16px height)
     uint8_t sc = (uint8_t)(2.0f * scale);
     if (sc < 1) sc = 1;
-    gfx.drawText("PTIT", SCX, SCY - 10, colors.eye, sc,
+    gfx.drawText("Luni", SCX, SCY - 10, colors.eye, sc,
                  GfxEngine::TextAlign::CENTER, op);
 
     // Subtitle
     if (t > 0.5f) {
         float subOp = clamp((t - 0.5f) * 3.0f, 0.0f, 0.7f);
-        gfx.drawText("PTalk v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
+        gfx.drawText("Luni v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
                      GfxEngine::TextAlign::CENTER, (uint8_t)(subOp * 255.0f));
     }
 }
@@ -105,7 +105,7 @@ static void render_boot_checks(GfxEngine& gfx, float t, const ColorContext& colo
     }
 
     // Footer
-    gfx.drawText("PTIT  PTalk v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
+    gfx.drawText("Luni v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER, 140);
 }
 
@@ -114,8 +114,8 @@ static void render_boot_ready(GfxEngine& gfx, float t, const ColorContext& color
     float fill = clamp(t / 0.7f, 0.0f, 1.0f);
     float stampT = clamp((t - 0.75f) / 0.15f, 0.0f, 1.0f);
 
-    // Small PTIT text at top
-    gfx.drawText("PTIT", SCX, STATUS_H + 34, colors.eye, 1,
+    // Small Luni text at top
+    gfx.drawText("Luni", SCX, STATUS_H + 34, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER, 242);
 
     // Progress bar

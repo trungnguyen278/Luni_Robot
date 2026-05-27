@@ -461,7 +461,7 @@ POWERON (2.4s)
   │ Dot → horizontal bar → splits into two eyes
   ▼
 LOGO (3.0s)
-  │ PTIT mark fade-in + sweep ring
+  │ Luni mark fade-in + sweep ring
   ▼
 CHECKS (4.2s)
   │ Checklist: DISPLAY → AUDIO → MIC → NETWORK → AI CORE

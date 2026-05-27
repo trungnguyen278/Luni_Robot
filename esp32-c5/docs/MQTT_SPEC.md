@@ -1,12 +1,12 @@
-# PTalk MQTT Communication Specification (MEO SDK Compatible)
+# Luni MQTT Communication Specification (MEO SDK Compatible)
 
-Tài liệu này đặc tả cấu trúc bản tin và quy trình giao tiếp giữa **PTalk Server** và **PTalk Device** (ESP32) thông qua giao thức MQTT, tương thích với **MEO SDK**.
+Tài liệu này đặc tả cấu trúc bản tin và quy trình giao tiếp giữa **Luni Server** và **Luni DLunice** (ESP32) thông qua giao thức MQTT, tương thích với **MEO SDK**.
 
 ## 1. Tổng quan kiến trúc
 
-PTalk hỗ trợ 2 chế độ giao tiếp MQTT:
+Luni hỗ trợ 2 chế độ giao tiếp MQTT:
 - **MEO SDK Mode**: Tương thích với MEO Arduino SDK (feature invoke/event model)
-- **Legacy Mode**: Tương thích ngược với giao thức PTalk cũ
+- **Legacy Mode**: Tương thích ngược với giao thức Luni cũ
 
 ---
 
@@ -16,24 +16,24 @@ PTalk hỗ trợ 2 chế độ giao tiếp MQTT:
 
 | Pattern | Hướng | Mô tả |
 |---------|-------|-------|
-| `meo/{userId}/{deviceId}/feature` | Server → Device | Cloud-compatible feature invoke |
-| `meo/{deviceId}/feature/{featureName}/invoke` | Server → Device | Legacy feature invoke |
-| `meo/{userId}/{deviceId}/event/{eventName}` | Device → Server | Device events |
-| `meo/{userId}/{deviceId}/event/feature_response` | Device → Server | Feature invoke response |
+| `meo/{userId}/{dLuniceId}/feature` | Server → DLunice | Cloud-compatible feature invoke |
+| `meo/{dLuniceId}/feature/{featureName}/invoke` | Server → DLunice | Legacy feature invoke |
+| `meo/{userId}/{dLuniceId}/event/{eventName}` | DLunice → Server | DLunice events |
+| `meo/{userId}/{dLuniceId}/event/feature_response` | DLunice → Server | Feature invoke response |
 
-### 2.2 Device Identity
+### 2.2 DLunice Identity
 
-- **deviceId**: MAC address hex string (12 ký tự viết hoa, ví dụ: `D4E9F4C13B1C`)
+- **dLuniceId**: MAC address hex string (12 ký tự viết hoa, ví dụ: `D4E9F4C13B1C`)
 - **userId**: Namespace cho multi-tenant (default: `"default"`)
 - **tx_key**: MQTT password (được provision qua BLE)
 
 ### 2.3 Topic Examples
 
 ```
-# Cloud-compatible invoke (userId = "user42", deviceId = "D4E9F4C13B1C")
+# Cloud-compatible invoke (userId = "user42", dLuniceId = "D4E9F4C13B1C")
 meo/user42/D4E9F4C13B1C/feature
 
-# Legacy invoke (deviceId only)
+# Legacy invoke (dLuniceId only)
 meo/D4E9F4C13B1C/feature/set_volume/invoke
 
 # Event publishing
@@ -48,7 +48,7 @@ meo/user42/D4E9F4C13B1C/event/battery
 
 ### 3.1 Cloud-Compatible Invoke (Preferred)
 
-**Topic**: `meo/{userId}/{deviceId}/feature`
+**Topic**: `meo/{userId}/{dLuniceId}/feature`
 
 **Payload**:
 ```json
@@ -73,7 +73,7 @@ Hoặc sử dụng `feature_name` thay cho `feature`:
 
 ### 3.2 Legacy Invoke
 
-**Topic**: `meo/{deviceId}/feature/{featureName}/invoke`
+**Topic**: `meo/{dLuniceId}/feature/{featureName}/invoke`
 
 **Payload**:
 ```json
@@ -86,13 +86,13 @@ Hoặc sử dụng `feature_name` thay cho `feature`:
 
 ### 3.3 Feature Response
 
-**Topic**: `meo/{userId}/{deviceId}/event/feature_response`
+**Topic**: `meo/{userId}/{dLuniceId}/event/feature_response`
 
 **Payload**:
 ```json
 {
   "feature_name": "set_volume",
-  "device_id": "D4E9F4C13B1C",
+  "dLunice_id": "D4E9F4C13B1C",
   "success": true,
   "message": "Volume set to 75",
   "invoke_id": "abc123",
@@ -104,27 +104,27 @@ Hoặc sử dụng `feature_name` thay cho `feature`:
 
 ---
 
-## 4. Built-in Features (PTalk)
+## 4. Built-in Features (Luni)
 
-### 4.1 Device Configuration Features
+### 4.1 DLunice Configuration Features
 
 | Feature Name | Params | Description |
 |--------------|--------|-------------|
 | `set_volume` | `{"volume": 0-100}` | Set speaker volume |
 | `set_brightness` | `{"brightness": 0-100}` | Set display brightness |
-| `set_device_name` | `{"device_name": "string"}` | Set device display name |
+| `set_dLunice_name` | `{"dLunice_name": "string"}` | Set dLunice display name |
 | `set_wifi` | N/A | **Not supported** - Use BLE provisioning |
 
-### 4.2 Device Control Features
+### 4.2 DLunice Control Features
 
 | Feature Name | Params | Description |
 |--------------|--------|-------------|
-| `request_status` | (none) | Request full device status |
-| `reboot` | (none) | Reboot device |
+| `request_status` | (none) | Request full dLunice status |
+| `reboot` | (none) | Reboot dLunice |
 | `request_ble_config` | (none) | Enter BLE config mode |
 | `request_ota` | `{"size": uint32, "sha256": "...", "chunk_size": int, "total_chunks": int}` | Initiate OTA update |
 
-### 4.3 PTalk-Specific Features
+### 4.3 Luni-Specific Features
 
 | Feature Name | Params | Description |
 |--------------|--------|-------------|
@@ -134,17 +134,17 @@ Hoặc sử dụng `feature_name` thay cho `feature`:
 
 ---
 
-## 5. Device Events
+## 5. DLunice Events
 
 ### 5.1 Event Structure
 
-**Topic**: `meo/{userId}/{deviceId}/event/{eventName}`
+**Topic**: `meo/{userId}/{dLuniceId}/event/{eventName}`
 
 **Payload**:
 ```json
 {
   "event": "status",
-  "device_id": "D4E9F4C13B1C",
+  "dLunice_id": "D4E9F4C13B1C",
   "key": "value",
   ...
 }
@@ -154,7 +154,7 @@ Hoặc sử dụng `feature_name` thay cho `feature`:
 
 | Event Name | Data Fields | Description |
 |------------|-------------|-------------|
-| `status` | `connectivity`, `firmware_version`, `battery_percent`, ... | Device status update |
+| `status` | `connectivity`, `firmware_version`, `battery_percent`, ... | DLunice status update |
 | `feature_response` | `feature_name`, `success`, `message`, `data` | Response to feature invoke |
 | `battery` | `percent`, `charging` | Battery status change |
 | `connectivity` | `state`, `rssi` | Connectivity change |
@@ -164,16 +164,16 @@ Hoặc sử dụng `feature_name` thay cho `feature`:
 
 ---
 
-## 6. Legacy PTalk Topics (Backward Compatibility)
+## 6. Legacy Luni Topics (Backward Compatibility)
 
 Các topic cũ vẫn được hỗ trợ để tương thích ngược:
 
 | Topic | Hướng | Mô tả |
 |-------|-------|-------|
-| `devices/{MAC}/cmd` | Server → Device | JSON config commands |
-| `devices/{MAC}/status` | Device → Server | Device status (retained) |
-| `devices/{MAC}/ota_data` | Server → Device | OTA binary chunks |
-| `devices/{MAC}/ota_ack` | Device → Server | OTA acknowledgments |
+| `dLunices/{MAC}/cmd` | Server → DLunice | JSON config commands |
+| `dLunices/{MAC}/status` | DLunice → Server | DLunice status (retained) |
+| `dLunices/{MAC}/ota_data` | Server → DLunice | OTA binary chunks |
+| `dLunices/{MAC}/ota_ack` | DLunice → Server | OTA acknowledgments |
 
 ### 6.1 Legacy Command Format
 
@@ -196,7 +196,7 @@ Các topic cũ vẫn được hỗ trợ để tương thích ngược:
 
 | UUID | Name | Access | Description |
 |------|------|--------|-------------|
-| `0xFF02` | DEVICE_NAME | RW | Device display name |
+| `0xFF02` | DLuniCE_NAME | RW | DLunice display name |
 | `0xFF03` | VOLUME | RW | Volume level (0-100) |
 | `0xFF04` | BRIGHTNESS | RW | Brightness level (0-100) |
 | `0xFF05` | WIFI_SSID | W | WiFi SSID |
@@ -204,21 +204,21 @@ Các topic cũ vẫn được hỗ trợ để tương thích ngược:
 | `0xFF07` | APP_VERSION | R | Firmware version |
 | `0xFF08` | BUILD_INFO | R | Build info string |
 | `0xFF09` | SAVE_CMD | W | Save config (write 0x01) |
-| `0xFF0A` | DEVICE_ID | R | Device MAC string |
+| `0xFF0A` | DLuniCE_ID | R | DLunice MAC string |
 | `0xFF0B` | WIFI_LIST | R | Scanned WiFi list (streaming) |
 | `0xFF0C` | WS_URL | RW | WebSocket URL (auth required) |
 | `0xFF0D` | MQTT_URL | RW | MQTT broker URL (auth required) |
 | `0xFF0E` | USER_ID | RW | MEO user ID |
 | `0xFF0F` | TX_KEY | W | MEO tx_key / MQTT password |
 | `0xFF10` | PRODUCT_ID | R | Cloud product ID |
-| `0xFF11` | DEV_MODEL | R | Device model |
-| `0xFF12` | DEV_MANUF | R | Device manufacturer |
+| `0xFF11` | DEV_MODEL | R | DLunice model |
+| `0xFF12` | DEV_MANUF | R | DLunice manufacturer |
 | `0xFF13` | MAC_ADDR | R | Raw MAC address (6 bytes) |
 
 ### 7.3 Authentication
 
 Các characteristics nhạy cảm (WS_URL, MQTT_URL, TX_KEY) yêu cầu unlock trước khi write:
-1. Write auth token `"PTALK_OK"` vào characteristic
+1. Write auth token `"Luni_OK"` vào characteristic
 2. Sau khi unlock, có thể read/write giá trị thực
 
 ---
@@ -242,7 +242,7 @@ Các characteristics nhạy cảm (WS_URL, MQTT_URL, TX_KEY) yêu cầu unlock t
 
 ### 8.2 Binary Chunk Format
 
-**Topic**: `devices/{MAC}/ota_data` hoặc `meo/{userId}/{deviceId}/ota_data`
+**Topic**: `dLunices/{MAC}/ota_data` hoặc `meo/{userId}/{dLuniceId}/ota_data`
 
 **Binary Header (12 bytes, Little Endian)**:
 | Offset | Size | Field |
@@ -254,7 +254,7 @@ Các characteristics nhạy cảm (WS_URL, MQTT_URL, TX_KEY) yêu cầu unlock t
 
 ### 8.3 OTA Acknowledgment
 
-**Topic**: `devices/{MAC}/ota_ack`
+**Topic**: `dLunices/{MAC}/ota_ack`
 
 **ACK**:
 ```json
@@ -285,9 +285,9 @@ Các characteristics nhạy cảm (WS_URL, MQTT_URL, TX_KEY) yêu cầu unlock t
 
 ## 10. Migration Guide
 
-### From Legacy PTalk to MEO SDK
+### From Legacy Luni to MEO SDK
 
-1. **Topics**: Change `devices/{MAC}/cmd` → `meo/{userId}/{deviceId}/feature`
+1. **Topics**: Change `dLunices/{MAC}/cmd` → `meo/{userId}/{dLuniceId}/feature`
 2. **Commands**: Wrap in feature invoke format
 3. **Responses**: Parse from `feature_response` event topic
 
@@ -295,7 +295,7 @@ Các characteristics nhạy cảm (WS_URL, MQTT_URL, TX_KEY) yêu cầu unlock t
 
 **Old (Legacy)**:
 ```
-Topic: devices/D4E9F4C13B1C/cmd
+Topic: dLunices/D4E9F4C13B1C/cmd
 Payload: {"cmd": "set_volume", "volume": 75}
 ```
 

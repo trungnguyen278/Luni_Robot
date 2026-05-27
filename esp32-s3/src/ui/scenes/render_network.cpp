@@ -60,7 +60,7 @@ static void render_wifi_connect(GfxEngine& gfx, float t, const ColorContext& col
 
     gfx.drawText("CONNECTING", SCX, STATUS_H + 104, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER);
-    gfx.drawText("PTIT-NETWORK", SCX, STATUS_H + 120, colors.accent, 1,
+    gfx.drawText("EVI-NETWORK", SCX, STATUS_H + 120, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 217);
 
     // Progress bar
@@ -124,7 +124,7 @@ static void render_ble_pair(GfxEngine& gfx, float t, const ColorContext& colors)
 
     gfx.drawText("PAIRING MODE", SCX, STATUS_H + 126, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER);
-    gfx.drawText("OPEN PTALK APP", SCX, SCREEN_H - 26, colors.accent, 1,
+    gfx.drawText("OPEN EVI APP", SCX, SCREEN_H - 26, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 217);
     gfx.drawText("TO CONNECT", SCX, SCREEN_H - 12, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 140);

@@ -7,7 +7,7 @@
 struct OpusEncoder;
 struct OpusDecoder;
 
-// Opus codec implementation for PTalk V2
+// Opus codec implementation for Luni V2
 // Replaces ADPCM with much better audio quality at similar bitrates.
 // Frame size: 320 samples (20ms @ 16kHz), variable-length output.
 //

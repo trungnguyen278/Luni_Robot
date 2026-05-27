@@ -1,12 +1,12 @@
 """
-PTalk V2 - Test WebSocket + MQTT Server
+Luni V2 - Test WebSocket + MQTT Server
 ========================================
-Simulates the PTalk cloud server for local audio testing.
+Simulates the Luni cloud server for local audio testing.
 
 Features:
 - WebSocket server on port 8000 at /ws
-- Receives encoded audio (Opus or ADPCM) from device
-- Echo mode: sends recorded audio back to device
+- Receives encoded audio (Opus or ADPCM) from dLunice
+- Echo mode: sends recorded audio back to dLunice
 - WAV file mode: sends a WAV file as TTS response
 - Saves all recordings as WAV files
 - MQTT broker integration (optional)
@@ -224,15 +224,15 @@ class OpusCodecWrapper:
         return header + opus_data
 
 
-class PTalkSession:
-    """Manages a single device session."""
+class LuniSession:
+    """Manages a single dLunice session."""
 
     def __init__(self, codec_type: str = 'opus'):
         self.codec_type = codec_type
         self.state = 'IDLE'
         self.recorded_frames = []  # Raw encoded frames
         self.recorded_pcm = []     # Decoded PCM
-        self.device_id = None
+        self.dLunice_id = None
         self.session_count = 0
 
         if codec_type == 'opus':
@@ -254,7 +254,7 @@ class PTalkSession:
             self.codec.encoder.reset()
 
     def receive_audio(self, data: bytes):
-        """Process incoming encoded audio from device."""
+        """Process incoming encoded audio from dLunice."""
         self.recorded_frames.append(data)
 
         # Decode for inspection/saving
@@ -287,12 +287,12 @@ class PTalkSession:
         return self.recorded_frames.copy()
 
 
-async def handle_device(websocket, args):
-    """Handle a single WebSocket connection from a device."""
+async def handle_dLunice(websocket, args):
+    """Handle a single WebSocket connection from a dLunice."""
     remote = websocket.remote_address
-    print(f"\n[CONNECT] Device connected from {remote}")
+    print(f"\n[CONNECT] DLunice connected from {remote}")
 
-    session = PTalkSession(codec_type=args.codec)
+    session = LuniSession(codec_type=args.codec)
     wav_data = None
 
     # Pre-load WAV file if specified
@@ -309,9 +309,9 @@ async def handle_device(websocket, args):
                 # Handle handshake
                 try:
                     data = json.loads(message)
-                    if data.get('cmd') == 'device_handshake':
-                        session.device_id = data.get('device_id', 'unknown')
-                        print(f"  [HANDSHAKE] Device ID: {session.device_id}")
+                    if data.get('cmd') == 'dLunice_handshake':
+                        session.dLunice_id = data.get('dLunice_id', 'unknown')
+                        print(f"  [HANDSHAKE] DLunice ID: {session.dLunice_id}")
                         print(f"              FW: {data.get('firmware_version', '?')}")
                         continue
                 except (json.JSONDecodeError, KeyError):
@@ -449,17 +449,17 @@ def load_wav_as_encoded(wav_path: str) -> list:
 
 async def main(args):
     print("=" * 60)
-    print("  PTalk V2 - Test Server")
+    print("  Luni V2 - Test Server")
     print("=" * 60)
     print(f"  WebSocket: ws://0.0.0.0:{args.port}/ws")
     print(f"  Codec:     {args.codec}")
     print(f"  Mode:      {'Echo' if args.echo else 'WAV: ' + str(args.wav_file) if args.wav_file else 'Echo (default)'}")
     print(f"  Recordings: ./recordings/")
     print("=" * 60)
-    print("Waiting for device connections...\n")
+    print("Waiting for dLunice connections...\n")
 
     async with websockets.serve(
-        lambda ws: handle_device(ws, args),
+        lambda ws: handle_dLunice(ws, args),
         "0.0.0.0",
         args.port,
         ping_interval=20,
@@ -470,7 +470,7 @@ async def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="PTalk V2 Test Server")
+    parser = argparse.ArgumentParser(description="Luni V2 Test Server")
     parser.add_argument("--port", type=int, default=8000, help="WebSocket port (default: 8000)")
     parser.add_argument("--codec", default="opus",
                         help="Audio codec (opus)")

@@ -116,7 +116,7 @@ void NetworkManager::setupWebSocket()
             ESP_LOGI(TAG, "WebSocket connected");
             ws_connected_ = true;
             StateManager::instance().setConnectivityState(state::ConnectivityState::ONLINE);
-            sendDeviceHandshake();
+            sendDLuniceHandshake();
 
             // Deferred MQTT: start in a background task after 10s delay
             // so the TCP connect attempt doesn't disrupt the WS connection
@@ -211,16 +211,16 @@ void NetworkManager::setupWebSocket()
 
 void NetworkManager::mqttPublishResponse(const char* cmd, const char* status, const char* extra_json)
 {
-    std::string topic = "devices/" + std::string(getDeviceEfuseID()) + "/status";
+    std::string topic = "dLunices/" + std::string(getDLuniceEfuseID()) + "/status";
     char buf[256];
     if (extra_json) {
         snprintf(buf, sizeof(buf),
-            "{\"cmd\":\"%s\",\"status\":\"%s\",\"device_id\":\"%s\",%s}",
-            cmd, status, getDeviceEfuseID(), extra_json);
+            "{\"cmd\":\"%s\",\"status\":\"%s\",\"dLunice_id\":\"%s\",%s}",
+            cmd, status, getDLuniceEfuseID(), extra_json);
     } else {
         snprintf(buf, sizeof(buf),
-            "{\"cmd\":\"%s\",\"status\":\"%s\",\"device_id\":\"%s\"}",
-            cmd, status, getDeviceEfuseID());
+            "{\"cmd\":\"%s\",\"status\":\"%s\",\"dLunice_id\":\"%s\"}",
+            cmd, status, getDLuniceEfuseID());
     }
     ESP_LOGI(TAG, "MQTT TX: topic=%s", topic.c_str());
     bool ok = mqtt_->publish(topic, buf);
@@ -251,7 +251,7 @@ void NetworkManager::setupMqtt()
 {
     mqtt_->onConnected([this]() {
         ESP_LOGI(TAG, "MQTT connected");
-        std::string cmd_topic = "devices/" + std::string(getDeviceEfuseID()) + "/cmd";
+        std::string cmd_topic = "dLunices/" + std::string(getDLuniceEfuseID()) + "/cmd";
         mqtt_->subscribe(cmd_topic);
     });
 
@@ -325,17 +325,17 @@ void NetworkManager::setupMqtt()
                 mqttPublishResponse("set_brightness", "ok", extra);
             }
 
-        // ----- set_device_name -----
-        } else if (cmd == "set_device_name") {
-            cJSON* name = cJSON_GetObjectItem(root, "device_name");
+        // ----- set_dLunice_name -----
+        } else if (cmd == "set_dLunice_name") {
+            cJSON* name = cJSON_GetObjectItem(root, "dLunice_name");
             if (!name || !cJSON_IsString(name)) {
-                mqttPublishResponse("set_device_name", "error", "\"message\":\"missing device_name param\"");
+                mqttPublishResponse("set_dLunice_name", "error", "\"message\":\"missing dLunice_name param\"");
             } else {
-                nvsSetString("device_name", name->valuestring);
+                nvsSetString("dLunice_name", name->valuestring);
 
                 char extra[96];
-                snprintf(extra, sizeof(extra), "\"device_name\":\"%s\"", name->valuestring);
-                mqttPublishResponse("set_device_name", "ok", extra);
+                snprintf(extra, sizeof(extra), "\"dLunice_name\":\"%s\"", name->valuestring);
+                mqttPublishResponse("set_dLunice_name", "ok", extra);
             }
 
         // ----- set_emotion -----
@@ -361,14 +361,14 @@ void NetworkManager::setupMqtt()
         // ----- request_status -----
         } else if (cmd == "request_status") {
             auto& sm = StateManager::instance();
-            std::string resp_topic = "devices/" + std::string(getDeviceEfuseID()) + "/status";
+            std::string resp_topic = "dLunices/" + std::string(getDLuniceEfuseID()) + "/status";
             char buf[300];
             snprintf(buf, sizeof(buf),
                 "{\"cmd\":\"request_status\",\"status\":\"ok\","
-                "\"device_id\":\"%s\",\"firmware_version\":\"%s\","
+                "\"dLunice_id\":\"%s\",\"firmware_version\":\"%s\","
                 "\"connectivity\":%d,\"interaction\":%d,"
                 "\"free_heap\":%lu,\"uptime_ms\":%lu}",
-                getDeviceEfuseID(), app_meta::APP_VERSION,
+                getDLuniceEfuseID(), app_meta::APP_VERSION,
                 (int)sm.getConnectivityState(), (int)sm.getInteractionState(),
                 (unsigned long)esp_get_free_heap_size(),
                 (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS));
@@ -436,13 +436,13 @@ size_t NetworkManager::getWsTxFreeSpace() const
 
 void NetworkManager::setWSImmuneMode(bool enable) { ws_immune_ = enable; }
 
-void NetworkManager::sendDeviceHandshake()
+void NetworkManager::sendDLuniceHandshake()
 {
     char buf[256];
     snprintf(buf, sizeof(buf),
-        "{\"cmd\":\"device_handshake\",\"device_id\":\"%s\","
-        "\"firmware_version\":\"%s\",\"device_name\":\"%s\"}",
-        getDeviceEfuseID(), app_meta::APP_VERSION, app_meta::DEVICE_MODEL);
+        "{\"cmd\":\"dLunice_handshake\",\"dLunice_id\":\"%s\","
+        "\"firmware_version\":\"%s\",\"dLunice_name\":\"%s\"}",
+        getDLuniceEfuseID(), app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
     sendText(buf);
 }
 
@@ -487,7 +487,7 @@ void NetworkManager::mqttInitTaskEntry(void* arg)
     self->setupMqtt();
     self->mqtt_->setUri(self->cfg_.mqtt_url);
     std::string user = self->cfg_.user_id.empty()
-                           ? std::string(getDeviceEfuseID())
+                           ? std::string(getDLuniceEfuseID())
                            : self->cfg_.user_id;
     self->mqtt_->setCredentials(user, self->cfg_.tx_key);
     self->mqtt_->start();
@@ -574,7 +574,7 @@ void NetworkManager::bleConfigTaskEntry(void* arg)
             char buf[128];
 
             len = sizeof(buf);
-            if (nvs_get_str(h, "device_name", buf, &len) == ESP_OK) current_cfg.device_name = buf;
+            if (nvs_get_str(h, "dLunice_name", buf, &len) == ESP_OK) current_cfg.dLunice_name = buf;
             len = sizeof(buf);
             if (nvs_get_str(h, "ws_url", buf, &len) == ESP_OK) current_cfg.ws_url = buf;
             len = sizeof(buf);
@@ -592,7 +592,7 @@ void NetworkManager::bleConfigTaskEntry(void* arg)
 
     // Init BLE
     self->ble_ = new BluetoothService();
-    if (!self->ble_->init("PTalk", networks, &current_cfg)) {
+    if (!self->ble_->init("Luni", networks, &current_cfg)) {
         ESP_LOGE(TAG, "BLE init failed in config mode");
         delete self->ble_;
         self->ble_ = nullptr;
@@ -652,8 +652,8 @@ void NetworkManager::bleConfigTaskEntry(void* arg)
             nvs_set_str(h, "user_id", received_cfg.mqtt_user.c_str());
         if (!received_cfg.mqtt_pass.empty())
             nvs_set_str(h, "tx_key", received_cfg.mqtt_pass.c_str());
-        if (!received_cfg.device_name.empty())
-            nvs_set_str(h, "device_name", received_cfg.device_name.c_str());
+        if (!received_cfg.dLunice_name.empty())
+            nvs_set_str(h, "dLunice_name", received_cfg.dLunice_name.c_str());
         nvs_set_u8(h, "volume", received_cfg.volume);
         nvs_commit(h);
         nvs_close(h);

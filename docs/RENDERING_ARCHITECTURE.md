@@ -422,7 +422,7 @@ Store 3 font sizes matching the JSX design's usage:
 | FONT_9 | 9 px | `fontSize={9}` | Footer text, small labels |
 | FONT_11 | 11 px | `fontSize={11}` | Status bar, scene labels, check items |
 | FONT_14 | 14 px | `fontSize={14}` | "READY" stamp, emphasis |
-| FONT_22 | 22 px | `fontSize={22}` | "PTIT" text in boot logo |
+| FONT_22 | 22 px | `fontSize={22}` | "Luni" text in boot logo |
 | FONT_36 | 36 px | `fontSize={36}` | Temperature "28°" |
 
 Font data stored as bitmap arrays in flash. The monospace pixel aesthetic

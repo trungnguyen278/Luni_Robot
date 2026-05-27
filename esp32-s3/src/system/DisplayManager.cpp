@@ -416,7 +416,7 @@ void DisplayManager::handleSystem(state::SystemState s)
     {
     case state::SystemState::BOOTING:
         // ESP_LOGI(TAG, "Displaying Booting message");
-        playText("PTIT", 40, 0, 0xF800, 2); // red
+        playText("Luni", 40, 0, 0xF800, 2); // red
         break;
 
     case state::SystemState::RUNNING:
@@ -710,5 +710,5 @@ void DisplayManager::showRebooting()
 
     drv->fillScreen(0x0000);
     // TODO: Draw rebooting animation or countdown
-    // TODO: Display "Device restarting..." message
+    // TODO: Display "DLunice restarting..." message
 }

@@ -1,4 +1,4 @@
-# PTalk - Trợ Lý Giọng Nói ESP32
+# Luni - Trợ Lý Giọng Nói ESP32
 
 Firmware modular, hướng sự kiện cho thiết bị trợ lý giọng nói dựa trên ESP32 với kết nối WiFi, xử lý âm thanh I/O, quản lý màn hình và tối ưu hóa năng lượng.
 
@@ -27,7 +27,7 @@ Firmware modular, hướng sự kiện cho thiết bị trợ lý giọng nói d
 
 ## 🏗️ Tổng Quan Kiến Trúc
 
-PTalk tuân theo kiến trúc phân lớp, hướng sự kiện:
+Luni tuân theo kiến trúc phân lớp, hướng sự kiện:
 
 ```
 AppController (Bộ Điều Phối Trung Tâm)
@@ -65,13 +65,13 @@ AppController (Bộ Điều Phối Trung Tâm)
 ## 📁 Cấu Trúc Dự Án
 
 ```
-PTalk/
+Luni/
 ├── src/
 │   ├── main.cpp                      # Entry point, khởi tạo AppController
 │   ├── AppController.cpp/hpp         # Orchestrator chính, xử lý AppEvent
-│   ├── Version.hpp                   # Metadata: APP_VERSION, DEVICE_MODEL, BUILD_DATE
+│   ├── Version.hpp                   # Metadata: APP_VERSION, DLuniCE_MODEL, BUILD_DATE
 │   ├── config/
-│   │   ├── DeviceProfile.cpp/hpp     # Dependency injection, wiring managers/drivers
+│   │   ├── DLuniceProfile.cpp/hpp     # Dependency injection, wiring managers/drivers
 │   ├── assets/                       # Compiled C++ assets
 │   │   ├── emotions/                 # Animation emotion (RLE-encoded)
 │   │   │   ├── neutral.cpp/hpp
@@ -215,7 +215,7 @@ pio run -e esp32dev -t uploadandmonitor
 
 ## 🔧 Cấu Hình
 
-Cấu hình chính trong `src/config/DeviceProfile.cpp`:
+Cấu hình chính trong `src/config/DLuniceProfile.cpp`:
 - **Pin assignments**: I2S, Display SPI, Touch, Power ADC
 - **WiFi credentials**: SSID, password (hoặc dùng captive portal)
 - **Audio buffer sizes**: Stream buffer sizes
@@ -233,7 +233,7 @@ Cấu hình chính trong `src/config/DeviceProfile.cpp`:
 - **WiFi**: Tích hợp sẵn ESP32 (2.4GHz)
 
 ### Pin Mapping
-Cấu hình trong `DeviceProfile.cpp`:
+Cấu hình trong `DLuniceProfile.cpp`:
 - **I2S MIC (INMP441)**: BCLK, LRCLK, DIN
 - **I2S Speaker (MAX98357)**: BCLK, LRCLK, DOUT
 - **SPI Display (ST7789)**: MOSI, CLK, CS, DC, RST, BL
@@ -267,10 +267,10 @@ Cấu hình trong `DeviceProfile.cpp`:
 - **OTA Streaming**: Nhận firmware chunks qua WebSocket/MQTT
 
 ### MEO SDK Integration
-- **Feature Invoke**: Server → Device (topic: `meo/{userId}/{deviceId}/feature`)
-- **Feature Event**: Device → Server (topic: `meo/{userId}/{deviceId}/event/{eventName}`)
-- **Feature Response**: Topic: `meo/{userId}/{deviceId}/event/feature_response`
-- **BLE Provisioning**: Cấu hình deviceId, tx_key, userId qua BLE characteristics
+- **Feature Invoke**: Server → DLunice (topic: `meo/{userId}/{dLuniceId}/feature`)
+- **Feature Event**: DLunice → Server (topic: `meo/{userId}/{dLuniceId}/event/{eventName}`)
+- **Feature Response**: Topic: `meo/{userId}/{dLuniceId}/event/feature_response`
+- **BLE Provisioning**: Cấu hình dLuniceId, tx_key, userId qua BLE characteristics
 
 ### Emotion System
 - **Flow**: Server gửi emotion code (2 chars) qua WebSocket/MQTT → `NetworkManager::parseEmotionCode()` → `StateManager::setEmotionState()` → `DisplayManager` tự động play animation
@@ -400,9 +400,7 @@ python scripts/convert_assets.py emotion happy.gif src/assets/emotions/ 20 true
 - [`docs/BLE_APP_DEV.md`](docs/BLE_APP_DEV.md) - Phát triển ứng dụng BLE provisioning
 - [`docs/key_concepts.md`](docs/key_concepts.md) - Các khái niệm chính của MEO SDK
 
-## � Repository
-
-**GitHub**: [https://github.com/trungnguyen278/PTalk](https://github.com/trungnguyen278/PTalk)
+## Repository
 
 ## 📄 License
 
@@ -415,8 +413,7 @@ python scripts/convert_assets.py emotion happy.gif src/assets/emotions/ 20 true
 ---
 
 **Phiên Bản**: v1.0.6  
-**Device Model**: PTalk-V1  
+**DLunice Model**: Luni  
 **Trạng Thái**: Development (đang phát triển)  
-**Cập Nhật Cuối**: Tháng 2/2026  
-**GitHub**: [trungnguyen278/PTalk](https://github.com/trungnguyen278/PTalk)
+**Cập Nhật Cuối**: Tháng 5/2026
 ```

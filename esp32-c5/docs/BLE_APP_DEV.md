@@ -1,8 +1,8 @@
-# PTalk BLE Mobile App Developer Guide
+# Luni BLE Mobile App Developer Guide
 
 ## Overview
 
-Document này dành cho **mobile app developers** để implement BLE provisioning cho PTalk device. App sử dụng BLE GATT để cấu hình WiFi, MQTT broker, và MEO credentials.
+Document này dành cho **mobile app developers** để implement BLE provisioning cho Luni dLunice. App sử dụng BLE GATT để cấu hình WiFi, MQTT broker, và MEO credentials.
 
 ---
 
@@ -11,12 +11,12 @@ Document này dành cho **mobile app developers** để implement BLE provisioni
 ### Service UUID
 
 ```
-Service: 0xFF01 (PTalk Config Service)
+Service: 0xFF01 (Luni Config Service)
 ```
 
 ### Scanning
 
-- **Device Name:** `PTalk` hoặc custom name
+- **DLunice Name:** `Luni` hoặc custom name
 - **Advertising:** Connectable, Scannable
 
 ---
@@ -27,7 +27,7 @@ Service: 0xFF01 (PTalk Config Service)
 
 | UUID | Name | Properties | Auth Required | Description |
 |------|------|------------|---------------|-------------|
-| 0xFF02 | DEVICE_NAME | R/W | No | Device name (max 32 chars) |
+| 0xFF02 | DLuniCE_NAME | R/W | No | DLunice name (max 32 chars) |
 | 0xFF03 | VOLUME | R/W | No | Volume 0-100 (1 byte) |
 | 0xFF04 | BRIGHTNESS | R/W | No | Brightness 0-100 (1 byte) |
 | 0xFF05 | WIFI_SSID | R/W | No | WiFi SSID (max 32 chars) |
@@ -35,14 +35,14 @@ Service: 0xFF01 (PTalk Config Service)
 | 0xFF07 | APP_VERSION | R | - | Firmware version string |
 | 0xFF08 | BUILD_INFO | R | - | Build date/commit info |
 | 0xFF09 | SAVE_CMD | W | No | Write 0x01 to save config |
-| 0xFF0A | DEVICE_ID | R | - | Device MAC ID (12 hex chars) |
+| 0xFF0A | DLuniCE_ID | R | - | DLunice MAC ID (12 hex chars) |
 | 0xFF0B | WIFI_LIST | R | - | Cached WiFi networks (JSON) |
 | 0xFF0C | WS_URL | R/W | **Yes** | WebSocket server URL |
 | 0xFF0D | MQTT_URL | R/W | **Yes** | MQTT broker URL |
 | 0xFF0E | USER_ID | R/W | No | MEO user namespace |
 | 0xFF0F | TX_KEY | W | **Yes** | MQTT password (write-only) |
 | 0xFF10 | PRODUCT_ID | R | - | Product identifier |
-| 0xFF11 | DEV_MODEL | R | - | Device model name |
+| 0xFF11 | DEV_MODEL | R | - | DLunice model name |
 | 0xFF12 | DEV_MANUF | R | - | Manufacturer name |
 | 0xFF13 | MAC_ADDR | R | - | Raw MAC address (6 bytes) |
 
@@ -60,19 +60,19 @@ Các characteristics sau yêu cầu **unlock trước khi write**:
 ### Auth Token
 
 ```
-Token: "PTALK_OK"
+Token: "Luni_OK"
 ```
 
 ### Unlock Flow
 
 1. **Write token** vào characteristic cần unlock
-2. Device sẽ log `"... auth unlocked by token"`
+2. DLunice sẽ log `"... auth unlocked by token"`
 3. **Write actual value** vào cùng characteristic
 4. Repeat cho các protected chars khác
 
 ```
 // Ví dụ unlock MQTT_URL
-Write "PTALK_OK" → 0xFF0D   // Unlock
+Write "Luni_OK" → 0xFF0D   // Unlock
 Write "mqtt://broker:1883" → 0xFF0D   // Set value
 ```
 
@@ -88,20 +88,20 @@ Write "mqtt://broker:1883" → 0xFF0D   // Set value
 ┌─────────────────────────────────────────────────────┐
 │  1. SCAN & CONNECT                                  │
 ├─────────────────────────────────────────────────────┤
-│  • Scan for devices with service 0xFF01             │
-│  • Connect to selected device                       │
+│  • Scan for dLunices with service 0xFF01             │
+│  • Connect to selected dLunice                       │
 │  • Discover services & characteristics              │
 │  • Request MTU (recommend 512)                      │
 └───────────────────────────┬─────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────┐
-│  2. READ DEVICE INFO (Optional)                     │
+│  2. READ DLuniCE INFO (Optional)                     │
 ├─────────────────────────────────────────────────────┤
-│  • Read 0xFF0A → Device ID                          │
+│  • Read 0xFF0A → DLunice ID                          │
 │  • Read 0xFF07 → Firmware version                   │
 │  • Read 0xFF0B → WiFi list (for network picker)     │
-│  • Read 0xFF02 → Current device name                │
+│  • Read 0xFF02 → Current dLunice name                │
 └───────────────────────────┬─────────────────────────┘
                             │
                             ▼
@@ -118,7 +118,7 @@ Write "mqtt://broker:1883" → 0xFF0D   // Set value
 ┌─────────────────────────────────────────────────────┐
 │  4. UNLOCK PROTECTED CHARS                          │
 ├─────────────────────────────────────────────────────┤
-│  • Write "PTALK_OK" → 0xFF0D (or 0xFF0C/0xFF0F)     │
+│  • Write "Luni_OK" → 0xFF0D (or 0xFF0C/0xFF0F)     │
 └───────────────────────────┬─────────────────────────┘
                             │
                             ▼
@@ -136,7 +136,7 @@ Write "mqtt://broker:1883" → 0xFF0D   // Set value
 │  6. SAVE & RESTART                                  │
 ├─────────────────────────────────────────────────────┤
 │  • Write 0x01 → 0xFF09 (SAVE_CMD)                   │
-│  • Device saves to NVS & restarts                   │
+│  • DLunice saves to NVS & restarts                   │
 │  • Connection will be lost (expected)               │
 └─────────────────────────────────────────────────────┘
 ```
@@ -157,10 +157,10 @@ val CHAR_USER_ID = UUID.fromString("0000FF0E-0000-1000-8000-00805f9b34fb")
 val CHAR_TX_KEY = UUID.fromString("0000FF0F-0000-1000-8000-00805f9b34fb")
 val CHAR_SAVE_CMD = UUID.fromString("0000FF09-0000-1000-8000-00805f9b34fb")
 
-val AUTH_TOKEN = "PTALK_OK"
+val AUTH_TOKEN = "Luni_OK"
 
 // Provisioning function
-suspend fun provisionDevice(
+suspend fun provisionDLunice(
     gatt: BluetoothGatt,
     ssid: String,
     password: String,
@@ -186,7 +186,7 @@ suspend fun provisionDevice(
     // 4. Save and restart
     writeCharacteristic(service, CHAR_SAVE_CMD, byteArrayOf(0x01))
     
-    // Device will restart - connection will be lost
+    // DLunice will restart - connection will be lost
 }
 ```
 
@@ -195,7 +195,7 @@ suspend fun provisionDevice(
 ```swift
 import CoreBluetooth
 
-class PTalkProvisioner: NSObject, CBPeripheralDelegate {
+class LuniProvisioner: NSObject, CBPeripheralDelegate {
     let serviceUUID = CBUUID(string: "FF01")
     let wifiSSIDChar = CBUUID(string: "FF05")
     let wifiPassChar = CBUUID(string: "FF06")
@@ -204,7 +204,7 @@ class PTalkProvisioner: NSObject, CBPeripheralDelegate {
     let txKeyChar = CBUUID(string: "FF0F")
     let saveCmdChar = CBUUID(string: "FF09")
     
-    let authToken = "PTALK_OK".data(using: .utf8)!
+    let authToken = "Luni_OK".data(using: .utf8)!
     
     func provision(
         peripheral: CBPeripheral,
@@ -261,7 +261,7 @@ class PTalkProvisioner: NSObject, CBPeripheralDelegate {
 ```dart
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-class PTalkProvisioner {
+class LuniProvisioner {
   static const serviceUuid = Guid("0000FF01-0000-1000-8000-00805f9b34fb");
   static const wifiSsidUuid = Guid("0000FF05-0000-1000-8000-00805f9b34fb");
   static const wifiPassUuid = Guid("0000FF06-0000-1000-8000-00805f9b34fb");
@@ -270,17 +270,17 @@ class PTalkProvisioner {
   static const txKeyUuid = Guid("0000FF0F-0000-1000-8000-00805f9b34fb");
   static const saveCmdUuid = Guid("0000FF09-0000-1000-8000-00805f9b34fb");
   
-  static const authToken = "PTALK_OK";
+  static const authToken = "Luni_OK";
 
   Future<void> provision(
-    BluetoothDevice device, {
+    BluetoothDLunice dLunice, {
     required String ssid,
     required String password,
     required String mqttUrl,
     required String userId,
     required String txKey,
   }) async {
-    final services = await device.discoverServices();
+    final services = await dLunice.discoverServices();
     final service = services.firstWhere((s) => s.uuid == serviceUuid);
     
     BluetoothCharacteristic char(Guid uuid) =>
@@ -302,7 +302,7 @@ class PTalkProvisioner {
     // 4. Save & restart
     await char(saveCmdUuid).write([0x01]);
     
-    // Device will disconnect
+    // DLunice will disconnect
   }
 }
 ```
@@ -336,7 +336,7 @@ Returns JSON array of cached networks:
 
 ### Reading Large Data (MTU Chunking)
 
-WiFi list có thể lớn hơn MTU. Device hỗ trợ streaming:
+WiFi list có thể lớn hơn MTU. DLunice hỗ trợ streaming:
 - Mỗi read trả về chunk tiếp theo
 - Kết thúc khi nhận được chunk rỗng hoặc `]`
 
@@ -376,7 +376,7 @@ ws://192.168.1.100:8000/ws
 wss://secure.server.com/ws
 ```
 
-> Device sẽ tự động normalize URLs (thêm scheme/path nếu thiếu)
+> DLunice sẽ tự động normalize URLs (thêm scheme/path nếu thiếu)
 
 ---
 
@@ -386,9 +386,9 @@ wss://secure.server.com/ws
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| Connection timeout | Device out of range | Move closer |
-| Service not found | Wrong device | Verify device name |
-| Write failed | Auth not unlocked | Send "PTALK_OK" first |
+| Connection timeout | DLunice out of range | Move closer |
+| Service not found | Wrong dLunice | Verify dLunice name |
+| Write failed | Auth not unlocked | Send "Luni_OK" first |
 | Disconnected after save | Expected behavior | Wait & reconnect if needed |
 
 ### Validation
@@ -407,10 +407,10 @@ wss://secure.server.com/ws
 
 ```
 ┌─────────────────────────┐
-│  1. Scan for Devices    │
+│  1. Scan for DLunices    │
 │  ┌───────────────────┐  │
-│  │ PTalk-A0B1C2      │  │
-│  │ PTalk-D3E4F5      │  │
+│  │ Luni-A0B1C2      │  │
+│  │ Luni-D3E4F5      │  │
 │  └───────────────────┘  │
 └────────────┬────────────┘
              │
@@ -442,32 +442,32 @@ wss://secure.server.com/ws
              ▼
 ┌─────────────────────────┐
 │  ✓ Setup Complete!      │
-│  Device will restart    │
+│  DLunice will restart    │
 └─────────────────────────┘
 ```
 
 ### Progress States
 
 1. Connecting...
-2. Reading device info...
+2. Reading dLunice info...
 3. Writing WiFi credentials...
 4. Writing server settings...
 5. Saving configuration...
-6. ✓ Complete (device restarting)
+6. ✓ Complete (dLunice restarting)
 
 ---
 
 ## 10. Testing Checklist
 
-- [ ] Scan finds PTalk devices
-- [ ] Can read device ID and version
+- [ ] Scan finds Luni dLunices
+- [ ] Can read dLunice ID and version
 - [ ] Can read WiFi list
 - [ ] Basic writes work (volume, brightness)
 - [ ] Auth unlock works for MQTT_URL
 - [ ] All MEO credentials save successfully
-- [ ] Device restarts after SAVE_CMD
-- [ ] Device connects to WiFi after restart
-- [ ] Device connects to MQTT after restart
+- [ ] DLunice restarts after SAVE_CMD
+- [ ] DLunice connects to WiFi after restart
+- [ ] DLunice connects to MQTT after restart
 
 ---
 
@@ -476,9 +476,9 @@ wss://secure.server.com/ws
 ### "Write blocked" error
 
 **Cause:** Protected characteristic not unlocked  
-**Solution:** Write `"PTALK_OK"` to the characteristic first
+**Solution:** Write `"Luni_OK"` to the characteristic first
 
-### Device doesn't restart after save
+### DLunice doesn't restart after save
 
 **Cause:** SAVE_CMD not received properly  
 **Solution:** Ensure writing `0x01` byte (not string "1")
@@ -497,5 +497,5 @@ wss://secure.server.com/ws
 
 ## Contact
 
-- Firmware: PTalk Team  
+- Firmware: Luni Team  
 - BLE Protocol Version: 1.0

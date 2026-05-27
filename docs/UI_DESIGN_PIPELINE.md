@@ -1,6 +1,6 @@
 # Claude Design to Embedded C++ — Porting Pipeline
 
-Guide for converting PTalk UI designs (JSX/SVG) into procedural C++ render
+Guide for converting Luni UI designs (JSX/SVG) into procedural C++ render
 functions on the ESP32-S3.
 
 ---
@@ -75,7 +75,7 @@ void render_normal_steady(GfxEngine& gfx, float t, const ColorContext& colors) {
 | `<line>` | x1, y1, x2, y2, stroke, strokeWidth | `gfx.drawLine(x1, y1, x2, y2, color, width, alpha)` | Rain drops, sun rays, dividers |
 | `<line>` dashed | + strokeDasharray="2 3" | `gfx.drawDashedLine(x1, y1, x2, y2, color, w, dash, gap)` | Boot checklist dotted leaders |
 | `<path>` Q (quadratic) | M..Q..endpoint | `gfx.drawQuadBezier(x0, y0, cx, cy, x1, y1, color, w)` | Happy mouth arcs, wifi arcs |
-| `<path>` C (cubic) | M..C..endpoint | `gfx.drawCubicBezier(x0, y0, cx1, cy1, cx2, cy2, x1, y1, color, w)` | Heart shape, PTIT laurel |
+| `<path>` C (cubic) | M..C..endpoint | `gfx.drawCubicBezier(x0, y0, cx1, cy1, cx2, cy2, x1, y1, color, w)` | Heart shape, Luni laurel |
 | `<path>` A (arc) | M..A..endpoint | `gfx.drawArc(cx, cy, r, startAngle, endAngle, color, w)` | Sweep ring on boot-logo |
 | `<path>` polyline | M..L..L..Z | `gfx.fillPolygon(xPts, yPts, count, color)` | Sad eye lids, check marks |
 | `<text>` | x, y, fontSize, fill, textAnchor | `gfx.drawText(text, x, y, font, color, align, alpha)` | Scene labels, temperature |
@@ -468,7 +468,7 @@ esp32-s3/
 5. `thinking` (7 variants) — validates animation loops
 6. `loading` (3 variants)
 
-### Phase 3: Boot + connectivity (device-critical)
+### Phase 3: Boot + connectivity (dLunice-critical)
 7. `boot` (4 variants) — validates multi-phase animation, text, progress bar
 8. `network` (6 variants) — validates glyph components (WiFi, BT, Cloud)
 

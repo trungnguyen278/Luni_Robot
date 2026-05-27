@@ -1,4 +1,4 @@
-#include "DeviceProfile.hpp"
+#include "DLuniceProfile.hpp"
 #include "AppController.hpp"
 
 // System managers
@@ -22,7 +22,7 @@
 #include "esp_system.h"
 #include "driver/gpio.h"
 
-static const char* TAG = "DeviceProfile";
+static const char* TAG = "DLuniceProfile";
 
 // Check if NVS reset button is held LOW at boot
 static bool shouldEraseNvs()
@@ -53,7 +53,7 @@ static bool shouldEraseNvs()
 // =============================================================================
 namespace user_cfg {
     struct UserSettings {
-        std::string device_name = "PTalk";
+        std::string dLunice_name = "Luni";
         uint8_t  volume = 30;
         std::string wifi_ssid;
         std::string wifi_pass;
@@ -85,8 +85,8 @@ namespace user_cfg {
             ESP_LOGI(TAG, "NVS storage not found, using defaults");
             return cfg;
         }
-        cfg.device_name = get_string(h, "device_name");
-        if (cfg.device_name.empty()) cfg.device_name = "PTalk";
+        cfg.dLunice_name = get_string(h, "dLunice_name");
+        if (cfg.dLunice_name.empty()) cfg.dLunice_name = "Luni";
         cfg.wifi_ssid = get_string(h, "ssid");
         cfg.wifi_pass = get_string(h, "pass");
         cfg.ws_url    = get_string(h, "ws_url");
@@ -122,9 +122,9 @@ static std::string normalize_mqtt_url(std::string val) {
 // =============================================================================
 // Setup
 // =============================================================================
-bool DeviceProfile::setup(AppController& app)
+bool DLuniceProfile::setup(AppController& app)
 {
-    ESP_LOGI(TAG, "DeviceProfile setup begin (ESP32-C5), free heap: %lu",
+    ESP_LOGI(TAG, "DLuniceProfile setup begin (ESP32-C5), free heap: %lu",
              (unsigned long)esp_get_free_heap_size());
 
     // Init NVS (erase if reset button held)
@@ -228,7 +228,7 @@ bool DeviceProfile::setup(AppController& app)
         ESP_LOGI(TAG, "Scanned %d WiFi networks for BLE listing", (int)networks.size());
 
         BluetoothService::ConfigData ble_cfg;
-        ble_cfg.device_name = user.device_name;
+        ble_cfg.dLunice_name = user.dLunice_name;
         ble_cfg.volume = user.volume;
         ble_cfg.ws_url = user.ws_url;
         ble_cfg.mqtt_url = user.mqtt_url;
@@ -236,7 +236,7 @@ bool DeviceProfile::setup(AppController& app)
         ble_cfg.mqtt_pass = user.tx_key;
 
         static BluetoothService ble;
-        if (!ble.init("PTalk", networks, &ble_cfg)) {
+        if (!ble.init("Luni", networks, &ble_cfg)) {
             ESP_LOGE(TAG, "BLE init failed");
             return false;
         }
@@ -275,8 +275,8 @@ bool DeviceProfile::setup(AppController& app)
                 nvs_set_str(h, "user_id", received_cfg.mqtt_user.c_str());
             if (!received_cfg.mqtt_pass.empty())
                 nvs_set_str(h, "tx_key", received_cfg.mqtt_pass.c_str());
-            if (!received_cfg.device_name.empty())
-                nvs_set_str(h, "device_name", received_cfg.device_name.c_str());
+            if (!received_cfg.dLunice_name.empty())
+                nvs_set_str(h, "dLunice_name", received_cfg.dLunice_name.c_str());
             nvs_set_u8(h, "volume", received_cfg.volume);
             nvs_commit(h);
             nvs_close(h);
@@ -288,7 +288,7 @@ bool DeviceProfile::setup(AppController& app)
         if (!received_cfg.mqtt_url.empty()) user.mqtt_url = received_cfg.mqtt_url;
         if (!received_cfg.mqtt_user.empty()) user.user_id = received_cfg.mqtt_user;
         if (!received_cfg.mqtt_pass.empty()) user.tx_key = received_cfg.mqtt_pass;
-        user.device_name = received_cfg.device_name;
+        user.dLunice_name = received_cfg.dLunice_name;
         user.volume = received_cfg.volume;
 
         ESP_LOGI(TAG, "BLE provisioning complete, continuing with WiFi connect");
@@ -311,8 +311,8 @@ bool DeviceProfile::setup(AppController& app)
     net_cfg.wifi_pass = user.wifi_pass;
     net_cfg.ws_url    = normalize_ws_url(user.ws_url.empty() ? default_ws : user.ws_url);
     net_cfg.mqtt_url  = normalize_mqtt_url(user.mqtt_url.empty() ? default_mqtt : user.mqtt_url);
-    net_cfg.user_id   = user.user_id.empty() ? "ptalk_admin" : user.user_id;
-    net_cfg.tx_key    = user.tx_key.empty() ? "PTalkAdmin@2026!" : user.tx_key;
+    net_cfg.user_id   = user.user_id.empty() ? "Luni_admin" : user.user_id;
+    net_cfg.tx_key    = user.tx_key.empty() ? "LuniAdmin@2026!" : user.tx_key;
 
     ESP_LOGI(TAG, "Before NetworkManager init, free heap: %lu",
              (unsigned long)esp_get_free_heap_size());
@@ -440,6 +440,6 @@ bool DeviceProfile::setup(AppController& app)
         std::move(spi_bridge),
         std::move(uart_bridge));
 
-    ESP_LOGI(TAG, "DeviceProfile setup OK (ESP32-C5)");
+    ESP_LOGI(TAG, "DLuniceProfile setup OK (ESP32-C5)");
     return true;
 }

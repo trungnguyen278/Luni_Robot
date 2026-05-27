@@ -1,4 +1,4 @@
-#include "DeviceProfile.hpp"
+#include "DLuniceProfile.hpp"
 #include "AppController.hpp"
 #include "esp_log.h"
 
@@ -44,14 +44,14 @@
 #include "nvs.h"
 #include "esp_log.h"
 
-static const char* TAG = "DeviceProfile";
+static const char* TAG = "DLuniceProfile";
 
 // =============================================================================
 // User settings from NVS
 // =============================================================================
 namespace user_cfg {
     struct UserSettings {
-        std::string device_name = "PTalk";
+        std::string dLunice_name = "Luni";
         uint8_t volume = 60;
         uint8_t brightness = 100;
     };
@@ -78,8 +78,8 @@ namespace user_cfg {
             ESP_LOGI(TAG, "NVS storage not found, using defaults");
             return cfg;
         }
-        cfg.device_name = get_string(h, "device_name");
-        if (cfg.device_name.empty()) cfg.device_name = "PTalk";
+        cfg.dLunice_name = get_string(h, "dLunice_name");
+        if (cfg.dLunice_name.empty()) cfg.dLunice_name = "Luni";
         cfg.volume      = get_u8(h, "volume", cfg.volume);
         cfg.brightness  = get_u8(h, "brightness", cfg.brightness);
         nvs_close(h);
@@ -117,9 +117,9 @@ static void registerEmotions(DisplayManager* display)
 // =============================================================================
 // Setup
 // =============================================================================
-bool DeviceProfile::setup(AppController& app)
+bool DLuniceProfile::setup(AppController& app)
 {
-    ESP_LOGI(TAG, "DeviceProfile setup begin (ESP32-S3), free heap: %lu",
+    ESP_LOGI(TAG, "DLuniceProfile setup begin (ESP32-S3), free heap: %lu",
              (unsigned long)esp_get_free_heap_size());
 
     // Init NVS
@@ -433,6 +433,6 @@ bool DeviceProfile::setup(AppController& app)
         std::move(uart_bridge),
         std::move(touch_input));
 
-    ESP_LOGI(TAG, "DeviceProfile setup OK (ESP32-S3)");
+    ESP_LOGI(TAG, "DLuniceProfile setup OK (ESP32-S3)");
     return true;
 }

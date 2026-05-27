@@ -10,13 +10,13 @@
 struct WifiInfo;
 
 // BLE GATT provisioning service using NimBLE stack.
-// ESP32-C5 BLE 5.0 LE - compatible with PTalk V1 mobile app.
+// ESP32-C5 BLE 5.0 LE - compatible with Luni V1 mobile app.
 class BluetoothService
 {
 public:
     struct ConfigData
     {
-        std::string device_name = "PTalk";
+        std::string dLunice_name = "Luni";
         uint8_t volume = 60;
         uint8_t brightness = 100;
         std::string ssid;
@@ -42,7 +42,7 @@ public:
 
     // Same UUIDs as V1 for mobile app compatibility
     static constexpr uint16_t SVC_UUID_CONFIG = 0xFF01;
-    static constexpr uint16_t CHR_UUID_DEVICE_NAME = 0xFF02;
+    static constexpr uint16_t CHR_UUID_DLuniCE_NAME = 0xFF02;
     static constexpr uint16_t CHR_UUID_VOLUME = 0xFF03;
     static constexpr uint16_t CHR_UUID_BRIGHTNESS = 0xFF04;
     static constexpr uint16_t CHR_UUID_WIFI_SSID = 0xFF05;
@@ -50,7 +50,7 @@ public:
     static constexpr uint16_t CHR_UUID_APP_VERSION = 0xFF07;
     static constexpr uint16_t CHR_UUID_BUILD_INFO = 0xFF08;
     static constexpr uint16_t CHR_UUID_SAVE_CMD = 0xFF09;
-    static constexpr uint16_t CHR_UUID_DEVICE_ID = 0xFF0A;
+    static constexpr uint16_t CHR_UUID_DLuniCE_ID = 0xFF0A;
     static constexpr uint16_t CHR_UUID_WIFI_LIST = 0xFF0B;
     static constexpr uint16_t CHR_UUID_WS_URL = 0xFF0C;
     static constexpr uint16_t CHR_UUID_MQTT_URL = 0xFF0D;
@@ -63,9 +63,9 @@ public:
     ConfigData temp_cfg_;
     OnConfigComplete config_cb_ = nullptr;
     bool url_unlocked_ = false;
-    static constexpr const char *WS_URL_AUTH_TOKEN = "PTALK_OK";
+    static constexpr const char *WS_URL_AUTH_TOKEN = "Luni_OK";
 
-    std::string device_id_str_;
+    std::string dLunice_id_str_;
     std::vector<WifiInfo> wifi_networks_;
     size_t wifi_read_index_ = 0;
 

@@ -13,7 +13,7 @@ Product: **PTalk v2.0** — a desktop companion robot built at PTIT
 | ------------------ | ------ |
 | Color              | TFT 9-tone curated palette (was mono cyan). Two-layer rule: face stays cyan, accessories take the category tone. See §4. |
 | Multi-color        | New `tone: 'multi'` for variants that need several colors at once (confetti, fireworks). |
-| Boot scene         | New `boot` scene category with 4 variants — PTIT-branded power-on sequence. See §6.5.1. |
+| Boot scene         | New `boot` scene category with **two fully-separated flows** (PTIT for school, NTT personal). Every stage has a brand-clean twin so the NTT flow never shows PTIT/PTalk text. See §6.5.1. |
 | Connectivity       | New `network` scene category with 6 variants covering the full wifi/BLE/server lifecycle. See §6.5.2. |
 | Emotion categories | 29 → 37 (added disgusted, nervous, embarrassed, curious, annoyed, cool, suspicious, determined). |
 | Total variants     | 117 → 227. |
@@ -205,30 +205,83 @@ the entire startup-to-conversation pipeline. Both **block** the normal
 emotion loop while playing; the host should suspend autoplay until the
 flow exits.
 
-### 6.5.1 Cold boot sequence (happy path)
+### 6.5.1 Cold boot sequence (two flows)
+
+Firmware picks ONE of two boot flows at startup. Both share the bookend
+stages (poweron → checks → ready); they differ only in the middle
+"brand splash" stage. Tone of every stage is `red` except the personal
+splash which is `cyan` to mark it as non-brand.
+
+#### Flow A — **PTIT** (default, shipping firmware, school demos)
 
 ```
   POWER ON
      ↓
-  boot-poweron       (2.4 s)  — single bright dot expands, splits
-                                into two eyes ("the robot wakes up")
+  boot-poweron       (2.4 s, red)   — dot expands, splits into two eyes
      ↓
-  boot-logo          (3.0 s)  — PTIT mark fades in with a sweep ring,
-                                subtitle "POSTS · TELECOMMUNICATIONS"
+  boot-logo          (3.0 s, red)   — PTIT mark + sweep ring + subtitle
+                                       "POSTS · TELECOMMUNICATIONS"
      ↓
-  boot-checks        (4.2 s)  — self-test for DISPLAY / AUDIO / MIC /
-                                NETWORK / AI CORE, each row gets a
-                                spinner that flips to OK ✓
+  boot-checks        (4.2 s, red)   — DISPLAY / AUDIO / MIC / NETWORK /
+                                       AI CORE self-test, footer
+                                       "PTIT · PTalk v2.0"
      ↓
-  →→ [ enter connectivity sub-flow § 6.5.2 ] →→
+  → [ connectivity sub-flow §6.5.2 ] →
      ↓
-  boot-ready         (3.0 s)  — progress bar fills, "READY" stamp
+  boot-ready         (3.0 s, red)   — progress 0→100% + PTIT mark + "READY" stamp
      ↓
-  HAND OFF to `normal` idle pool (§ 6)
+  HAND OFF to `normal` idle pool
 ```
 
-Total happy-path duration is ~12.6 s of boot + however long the
-connectivity sub-flow takes.
+Total happy-path: ~12.6 s + connectivity time.
+
+#### Flow B — **NTT** (personal, dev-mode flag)
+
+```
+  POWER ON
+     ↓
+  boot-poweron           (2.4 s, red)   — same as Flow A (shared neutral stage)
+     ↓
+  boot-credits           (4.5 s, cyan)  — NTT monogram + name typewriter +
+                                           role line. NO PTIT/PTalk text.
+     ↓
+  boot-checks-personal   (4.2 s, cyan)  — same self-test, footer "v2.0"
+                                           (no PTIT/PTalk brand text)
+     ↓
+  → [ connectivity sub-flow §6.5.2 ] →
+     ↓
+  boot-ready-personal    (3.0 s, cyan)  — progress 0→100% + NTT monogram
+                                           + "READY" stamp
+     ↓
+  HAND OFF to `normal` idle pool
+```
+
+Total happy-path: ~14.1 s + connectivity time.
+
+Every stage in Flow B is brand-clean — no PTIT or PTalk text appears
+on screen at any point. `boot-poweron` is intentionally neutral
+(abstract eye-wake animation) so it works for both flows.
+
+**Picking the flow** — the firmware reads `PTALK_BOOT_FLOW` from NVS at
+startup:
+
+```c
+bool is_ntt = strcmp(nvs_get_str("PTALK_BOOT_FLOW"), "ntt") == 0;
+
+play_boot(BOOT_POWERON);                     // shared
+play_boot(is_ntt ? BOOT_CREDITS
+                 : BOOT_LOGO);               // brand splash
+play_boot(is_ntt ? BOOT_CHECKS_PERSONAL
+                 : BOOT_CHECKS);             // self-test
+run_connectivity();
+play_boot(is_ntt ? BOOT_READY_PERSONAL
+                 : BOOT_READY);              // ready
+```
+
+A long-press on the boot button (or a dev-mode menu in the PTalk app)
+toggles the flag.
+
+#### Failure handling (both flows)
 
 If a check **fails** during `boot-checks`, leave the failed row showing
 the spinner instead of OK for 1 s, then jump straight to the matching
@@ -238,7 +291,7 @@ status scene:
 | ----------- | --------------------- |
 | DISPLAY     | (panic — firmware halts; no UI possible) |
 | AUDIO / MIC | continue boot, raise `error-warning` later (non-fatal) |
-| NETWORK     | enter § 6.5.2 immediately, skip `boot-ready` |
+| NETWORK     | enter §6.5.2 immediately, skip `boot-ready` |
 | AI CORE     | `error-bang` then halt (model load failed) |
 
 ### 6.5.2 Connectivity sub-flow (FSM)
@@ -357,7 +410,7 @@ not an emotional reaction. Eyes are not drawn. Per-variant tones in `()`.
 
 | Category      | Variants | Purpose                                       |
 | ------------- | -------- | --------------------------------------------- |
-| `boot`        | 4        | **PTIT power-on sequence** (poweron → logo → checks → ready, all red) |
+| `boot`        | 7        | **Two complete boot flows** — PTIT (school) and NTT (personal). Each stage has its own brand-clean twin. |
 | `network`     | 6        | **Connectivity status**: wifi-scan / wifi-connect / wifi-retry (orange) / offline (red) / ble-pair (purple) / server-error (red) |
 | `weather`     | 5        | Sunny (warm) / rainy (blue) / cloudy (cyan) / snow (white) / storm (purple) |
 | `clock`       | 3        | Digital (cyan), analog (cyan), alarm (red)    |
@@ -379,9 +432,9 @@ not an emotional reaction. Eyes are not drawn. Per-variant tones in `()`.
 | `gaming`      | 2        | Pad (purple), powerup (warm)                  |
 | `calendar`    | 2        | Date page (cyan), reminder (red)              |
 
-**Scene subtotal: 21 categories · 59 variants.**
+**Scene subtotal: 21 categories · 62 variants.**
 
-**Grand total: 58 categories · 227 variants.**
+**Grand total: 58 categories · 230 variants.**
 
 ✦ `listening` and `thinking` are **mandatory** — this is a conversational
 robot. Every dialog turn enters one of these two states.
@@ -539,13 +592,30 @@ Use these `id`s when calling from firmware. Listed in display order.
 
 ## 8b. Scene inventory
 
-### boot (4) — PTIT power-on sequence
-`boot-poweron` (red) · `boot-logo` (red) · `boot-checks` (red) · `boot-ready` (red)
+### boot (7) — power-on flows
 
-Firmware boot flow: play `boot-poweron` (2.4 s) → `boot-logo` (3 s) →
-`boot-checks` (4.2 s) → `boot-ready` (3 s) → hand off to `normal` idle pool.
-Logo + mark are an original geometric construction inspired by PTIT
-iconography — not a copy of the official school seal.
+Two complete flows; pick one at firmware startup. Every stage exists in
+two variants — PTIT-branded and NTT-personal — except `boot-poweron`
+which is shared (deliberately neutral).
+
+**Flow A · PTIT** (default, shipping):
+`boot-poweron` → `boot-logo` → `boot-checks` → `boot-ready` (all red)
+
+**Flow B · NTT** (personal, dev-mode — brand-clean):
+`boot-poweron` (red) → `boot-credits` → `boot-checks-personal` →
+`boot-ready-personal` (all cyan)
+
+All 7 individual stage variants:
+`boot-poweron` (shared) ·
+`boot-logo` (PTIT splash) · `boot-credits` (NTT splash) ·
+`boot-checks` (PTIT self-test, "PTIT · PTalk v2.0" footer) ·
+`boot-checks-personal` (NTT self-test, "v2.0" footer) ·
+`boot-ready` (PTIT mark on top) ·
+`boot-ready-personal` (NTT monogram on top)
+
+The PTIT mark is an original geometric construction inspired by PTIT
+iconography — not a copy of the official school seal. NTT splash and
+brand-clean stages contain no PTIT/PTalk text anywhere.
 
 ### network (6) — connectivity status
 `network-wifi-scan` (cyan) · `network-wifi-connect` (cyan) ·
