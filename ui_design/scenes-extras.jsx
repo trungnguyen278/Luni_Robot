@@ -309,32 +309,91 @@ cats.camera = {
   kind: 'scene',
   variants: [
 
-    { id: 'camera-shutter', label: 'Shutter', duration: 2000,
+    { id: 'camera-shutter', label: 'Shutter', duration: 2800,
       render: (t) => {
-        const flash = t < 0.06 ? 1 : 0;
+        // Phases: 0.0-0.55 viewfinder w/ countdown; 0.55-0.62 white flash;
+        // 0.62-1.0 photo printed: polaroid slides down with Luni's face on it.
         const cx = SCX, cy = CY + 4;
+        const beforeShot = t < 0.55;
+        const flash = (t >= 0.55 && t < 0.62) ? 1 : 0;
+        const afterShot = t >= 0.62;
+        const printP = afterShot ? clamp((t - 0.62) / 0.30, 0, 1) : 0;
+
         return (
           <g>
-            {/* Viewfinder brackets at corners */}
-            <g stroke="var(--eye)" strokeWidth={3} fill="none" strokeLinecap="round">
-              <path d={`M ${cx - 70} ${cy - 40} L ${cx - 70} ${cy - 26} M ${cx - 70} ${cy - 40} L ${cx - 56} ${cy - 40}`} />
-              <path d={`M ${cx + 70} ${cy - 40} L ${cx + 70} ${cy - 26} M ${cx + 70} ${cy - 40} L ${cx + 56} ${cy - 40}`} />
-              <path d={`M ${cx - 70} ${cy + 40} L ${cx - 70} ${cy + 26} M ${cx - 70} ${cy + 40} L ${cx - 56} ${cy + 40}`} />
-              <path d={`M ${cx + 70} ${cy + 40} L ${cx + 70} ${cy + 26} M ${cx + 70} ${cy + 40} L ${cx + 56} ${cy + 40}`} />
-            </g>
-            {/* Camera body inside */}
-            <g fill="var(--eye)">
-              <rect x={cx - 24} y={cy - 12} width={48} height={32} rx={4} />
-              <circle cx={cx} cy={cy + 4} r={11} fill="var(--bg)" />
-              <circle cx={cx} cy={cy + 4} r={6} fill="var(--eye)" />
-              <rect x={cx + 12} y={cy - 18} width={10} height={6} rx={1} />
-            </g>
-            {/* Flash overlay */}
-            {flash > 0 && (
-              <rect x={0} y={0} width={W} height={H} fill="var(--eye)" opacity={0.85} />
+            {beforeShot && (
+              <g>
+                {/* Viewfinder brackets */}
+                <g stroke="var(--eye)" strokeWidth={3} fill="none" strokeLinecap="round">
+                  <path d={`M ${cx - 70} ${cy - 40} L ${cx - 70} ${cy - 26} M ${cx - 70} ${cy - 40} L ${cx - 56} ${cy - 40}`} />
+                  <path d={`M ${cx + 70} ${cy - 40} L ${cx + 70} ${cy - 26} M ${cx + 70} ${cy - 40} L ${cx + 56} ${cy - 40}`} />
+                  <path d={`M ${cx - 70} ${cy + 40} L ${cx - 70} ${cy + 26} M ${cx - 70} ${cy + 40} L ${cx - 56} ${cy + 40}`} />
+                  <path d={`M ${cx + 70} ${cy + 40} L ${cx + 70} ${cy + 26} M ${cx + 70} ${cy + 40} L ${cx + 56} ${cy + 40}`} />
+                </g>
+                {/* Camera body inside */}
+                <g fill="var(--eye)">
+                  <rect x={cx - 24} y={cy - 12} width={48} height={32} rx={4} />
+                  <circle cx={cx} cy={cy + 4} r={11} fill="var(--bg)" />
+                  <circle cx={cx} cy={cy + 4} r={6} fill="var(--eye)" />
+                  <rect x={cx + 12} y={cy - 18} width={10} height={6} rx={1} />
+                </g>
+                {/* Countdown 3 → 2 → 1 */}
+                {(() => {
+                  const n = t < 0.18 ? 3 : t < 0.36 ? 2 : t < 0.54 ? 1 : null;
+                  if (n === null) return null;
+                  return (
+                    <text x={cx} y={cy + 76} textAnchor="middle"
+                          fontFamily="ui-monospace, Menlo, monospace"
+                          fontSize={20} fontWeight={800}
+                          fill="var(--accent)" letterSpacing={1}>{n}</text>
+                  );
+                })()}
+                {bigText({ x: SCX, y: H - 14, fontSize: 11, opacity: 0.7, letterSpacing: 3 }, 'SMILE!')}
+              </g>
             )}
-            {bigText({ x: SCX, y: H - 28, fontSize: 12, opacity: 0.7, letterSpacing: 3 },
-              t < 0.3 ? 'SNAP!' : 'SMILE')}
+
+            {/* White flash overlay */}
+            {flash > 0 && (
+              <rect x={0} y={0} width={W} height={H} fill="var(--eye)" opacity={0.95} />
+            )}
+
+            {afterShot && (
+              <g>
+                {/* Polaroid frame slides down from top */}
+                <g transform={`translate(${cx} ${lerp(-80, CY, ease.out(printP))})`}>
+                  {/* paper */}
+                  <rect x={-66} y={-58} width={132} height={132} rx={4}
+                        fill="var(--eye)" />
+                  {/* photo area */}
+                  <rect x={-58} y={-50} width={116} height={88}
+                        fill="var(--bg)" />
+                  {/* === Luni's face captured inside the photo === */}
+                  <g>
+                    {/* Mini eyes — two rounded rects */}
+                    <rect x={-40} y={-26} width={28} height={36} rx={8}
+                          fill="var(--accent)" />
+                    <rect x={12} y={-26} width={28} height={36} rx={8}
+                          fill="var(--accent)" />
+                    {/* tiny smile */}
+                    <path d={`M -16 26 Q 0 34, 16 26`}
+                          fill="none" stroke="var(--accent)" strokeWidth={2.5}
+                          strokeLinecap="round" />
+                  </g>
+                  {/* caption strip at bottom of polaroid */}
+                  <text x={0} y={62} textAnchor="middle"
+                        fontFamily="ui-monospace, Menlo, monospace"
+                        fontSize={11} fontWeight={700}
+                        fill="var(--bg)" letterSpacing={2}>LUNI · 14:32</text>
+                </g>
+                {/* "SAVED" badge appears after polaroid lands */}
+                {printP >= 1 && (
+                  <text x={SCX} y={H - 14} textAnchor="middle"
+                        fontFamily="ui-monospace, Menlo, monospace"
+                        fontSize={11} fontWeight={700}
+                        fill="var(--accent)" letterSpacing={3}>SAVED ✓</text>
+                )}
+              </g>
+            )}
           </g>
         );
       } },
@@ -519,35 +578,126 @@ cats.gift = {
         );
       } },
 
-    { id: 'gift-open', label: 'Unboxing', duration: 2400,
+    { id: 'gift-open', label: 'Unboxing story', duration: 5600,
       render: (t) => {
-        const open = clamp(t / 0.4, 0, 1);
-        const cx = SCX, cy = CY + 16;
+        // 5-act mini video:
+        //   0.00–0.18  RECEIVE  — wrapped box drops in, eyes excited
+        //   0.18–0.38  ANTICIPATE — Luni stares at box, blinks
+        //   0.38–0.62  OPEN     — lid lifts, surprise eyes (big "O")
+        //   0.62–0.82  REVEAL   — heart bursts out with sparkles
+        //   0.82–1.00  PUT AWAY — gift shrinks/floats off + happy smile
+        const cx = SCX, cy = CY + 30;
+
+        // ----- helper: eyes as a small Luni face above the box -----
+        const faceY = STATUS_H + 32;
+        const eyeY = faceY;
+        const lex = cx - 28, rex = cx + 28;
+
+        // Phase progress
+        const p1 = clamp(t / 0.18, 0, 1);                       // receive
+        const p2 = clamp((t - 0.18) / 0.20, 0, 1);              // anticipate
+        const p3 = clamp((t - 0.38) / 0.24, 0, 1);              // open
+        const p4 = clamp((t - 0.62) / 0.20, 0, 1);              // reveal
+        const p5 = clamp((t - 0.82) / 0.18, 0, 1);              // put away
+        const inPhase = (a, b) => t >= a && t < b;
+
+        // Box transforms
+        const dropY = lerp(-80, 0, ease.out(p1));               // arriving
+        const wob = inPhase(0.18, 0.38) ? Math.sin(t * TAU * 6) * 2 : 0;
+        const lid = p3;                                         // 0 → 1
+        const float = lerp(0, -50, ease.out(p5));               // floats away
+        const fade = 1 - p5;
+        const shrink = 1 - p5 * 0.6;
+
+        // Eye expressions per phase
+        let eyeProps = { w: 22, h: 22, rx: 7 }; // default rounded
+        if (inPhase(0, 0.18))        eyeProps = { w: 22, h: 26, rx: 11 }; // excited
+        else if (inPhase(0.18, 0.38)) {
+          // blink occasionally
+          const b = Math.max(blink(t, 0.24, 0.04), blink(t, 0.32, 0.04));
+          eyeProps = { w: 22, h: lerp(22, 4, b), rx: 6 };
+        }
+        else if (inPhase(0.38, 0.62)) eyeProps = { w: 26, h: 28, rx: 13 }; // surprise O
+        else if (inPhase(0.62, 0.82)) eyeProps = { w: 24, h: 24, rx: 10 }; // joyful
+        else                          eyeProps = { w: 20, h: 6,  rx: 3 };  // happy arc
+
         return (
           <g>
-            {/* Box body */}
-            <g fill="var(--eye)">
-              <rect x={cx - 50} y={cy - 14} width={100} height={50} rx={4} />
+            {/* === Luni's mini face watching the unboxing === */}
+            <g opacity={0.95}>
+              <rect x={lex - eyeProps.w / 2} y={eyeY - eyeProps.h / 2}
+                    width={eyeProps.w} height={eyeProps.h} rx={eyeProps.rx}
+                    fill="var(--eye)" />
+              <rect x={rex - eyeProps.w / 2} y={eyeY - eyeProps.h / 2}
+                    width={eyeProps.w} height={eyeProps.h} rx={eyeProps.rx}
+                    fill="var(--eye)" />
+              {/* Smile in reveal & put-away phases */}
+              {t >= 0.62 && (
+                <path d={`M ${cx - 14} ${eyeY + 22}
+                          Q ${cx} ${eyeY + 30 + (t > 0.82 ? 4 : 0)},
+                          ${cx + 14} ${eyeY + 22}`}
+                      fill="none" stroke="var(--eye)" strokeWidth={2.5}
+                      strokeLinecap="round" />
+              )}
             </g>
-            {/* Lid lifting */}
-            <g transform={`translate(0 ${-open * 30}) rotate(${-open * 14} ${cx - 50} ${cy - 14})`}
-               fill="var(--eye)">
-              <rect x={cx - 56} y={cy - 26} width={112} height={16} rx={3} />
+
+            {/* === The box === */}
+            <g transform={`translate(${wob} ${dropY + float})
+                           scale(${shrink}) translate(0 ${(1 - shrink) * cy})`}
+               opacity={fade}>
+              {/* Box body */}
+              <g fill="var(--eye)">
+                <rect x={cx - 40} y={cy - 14} width={80} height={42} rx={3} />
+                {/* vertical ribbon */}
+                <rect x={cx - 4} y={cy - 14} width={8} height={42}
+                      fill="var(--accent)" />
+              </g>
+              {/* Lid — lifts off in OPEN phase */}
+              <g transform={`translate(0 ${-lid * 28})
+                             rotate(${-lid * 16} ${cx - 40} ${cy - 14})`}
+                 fill="var(--eye)">
+                <rect x={cx - 46} y={cy - 24} width={92} height={14} rx={3} />
+                {/* Ribbon bow on lid (only visible before opening) */}
+                {p3 < 0.5 && (
+                  <g fill="var(--accent)" opacity={1 - p3 * 2}>
+                    <ellipse cx={cx - 6} cy={cy - 28} rx={6} ry={4} />
+                    <ellipse cx={cx + 6} cy={cy - 28} rx={6} ry={4} />
+                    <circle cx={cx} cy={cy - 28} r={2.5} />
+                  </g>
+                )}
+              </g>
             </g>
-            {/* Sparkles + heart bursting out */}
-            {open > 0.4 && (
-              <g opacity={(t - 0.4) / 0.6}>
-                <path d={heartPath(cx, cy - 30 - (t - 0.4) * 40, 18 + (t - 0.4) * 8)}
-                      fill="var(--eye)" />
-                {[0, 1, 2, 3].map((i) => {
-                  const a = (i / 4) * TAU;
-                  const r = 30 + (t - 0.4) * 30;
-                  return <path key={i}
-                    d={starPath(cx + Math.cos(a) * r, cy - 20 + Math.sin(a) * r * 0.6, 6, 2)}
-                    fill="var(--eye)" opacity={1 - (t - 0.4)} />;
+
+            {/* === Heart + sparkles burst on REVEAL === */}
+            {t >= 0.5 && t < 0.95 && (
+              <g opacity={clamp(p4 + 0.3, 0, 1) * (1 - p5)}>
+                <path d={heartPath(cx,
+                          cy - 20 - p4 * 36 + (p5 > 0 ? p5 * 30 : 0),
+                          16 + p4 * 6)}
+                      fill="var(--accent)" />
+                {[0, 1, 2, 3, 4].map((i) => {
+                  const a = (i / 5) * TAU;
+                  const r = 12 + p4 * 36;
+                  return (
+                    <path key={i}
+                          d={starPath(cx + Math.cos(a) * r,
+                                      cy - 24 + Math.sin(a) * r * 0.7,
+                                      4 + (1 - p4) * 3,
+                                      1.5)}
+                          fill="var(--eye)" opacity={1 - p4 * 0.5} />
+                  );
                 })}
               </g>
             )}
+
+            {/* === Phase label === */}
+            {bigText({
+              x: SCX, y: H - 14, fontSize: 11, opacity: 0.7, letterSpacing: 3,
+            }, inPhase(0, 0.18)   ? 'A GIFT!' :
+               inPhase(0.18, 0.38) ? 'WHAT IS IT…' :
+               inPhase(0.38, 0.62) ? 'OPENING…' :
+               inPhase(0.62, 0.82) ? 'I LOVE IT' :
+                                     'SAVED ♥')}
           </g>
         );
       } },

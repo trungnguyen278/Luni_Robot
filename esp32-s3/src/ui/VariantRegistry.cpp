@@ -1,24 +1,46 @@
 #include "VariantRegistry.hpp"
 #include <cstring>
 
-// Category definitions from emotion/scene render files
+// Emotion categories
 extern const CategoryDef CAT_NORMAL;
+extern const CategoryDef CAT_GREET;
 extern const CategoryDef CAT_HAPPY;
+extern const CategoryDef CAT_WINK;
 extern const CategoryDef CAT_SAD;
+extern const CategoryDef CAT_CRYING;
 extern const CategoryDef CAT_ANGRY;
+extern const CategoryDef CAT_ANNOYED;
+extern const CategoryDef CAT_DISGUSTED;
 extern const CategoryDef CAT_SURPRISED;
+extern const CategoryDef CAT_SCARED;
+extern const CategoryDef CAT_NERVOUS;
 extern const CategoryDef CAT_LOVE;
+extern const CategoryDef CAT_SHY;
+extern const CategoryDef CAT_EMBARRASSED;
+extern const CategoryDef CAT_SMUG;
+extern const CategoryDef CAT_PROUD;
+extern const CategoryDef CAT_COOL;
+extern const CategoryDef CAT_MISCHIEVOUS;
+extern const CategoryDef CAT_SUSPICIOUS;
+extern const CategoryDef CAT_CURIOUS;
+extern const CategoryDef CAT_CONFUSED;
 extern const CategoryDef CAT_SLEEPY;
 extern const CategoryDef CAT_SLEEPING;
-extern const CategoryDef CAT_CRYING;
 extern const CategoryDef CAT_EXCITED;
-extern const CategoryDef CAT_CONFUSED;
 extern const CategoryDef CAT_BORED;
+extern const CategoryDef CAT_HUNGRY;
 extern const CategoryDef CAT_LISTENING;
 extern const CategoryDef CAT_THINKING;
+extern const CategoryDef CAT_FOCUSED;
+extern const CategoryDef CAT_DETERMINED;
 extern const CategoryDef CAT_LOADING;
+extern const CategoryDef CAT_CHARGING;
 extern const CategoryDef CAT_DIZZY;
 extern const CategoryDef CAT_DEAD;
+extern const CategoryDef CAT_ERROR;
+extern const CategoryDef CAT_MUTE;
+
+// Scene categories
 extern const CategoryDef CAT_BOOT;
 extern const CategoryDef CAT_NETWORK;
 extern const CategoryDef CAT_WEATHER;
@@ -42,23 +64,45 @@ extern const CategoryDef CAT_GAMING;
 extern const CategoryDef CAT_CALENDAR;
 
 const CategoryDef ALL_CATEGORIES[] = {
+    // Emotions (37 categories, ordered per REQUIREMENTS §7)
     CAT_NORMAL,
+    CAT_GREET,
     CAT_HAPPY,
+    CAT_WINK,
     CAT_SAD,
+    CAT_CRYING,
     CAT_ANGRY,
+    CAT_ANNOYED,
+    CAT_DISGUSTED,
     CAT_SURPRISED,
+    CAT_SCARED,
+    CAT_NERVOUS,
     CAT_LOVE,
+    CAT_SHY,
+    CAT_EMBARRASSED,
+    CAT_SMUG,
+    CAT_PROUD,
+    CAT_COOL,
+    CAT_MISCHIEVOUS,
+    CAT_SUSPICIOUS,
+    CAT_CURIOUS,
+    CAT_CONFUSED,
     CAT_SLEEPY,
     CAT_SLEEPING,
-    CAT_CRYING,
     CAT_EXCITED,
-    CAT_CONFUSED,
     CAT_BORED,
+    CAT_HUNGRY,
     CAT_LISTENING,
     CAT_THINKING,
+    CAT_FOCUSED,
+    CAT_DETERMINED,
     CAT_LOADING,
+    CAT_CHARGING,
     CAT_DIZZY,
     CAT_DEAD,
+    CAT_ERROR,
+    CAT_MUTE,
+    // Scenes (21 categories)
     CAT_BOOT,
     CAT_NETWORK,
     CAT_WEATHER,

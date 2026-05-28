@@ -96,6 +96,11 @@ public:
     void setBacklight(bool on);
     void setBrightness(uint8_t percent);
 
+    // --- Boot sequence ---
+    // Play the full boot animation sequence (blocking).
+    // Must be called AFTER startLoop() so the render task is running.
+    void playBootSequence();
+
     // --- Procedural rendering (GfxEngine) ---
     // Play a procedural variant by category/variant ID
     void playProcedural(const char* categoryKey, const char* variantId = nullptr);
