@@ -335,11 +335,6 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
         break;
     case state::InteractionState::CANCELLING:
         break;
-    case state::InteractionState::MUTED:
-        break;
-    case state::InteractionState::SLEEPING:
-        setPowerSaveMode(true);
-        break;
     case state::InteractionState::IDLE:
     default:
         playEmotion("idle");

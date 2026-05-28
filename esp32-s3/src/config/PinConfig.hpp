@@ -17,8 +17,8 @@ static constexpr int LCD_DC    = 13;
 static constexpr int LCD_RST   = 14;
 static constexpr int LCD_BL    = 21;  // Backlight PWM
 
-// --- Battery ADC ---
-static constexpr int BATTERY_ADC = 1;  // ADC1_CH0 = GPIO1
+// --- Battery ADC (-1 = no battery, skips PowerManager) ---
+static constexpr int BATTERY_ADC = -1;  // ADC1_CH0 = GPIO1
 
 // --- Charge status (optional, GPIO_NUM_NC if not wired) ---
 static constexpr int CHG_STATUS = -1;
@@ -43,11 +43,13 @@ static constexpr int UART_TX       = 18;  // S3 GPIO18 -> C5 GPIO7   (RX)
 static constexpr int UART_RX       = 17;  // S3 GPIO17 <- C5 GPIO6   (TX)
 
 // --- SPI3 Bridge to ESP32-C5 (S3=Master, C5=Slave) ---
-static constexpr int SPI3_MOSI      = 35;  // S3 GPIO35 -> C5 GPIO2  (MOSI)
-static constexpr int SPI3_MISO      = 36;  // S3 GPIO36 <- C5 GPIO3  (MISO)
-static constexpr int SPI3_SCLK      = 37;  // S3 GPIO37 -> C5 GPIO4  (SCLK)
-static constexpr int SPI3_CS        = 38;  // S3 GPIO38 -> C5 GPIO5  (CS)
-static constexpr int SPI3_HANDSHAKE = 39;  // S3 GPIO39 <- C5 GPIO8  (HIGH = C5 has data)
+// GPIO 35-37 reserved by Octal PSRAM — use GPIO 5-7 instead
+// Set to -1 when not wired (skips init)
+static constexpr int SPI3_MOSI      = -1;  // S3 GPIO5  -> C5 GPIO2  (MOSI)
+static constexpr int SPI3_MISO      = -1;  // S3 GPIO6  <- C5 GPIO3  (MISO)
+static constexpr int SPI3_SCLK      = -1;  // S3 GPIO7  -> C5 GPIO4  (SCLK)
+static constexpr int SPI3_CS        = -1;  // S3 GPIO38 -> C5 GPIO5  (CS)
+static constexpr int SPI3_HANDSHAKE = -1;  // S3 GPIO39 <- C5 GPIO8  (HIGH = C5 has data)
 
 // --- Battery voltage divider resistors (ohms) ---
 static constexpr float BAT_R1 = 10000.0f;

@@ -1,0 +1,8 @@
+{
+    "name": "network",
+    "build": {
+        "flags": [
+            "-I../../src"
+        ]
+    }
+}

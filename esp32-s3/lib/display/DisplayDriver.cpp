@@ -264,10 +264,21 @@ void DisplayDriver::writePixels(const uint16_t *buffer, size_t len_bytes)
 {
     if (!initialized || !buffer || len_bytes == 0)
         return;
-    spi_transaction_t t = {};
-    t.length = len_bytes * 8; // bits
-    t.tx_buffer = buffer;
-    ESP_ERROR_CHECK(spi_device_transmit(spi_dev, &t));
+
+    // ESP32-S3 SPI hardware max: 2^18 bits = 32768 bytes per transaction
+    static constexpr size_t MAX_CHUNK = 32000;
+    const uint8_t *ptr = (const uint8_t *)buffer;
+    size_t remaining = len_bytes;
+
+    while (remaining > 0) {
+        size_t chunk = (remaining > MAX_CHUNK) ? MAX_CHUNK : remaining;
+        spi_transaction_t t = {};
+        t.length = chunk * 8;
+        t.tx_buffer = ptr;
+        ESP_ERROR_CHECK(spi_device_transmit(spi_dev, &t));
+        ptr += chunk;
+        remaining -= chunk;
+    }
 }
 
 // ----------------------------------------------------------------------------

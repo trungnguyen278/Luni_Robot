@@ -51,7 +51,7 @@ static constexpr uint8_t AUDIO_DOWNLINK = 0xAB;
 
 // JSON message builder helpers
 cJSON* createMessage(MsgType type, const char* id = nullptr);
-cJSON* createAuthMessage(const char* device_token, const char* mac,
+cJSON* createAuthMessage(const char* mac,
                          const char* fw_version, const char* model);
 cJSON* createDeviceInfo(const char* mac, const char* fw_version,
                         const char* model, const char* name);

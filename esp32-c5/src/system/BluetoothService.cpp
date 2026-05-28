@@ -27,7 +27,7 @@ enum ChrIdx {
     IDX_SSID = 0,
     IDX_PASSWORD,
     IDX_WS_URL,
-    IDX_DEV_TOKEN,
+    IDX_COMMIT,
     IDX_USER_ID,
     IDX_DEVICE_INFO,
     IDX_DIAG_INFO,
@@ -48,7 +48,7 @@ static ble_uuid16_t svc_uuid       = BLE_UUID16_INIT(0xFF01);
 static ble_uuid16_t chr_uuid_ssid  = BLE_UUID16_INIT(0x0001);
 static ble_uuid16_t chr_uuid_pass  = BLE_UUID16_INIT(0x0002);
 static ble_uuid16_t chr_uuid_ws    = BLE_UUID16_INIT(0x0003);
-static ble_uuid16_t chr_uuid_token = BLE_UUID16_INIT(0x0004);
+static ble_uuid16_t chr_uuid_commit = BLE_UUID16_INIT(0x0004);
 static ble_uuid16_t chr_uuid_uid   = BLE_UUID16_INIT(0x0005);
 static ble_uuid16_t chr_uuid_info  = BLE_UUID16_INIT(0x0006);
 static ble_uuid16_t chr_uuid_diag  = BLE_UUID16_INIT(0x0007);
@@ -68,7 +68,7 @@ static const struct ble_gatt_chr_def gatt_chars[] = {
     { .uuid = &chr_uuid_ssid.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_SSID,         .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_SSID] },
     { .uuid = &chr_uuid_pass.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_PASSWORD,      .flags = W_FLAGS,  .val_handle = &chr_val_handles[IDX_PASSWORD] },
     { .uuid = &chr_uuid_ws.u,    .access_cb = gatt_chr_access, .arg = (void*)IDX_WS_URL,        .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_WS_URL] },
-    { .uuid = &chr_uuid_token.u, .access_cb = gatt_chr_access, .arg = (void*)IDX_DEV_TOKEN,     .flags = W_FLAGS,  .val_handle = &chr_val_handles[IDX_DEV_TOKEN] },
+    { .uuid = &chr_uuid_commit.u,.access_cb = gatt_chr_access, .arg = (void*)IDX_COMMIT,         .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_COMMIT] },
     { .uuid = &chr_uuid_uid.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_USER_ID,       .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_USER_ID] },
     { .uuid = &chr_uuid_info.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DEVICE_INFO,   .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_DEVICE_INFO] },
     { .uuid = &chr_uuid_diag.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DIAG_INFO,     .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_DIAG_INFO] },
@@ -103,8 +103,10 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg)
         if (event->connect.status == 0) {
             self->conn_handle_ = event->connect.conn_handle;
             self->connected_ = true;
+            self->started_ = false;
             self->access_level_ = BluetoothService::AccessLevel::LEVEL_0;
         } else {
+            self->started_ = false;
             self->start();
         }
         break;
@@ -214,11 +216,21 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             self->temp_cfg_.ws_url.assign((char*)buf, len);
             break;
 
-        case IDX_DEV_TOKEN:
+        case IDX_COMMIT: {
             if (level < BluetoothService::AccessLevel::LEVEL_1)
                 return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
-            self->temp_cfg_.device_token.assign((char*)buf, len);
-            break;
+            if (self->temp_cfg_.ssid.empty() || self->temp_cfg_.pass.empty()) {
+                ESP_LOGW(TAG, "COMMIT rejected: SSID or password missing");
+                self->notifyCommitResult(0x01);
+                return 0;
+            }
+            ESP_LOGI(TAG, "COMMIT: provisioning ssid='%s'", self->temp_cfg_.ssid.c_str());
+            self->notifyCommitResult(0x00);
+            if (self->config_cb_) {
+                self->config_cb_(self->temp_cfg_);
+            }
+            return 0;
+        }
 
         case IDX_USER_ID:
             if (level < BluetoothService::AccessLevel::LEVEL_1)
@@ -249,15 +261,6 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             break;
         }
 
-        // If all provisioning fields are set, trigger config complete
-        if ((idx == IDX_DEV_TOKEN || idx == IDX_SSID || idx == IDX_PASSWORD) &&
-            !self->temp_cfg_.ssid.empty() &&
-            !self->temp_cfg_.pass.empty() &&
-            !self->temp_cfg_.device_token.empty() &&
-            self->config_cb_) {
-            self->config_cb_(self->temp_cfg_);
-        }
-
         return 0;
     }
 
@@ -272,7 +275,7 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             snprintf(info, sizeof(info),
                 "{\"mac\":\"%s\",\"model\":\"%s\",\"fw_version\":\"%s\",\"name\":\"%s\"}",
                 self->device_id_str_.c_str(),
-                app_meta::DEVICE_MODEL,
+                app_meta::DLuniCE_MODEL,
                 app_meta::APP_VERSION,
                 self->temp_cfg_.device_name.c_str());
             response = info;
@@ -390,22 +393,15 @@ bool BluetoothService::verifyAdminToken(const uint8_t* data, size_t len)
     nvs_close(h);
     if (err != ESP_OK || secret_len == 0) return false;
 
-    // Load device_token from NVS
-    char dev_token[128] = {};
-    size_t token_len = sizeof(dev_token);
-    if (nvs_open("storage", NVS_READONLY, &h) != ESP_OK) return false;
-    err = nvs_get_str(h, "device_token", dev_token, &token_len);
-    nvs_close(h);
-    if (err != ESP_OK || token_len == 0) return false;
-
     uint32_t ts = data[32] | (data[33] << 8) | (data[34] << 16) | (data[35] << 24);
 
-    // Build message: device_token || timestamp_str
+    // Build message: mac || timestamp_str
+    const char* mac = getDLuniceEfuseID();
     char ts_str[16];
     snprintf(ts_str, sizeof(ts_str), "%lu", (unsigned long)ts);
 
     char msg[192];
-    size_t msg_len = snprintf(msg, sizeof(msg), "%s%s", dev_token, ts_str);
+    size_t msg_len = snprintf(msg, sizeof(msg), "%s%s", mac, ts_str);
 
     // HMAC-SHA256(msg, admin_secret)
     uint8_t expected[32];
@@ -433,6 +429,15 @@ void BluetoothService::notifyCommandResult(uint8_t result)
     struct os_mbuf* om = ble_hs_mbuf_from_flat(&result, 1);
     if (om) {
         ble_gatts_notify_custom(conn_handle_, chr_val_handles[IDX_COMMAND], om);
+    }
+}
+
+void BluetoothService::notifyCommitResult(uint8_t result)
+{
+    if (!connected_) return;
+    struct os_mbuf* om = ble_hs_mbuf_from_flat(&result, 1);
+    if (om) {
+        ble_gatts_notify_custom(conn_handle_, chr_val_handles[IDX_COMMIT], om);
     }
 }
 
@@ -500,7 +505,6 @@ void BluetoothService::factoryReset()
     if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
         nvs_erase_key(h, "wifi_ssid");
         nvs_erase_key(h, "wifi_password");
-        nvs_erase_key(h, "device_token");
         nvs_erase_key(h, "admin_secret");
         nvs_commit(h);
         nvs_close(h);
@@ -521,13 +525,13 @@ bool BluetoothService::init(const std::string& adv_name,
                              const std::vector<WifiInfo>& cached_networks,
                              const ConfigData* current_config)
 {
-    static bool s_initialized = false;
-    if (s_initialized) return true;
+    if (initialized_) return true;
 
+    s_instance = this;
     adv_name_ = adv_name;
     if (current_config) temp_cfg_ = *current_config;
 
-    device_id_str_ = getDeviceEfuseID();
+    device_id_str_ = getDLuniceEfuseID();
     generatePairingPin();
 
     // Prepare WiFi list (sorted by RSSI, deduplicated)
@@ -572,7 +576,7 @@ bool BluetoothService::init(const std::string& adv_name,
     ble_svc_gap_device_name_set(adv_name_.c_str());
     nimble_port_freertos_init(ble_host_task);
 
-    s_initialized = true;
+    initialized_ = true;
     ESP_LOGI(TAG, "BLE initialized: %s (PIN: %s)", adv_name_.c_str(), pairing_pin_);
     return true;
 }
@@ -644,5 +648,6 @@ void BluetoothService::deinit()
     esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
     ESP_LOGI(TAG, "BLE controller memory released");
 
+    initialized_ = false;
     s_instance = nullptr;
 }

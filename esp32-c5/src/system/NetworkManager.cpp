@@ -26,9 +26,8 @@ bool NetworkManager::init(const Config& cfg)
     cfg_ = cfg;
     wifi_credentials_exist_ = !cfg_.wifi_ssid.empty();
 
-    ESP_LOGI(TAG, "init: ws=%s token=%s",
-             cfg_.ws_url.c_str(),
-             cfg_.device_token.empty() ? "(none)" : "(set)");
+    ESP_LOGI(TAG, "init: ws=%s mac=%s",
+             cfg_.ws_url.c_str(), getDLuniceEfuseID());
 
     wifi_ = std::make_unique<WifiService>();
     ws_   = std::make_unique<WebSocketClient>();
@@ -37,7 +36,7 @@ bool NetworkManager::init(const Config& cfg)
 
     wifi_->init();
     ws_->init();
-    ws_->setDeviceInfo(getDeviceEfuseID(), app_meta::APP_VERSION, app_meta::DEVICE_MODEL);
+    ws_->setDeviceInfo(getDLuniceEfuseID(), app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
     ota_->init(StateManager::instance());
     sync_->init();
 
@@ -83,6 +82,7 @@ void NetworkManager::setCredentials(const std::string& ssid, const std::string& 
     cfg_.wifi_ssid = ssid;
     cfg_.wifi_pass = pass;
     wifi_credentials_exist_ = !ssid.empty();
+    awaiting_provision_ = false;
 }
 
 // === WiFi setup ===
@@ -196,8 +196,8 @@ size_t NetworkManager::getWsTxFreeSpace() const
 void NetworkManager::sendDeviceInfo()
 {
     cJSON* msg = ws::createDeviceInfo(
-        getDeviceEfuseID(), app_meta::APP_VERSION,
-        app_meta::DEVICE_MODEL, cfg_.device_name.c_str());
+        getDLuniceEfuseID(), app_meta::APP_VERSION,
+        app_meta::DLuniCE_MODEL, cfg_.device_name.c_str());
     if (msg && ws_) {
         ws_->sendMessage(msg);
     }
@@ -228,7 +228,7 @@ void NetworkManager::sendAudioUplink(const uint8_t* opus_data, size_t len)
 
 void NetworkManager::checkOtaUpdate()
 {
-    if (ota_) ota_->checkUpdate(app_meta::APP_VERSION, app_meta::DEVICE_MODEL);
+    if (ota_) ota_->checkUpdate(app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
 }
 
 // === Heartbeat ===
@@ -316,9 +316,9 @@ void NetworkManager::runConnectionStateMachine()
             break;
 
         case state::ConnectionState::WIFI_CONNECTING: {
-            // Wait for WiFi to connect (poll wifi status)
+            int timeout_ms = was_online_ ? 30000 : 10000;
             bool connected = false;
-            for (int ms = 0; ms < 30000 && started_; ms += 200) {
+            for (int ms = 0; ms < timeout_ms && started_; ms += 200) {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 if (wifi_->isConnected()) {
                     connected = true;
@@ -328,16 +328,12 @@ void NetworkManager::runConnectionStateMachine()
 
             if (connected) {
                 transition(state::ConnectionState::WIFI_CONNECTED);
+            } else if (!was_online_) {
+                transition(state::ConnectionState::BLE_PROVISIONING,
+                           state::ConnectFailReason::WIFI_TIMEOUT);
             } else {
-                auto reason = state::ConnectFailReason::WIFI_TIMEOUT;
-                last_fail_ = reason;
-
-                auto policy = state::getRetryPolicy(reason);
-                if (policy.max_retries == 0 || policy.fallback_to_ble) {
-                    transition(state::ConnectionState::BLE_PROVISIONING, reason);
-                } else {
-                    transition(state::ConnectionState::RECONNECTING, reason);
-                }
+                transition(state::ConnectionState::RECONNECTING,
+                           state::ConnectFailReason::WIFI_TIMEOUT);
             }
             break;
         }
@@ -353,7 +349,7 @@ void NetworkManager::runConnectionStateMachine()
                 break;
             }
 
-            esp_err_t err = ws_->connect(cfg_.ws_url.c_str(), cfg_.device_token.c_str());
+            esp_err_t err = ws_->connect(cfg_.ws_url.c_str());
             if (err != ESP_OK) {
                 transition(state::ConnectionState::RECONNECTING,
                            state::ConnectFailReason::SERVER_UNREACHABLE);
@@ -369,6 +365,7 @@ void NetworkManager::runConnectionStateMachine()
 
             if (ws_->isAuthenticated()) {
                 reconnect_attempts_ = 0;
+                was_online_ = true;
                 transition(state::ConnectionState::ONLINE);
             } else {
                 ws_->disconnect();
@@ -401,10 +398,12 @@ void NetworkManager::runConnectionStateMachine()
 
             auto policy = state::getRetryPolicy(last_fail_);
 
-            if (reconnect_attempts_ < policy.max_retries) {
-                uint32_t delay = state::calculateBackoff(policy, reconnect_attempts_);
-                ESP_LOGW(TAG, "Reconnect attempt %d/%d (delay %lums, reason=%d)",
-                         reconnect_attempts_ + 1, policy.max_retries,
+            if (was_online_ || reconnect_attempts_ < policy.max_retries) {
+                uint32_t delay = state::calculateBackoff(policy,
+                    was_online_ ? (reconnect_attempts_ % policy.max_retries)
+                                : reconnect_attempts_);
+                ESP_LOGW(TAG, "Reconnect attempt %d (delay %lums, reason=%d)",
+                         reconnect_attempts_ + 1,
                          (unsigned long)delay, (int)last_fail_);
 
                 vTaskDelay(pdMS_TO_TICKS(delay));
@@ -430,9 +429,8 @@ void NetworkManager::runConnectionStateMachine()
         }
 
         case state::ConnectionState::BLE_PROVISIONING:
-            // BLE provisioning handled externally (DeviceProfile / AppController)
-            // Wait here until credentials are set
-            while (started_ && !wifi_credentials_exist_) {
+            awaiting_provision_ = true;
+            while (started_ && awaiting_provision_) {
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
             if (wifi_credentials_exist_) {

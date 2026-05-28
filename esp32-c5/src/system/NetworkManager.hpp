@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 #include <atomic>
+#include <cstring>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,7 +26,6 @@ public:
         std::string wifi_ssid;
         std::string wifi_pass;
         std::string ws_url;
-        std::string device_token;
         std::string device_name;
     };
 
@@ -44,6 +44,7 @@ public:
 
     // WebSocket operations
     void sendText(const char* json, size_t len);
+    void sendText(const char* json) { sendText(json, strlen(json)); }
     void sendBinary(const uint8_t* data, size_t len);
     void waitTxDrain(uint32_t timeout_ms = 500);
     size_t getWsTxFreeSpace() const;
@@ -99,6 +100,8 @@ private:
     state::ConnectFailReason last_fail_ = state::ConnectFailReason::NONE;
     uint8_t reconnect_attempts_ = 0;
     bool wifi_credentials_exist_ = false;
+    bool was_online_ = false;
+    bool awaiting_provision_ = false;
 
     // Timers
     esp_timer_handle_t heartbeat_timer_ = nullptr;

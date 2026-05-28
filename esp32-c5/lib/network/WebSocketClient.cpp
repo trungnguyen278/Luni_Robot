@@ -1,5 +1,5 @@
 #include "WebSocketClient.hpp"
-#include "WsProtocol.hpp"
+#include "protocol/WsProtocol.hpp"
 #include "config/ServerConfig.hpp"
 #include "esp_log.h"
 #include "esp_event.h"
@@ -25,12 +25,11 @@ void WebSocketClient::init()
     }
 }
 
-esp_err_t WebSocketClient::connect(const char* url, const char* device_token)
+esp_err_t WebSocketClient::connect(const char* url)
 {
-    if (!url || !device_token) return ESP_ERR_INVALID_ARG;
+    if (!url) return ESP_ERR_INVALID_ARG;
 
     url_ = url;
-    device_token_ = device_token;
     authenticated_ = false;
     last_close_code_ = 0;
 
@@ -118,8 +117,7 @@ esp_err_t WebSocketClient::authenticate()
     if (!connected_ || !client_) return ESP_FAIL;
 
     cJSON* auth_msg = ws::createAuthMessage(
-        device_token_.c_str(), mac_.c_str(),
-        fw_version_.c_str(), model_.c_str());
+        mac_.c_str(), fw_version_.c_str(), model_.c_str());
     if (!auth_msg) return ESP_ERR_NO_MEM;
 
     char* json = cJSON_PrintUnformatted(auth_msg);

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
+#include "system/BluetoothService.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -52,6 +53,9 @@ private:
     void onSystemStateChanged(state::SystemState);
     void sendStatusHeartbeat();
 
+    void startBleProvisioning();
+    void stopBleProvisioning();
+
     int sub_inter_id = -1;
     int sub_conn_id  = -1;
     int sub_sys_id   = -1;
@@ -63,4 +67,7 @@ private:
     QueueHandle_t app_queue = nullptr;
     TaskHandle_t  app_task  = nullptr;
     std::atomic<bool> started{false};
+
+    BluetoothService ble_;
+    bool ble_active_ = false;
 };

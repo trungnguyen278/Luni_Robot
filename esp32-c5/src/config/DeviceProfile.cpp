@@ -52,7 +52,6 @@ namespace user_cfg {
         std::string wifi_ssid;
         std::string wifi_pass;
         std::string ws_url;
-        std::string device_token;
         std::string user_id;
     };
 
@@ -83,7 +82,6 @@ namespace user_cfg {
         cfg.wifi_ssid    = get_string(h, "ssid");
         cfg.wifi_pass    = get_string(h, "pass");
         cfg.ws_url       = get_string(h, "ws_url");
-        cfg.device_token = get_string(h, "device_token");
         cfg.user_id      = get_string(h, "user_id");
         cfg.volume       = get_u8(h, "volume", cfg.volume);
         nvs_close(h);
@@ -121,65 +119,19 @@ bool DeviceProfile::setup(AppController& app)
     auto user = user_cfg::load();
 
     // =========================================================
-    // 1. BOOT WIFI CHECK + BLE PROVISIONING (if needed)
+    // 1. BLE PROVISIONING (only when no WiFi credentials)
     // =========================================================
-    bool need_ble = user.wifi_ssid.empty();
-
     esp_netif_init();
     esp_event_loop_create_default();
-    esp_netif_t* boot_netif = esp_netif_create_default_wifi_sta();
-    wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_wifi_init(&wifi_cfg);
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_wifi_start();
-    vTaskDelay(pdMS_TO_TICKS(500));
 
-    if (!need_ble) {
-        ESP_LOGI(TAG, "Boot WiFi test (SSID: %s)...", user.wifi_ssid.c_str());
+    if (user.wifi_ssid.empty()) {
+        esp_netif_t* scan_netif = esp_netif_create_default_wifi_sta();
+        wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
+        esp_wifi_init(&wifi_cfg);
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        esp_wifi_start();
+        vTaskDelay(pdMS_TO_TICKS(500));
 
-        wifi_config_t sta_cfg = {};
-        strncpy((char*)sta_cfg.sta.ssid, user.wifi_ssid.c_str(), sizeof(sta_cfg.sta.ssid) - 1);
-        strncpy((char*)sta_cfg.sta.password, user.wifi_pass.c_str(), sizeof(sta_cfg.sta.password) - 1);
-        esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-
-        static volatile bool boot_wifi_ok = false;
-        boot_wifi_ok = false;
-
-        esp_event_handler_instance_t ip_inst = nullptr;
-        esp_event_handler_instance_t disc_inst = nullptr;
-
-        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-            [](void* arg, esp_event_base_t, int32_t, void*) {
-                *(volatile bool*)arg = true;
-            }, (void*)&boot_wifi_ok, &ip_inst);
-
-        esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-            [](void*, esp_event_base_t, int32_t, void*) {
-                esp_wifi_connect();
-            }, nullptr, &disc_inst);
-
-        esp_wifi_connect();
-
-        constexpr int BOOT_WIFI_TIMEOUT_MS = 30000;
-        for (int ms = 0; !boot_wifi_ok && ms < BOOT_WIFI_TIMEOUT_MS; ms += 100) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
-
-        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_inst);
-        esp_event_handler_instance_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, disc_inst);
-
-        if (boot_wifi_ok) {
-            ESP_LOGI(TAG, "WiFi OK, skipping BLE provisioning");
-        } else {
-            ESP_LOGW(TAG, "WiFi failed after %ds, falling back to BLE", BOOT_WIFI_TIMEOUT_MS / 1000);
-            need_ble = true;
-        }
-
-        esp_wifi_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
-
-    if (need_ble) {
         wifi_scan_config_t scan_cfg = {};
         esp_wifi_scan_start(&scan_cfg, true);
         uint16_t ap_count = 0;
@@ -197,14 +149,12 @@ bool DeviceProfile::setup(AppController& app)
 
         esp_wifi_stop();
         esp_wifi_deinit();
-        esp_netif_destroy(boot_netif);
-        boot_netif = nullptr;
+        esp_netif_destroy(scan_netif);
 
         BluetoothService::ConfigData ble_cfg;
         ble_cfg.device_name  = user.device_name;
         ble_cfg.volume       = user.volume;
         ble_cfg.ws_url       = user.ws_url;
-        ble_cfg.device_token = user.device_token;
         ble_cfg.user_id      = user.user_id;
 
         static BluetoothService ble;
@@ -241,8 +191,6 @@ bool DeviceProfile::setup(AppController& app)
                 nvs_set_str(h, "pass", received_cfg.pass.c_str());
             if (!received_cfg.ws_url.empty())
                 nvs_set_str(h, "ws_url", received_cfg.ws_url.c_str());
-            if (!received_cfg.device_token.empty())
-                nvs_set_str(h, "device_token", received_cfg.device_token.c_str());
             if (!received_cfg.user_id.empty())
                 nvs_set_str(h, "user_id", received_cfg.user_id.c_str());
             if (!received_cfg.admin_secret.empty())
@@ -257,16 +205,11 @@ bool DeviceProfile::setup(AppController& app)
         user.wifi_ssid    = received_cfg.ssid;
         user.wifi_pass    = received_cfg.pass;
         if (!received_cfg.ws_url.empty()) user.ws_url = received_cfg.ws_url;
-        if (!received_cfg.device_token.empty()) user.device_token = received_cfg.device_token;
         if (!received_cfg.user_id.empty()) user.user_id = received_cfg.user_id;
         user.device_name  = received_cfg.device_name;
         user.volume       = received_cfg.volume;
 
         ESP_LOGI(TAG, "BLE provisioning complete, continuing with WiFi connect");
-    } else {
-        esp_wifi_stop();
-        esp_wifi_deinit();
-        esp_netif_destroy(boot_netif);
     }
 
     // =========================================================
@@ -280,7 +223,6 @@ bool DeviceProfile::setup(AppController& app)
     net_cfg.wifi_ssid    = user.wifi_ssid;
     net_cfg.wifi_pass    = user.wifi_pass;
     net_cfg.ws_url       = normalize_ws_url(user.ws_url.empty() ? default_ws : user.ws_url);
-    net_cfg.device_token = user.device_token;
     net_cfg.device_name  = user.device_name;
 
     if (!network_mgr->init(net_cfg)) {

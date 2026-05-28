@@ -3,6 +3,8 @@
 #include "system/SpiBridge.hpp"
 #include "system/UartBridge.hpp"
 
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_log.h"
 #include <utility>
 
@@ -196,6 +198,12 @@ void AppController::onConnectionStateChanged(state::ConnectionState s)
 {
     ESP_LOGI(TAG, "Connection: %d", (int)s);
 
+    if (s == state::ConnectionState::BLE_PROVISIONING) {
+        startBleProvisioning();
+    } else if (ble_active_) {
+        stopBleProvisioning();
+    }
+
     if (uart) {
         uart->sendStatusUpdate(
             (uint8_t)StateManager::instance().getInteractionState(),
@@ -203,6 +211,52 @@ void AppController::onConnectionStateChanged(state::ConnectionState s)
             (uint8_t)StateManager::instance().getSystemState(),
             (uint8_t)StateManager::instance().getEmotionState());
     }
+}
+
+void AppController::startBleProvisioning()
+{
+    if (ble_active_) return;
+
+    if (!ble_.init("Luni")) {
+        ESP_LOGE(TAG, "BLE init failed");
+        return;
+    }
+
+    ble_.onConfigComplete([this](const BluetoothService::ConfigData& cfg) {
+        ESP_LOGI(TAG, "BLE config received: ssid='%s'", cfg.ssid.c_str());
+
+        nvs_handle_t h;
+        if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
+            if (!cfg.ssid.empty())
+                nvs_set_str(h, "ssid", cfg.ssid.c_str());
+            if (!cfg.pass.empty())
+                nvs_set_str(h, "pass", cfg.pass.c_str());
+            if (!cfg.ws_url.empty())
+                nvs_set_str(h, "ws_url", cfg.ws_url.c_str());
+            if (!cfg.user_id.empty())
+                nvs_set_str(h, "user_id", cfg.user_id.c_str());
+            if (!cfg.admin_secret.empty())
+                nvs_set_str(h, "admin_secret", cfg.admin_secret.c_str());
+            nvs_commit(h);
+            nvs_close(h);
+        }
+
+        if (network) {
+            network->setCredentials(cfg.ssid, cfg.pass);
+        }
+    });
+
+    ble_.start();
+    ble_active_ = true;
+    ESP_LOGI(TAG, "BLE provisioning started");
+}
+
+void AppController::stopBleProvisioning()
+{
+    if (!ble_active_) return;
+    ble_.deinit();
+    ble_active_ = false;
+    ESP_LOGI(TAG, "BLE provisioning stopped");
 }
 
 void AppController::onSystemStateChanged(state::SystemState s)

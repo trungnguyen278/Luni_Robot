@@ -1,5 +1,5 @@
 #include "AppController.hpp"
-#include "config/DLuniceProfile.hpp"
+#include "config/DeviceProfile.hpp"
 #include "system/StateManager.hpp"
 #include "Version.hpp"
 #include "esp_log.h"
@@ -18,9 +18,9 @@ extern "C" void app_main()
 
     auto& app = AppController::instance();
 
-    // DLuniceProfile creates and wires all modules
-    if (!DLuniceProfile::setup(app)) {
-        ESP_LOGE(TAG, "DLuniceProfile setup FAILED");
+    // DeviceProfile creates and wires all modules
+    if (!DeviceProfile::setup(app)) {
+        ESP_LOGE(TAG, "DeviceProfile setup FAILED");
         StateManager::instance().setSystemState(state::SystemState::ERROR);
         return;
     }

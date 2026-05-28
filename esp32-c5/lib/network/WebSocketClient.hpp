@@ -16,8 +16,8 @@ public:
 
     void init();
 
-    // Connect with device token authentication
-    esp_err_t connect(const char* url, const char* device_token);
+    // Connect with MAC-based identification
+    esp_err_t connect(const char* url);
     void disconnect();
     bool isConnected() const { return connected_; }
     bool isAuthenticated() const { return authenticated_; }
@@ -62,7 +62,6 @@ private:
 
     esp_websocket_client_handle_t client_ = nullptr;
     std::string url_;
-    std::string device_token_;
     std::string mac_;
     std::string fw_version_;
     std::string model_;

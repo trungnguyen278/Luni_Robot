@@ -80,6 +80,7 @@ void WifiService::init()
     }
 
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    esp_log_level_set("wifi", ESP_LOG_ERROR);
     registerEvents();
     ESP_LOGI(TAG, "WifiService initialized");
 }
@@ -116,11 +117,6 @@ void WifiService::disconnect()
     connected = false;
     if (status_cb) status_cb(0);
     ESP_LOGI(TAG, "WiFi disconnected");
-}
-
-void WifiService::disableAutoConnect()
-{
-    auto_connect_enabled = false;
 }
 
 std::string WifiService::getIp() const
@@ -212,6 +208,12 @@ void WifiService::startSTA()
     ESP_LOGI(TAG, "startSTA: Configuring WiFi STA mode (SSID: %s, Pass: %s)",
              sta_ssid.c_str(), sta_pass.empty() ? "<empty>" : "<set>");
 
+    if (wifi_started) {
+        esp_wifi_disconnect();
+        esp_wifi_stop();
+        wifi_started = false;
+    }
+
     wifi_config_t cfg = {};
     strncpy(reinterpret_cast<char *>(cfg.sta.ssid), sta_ssid.c_str(), sizeof(cfg.sta.ssid) - 1);
     strncpy(reinterpret_cast<char *>(cfg.sta.password), sta_pass.c_str(), sizeof(cfg.sta.password) - 1);
@@ -266,10 +268,6 @@ void WifiService::wifiEventHandler(esp_event_base_t base, int32_t id, void *data
         ESP_LOGW(TAG, "WIFI_EVENT_STA_DISCONNECTED");
         connected = false;
         if (status_cb) status_cb(0);
-        if (auto_connect_enabled && !sta_ssid.empty())
-        {
-            esp_wifi_connect();
-        }
         break;
     default:
         break;

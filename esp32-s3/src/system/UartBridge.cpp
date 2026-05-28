@@ -120,7 +120,7 @@ void UartBridge::rxLoop()
                 payload_len >= sizeof(uart_proto::StatusPayload)) {
                 auto* sp = reinterpret_cast<const uart_proto::StatusPayload*>(payload);
                 if (status_cb_) {
-                    status_cb_(sp->interaction, sp->connectivity,
+                    status_cb_(sp->interaction, sp->connection,
                                sp->system_state, sp->emotion);
                 }
             } else if (type == (uint8_t)uart_proto::MsgType::CONTROL_CMD &&
