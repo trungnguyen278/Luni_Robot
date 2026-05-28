@@ -45,6 +45,9 @@ enum class ControlCmd : uint8_t {
     AUDIO_STOP     = 0x23,
     CONFIG_UPDATE  = 0x24,
     INTERACTION_MSG= 0x25,
+
+    BOOT_DONE      = 0x30,
+    BLE_PIN        = 0x31,
 };
 
 // Status payload (same as SPI)

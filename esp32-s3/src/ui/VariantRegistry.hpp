@@ -20,6 +20,7 @@ struct CategoryDef {
     ToneId tone;
     const VariantDef* variants;
     uint8_t variant_count;
+    bool loops = true;
 };
 
 ToneId resolveTone(const CategoryDef* cat, const VariantDef* variant);

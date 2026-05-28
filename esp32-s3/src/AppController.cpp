@@ -137,7 +137,11 @@ void AppController::start()
     // Start remaining modules only after boot animation completes
     if (power) power->start();
     if (spi) spi->start();
-    if (uart) uart->start();
+    if (uart) {
+        uart->start();
+        uart->sendControlCmd(uart_proto::ControlCmd::BOOT_DONE);
+        ESP_LOGI(TAG, "Sent BOOT_DONE to C5");
+    }
     if (audio) audio->start();
     if (touch) touch->start();
 

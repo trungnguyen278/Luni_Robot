@@ -43,6 +43,9 @@ struct SceneData {
     uint8_t  retry_max = 3;
     uint16_t error_code = 0;
 
+    // BLE
+    char     ble_pin[8] = {};
+
     // Local sensors (S3)
     uint8_t  battery_percent = 0;
     bool     is_charging = false;

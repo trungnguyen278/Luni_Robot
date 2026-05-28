@@ -95,11 +95,29 @@ void AppController::start()
     xTaskCreatePinnedToCore(&AppController::controllerTask, "AppCtrl", 4096, this, 4, &app_task, 0);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    if (network) network->start();
-    if (spi) spi->start();
     if (uart) uart->start();
+    if (spi) spi->start();
 
-    ESP_LOGI(TAG, "AppController started");
+    xTaskCreate([](void* arg) {
+        vTaskDelay(pdMS_TO_TICKS(20000));
+        auto* self = static_cast<AppController*>(arg);
+        if (!self->isNetworkStarted()) {
+            ESP_LOGW(TAG, "S3 BOOT_DONE timeout, starting network anyway");
+            self->startNetwork();
+        }
+        vTaskDelete(nullptr);
+    }, "BootWait", 2048, this, 2, nullptr);
+
+    ESP_LOGI(TAG, "AppController started (network deferred until S3 BOOT_DONE)");
+}
+
+void AppController::startNetwork()
+{
+    if (network_started_.exchange(true)) return;
+    if (network) {
+        network->start();
+        ESP_LOGI(TAG, "Network started");
+    }
 }
 
 void AppController::stop()
@@ -248,6 +266,13 @@ void AppController::startBleProvisioning()
 
     ble_.start();
     ble_active_ = true;
+
+    if (uart) {
+        const char* pin = ble_.getPairingPin();
+        uart->sendDeviceCmd(uart_proto::ControlCmd::BLE_PIN,
+                            (const uint8_t*)pin, strlen(pin));
+    }
+
     ESP_LOGI(TAG, "BLE provisioning started");
 }
 

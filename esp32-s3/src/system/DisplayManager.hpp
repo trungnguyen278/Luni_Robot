@@ -184,6 +184,7 @@ private:
     int sub_emotion = -1;
 
     bool binding_enabled = false;
+    std::atomic<bool> booting_{false};
 
     int width_ = 240;
     int height_ = 240;

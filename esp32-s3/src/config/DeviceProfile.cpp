@@ -10,6 +10,8 @@
 #include "system/UartBridge.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
+#include "config/BootSubsystems.hpp"
+#include "ui/SceneManager.hpp"
 
 // Drivers
 #include "DisplayDriver.hpp"
@@ -93,6 +95,8 @@ bool DeviceProfile::setup(AppController& app)
 
     auto user = user_cfg::load();
 
+    auto& bootData = SceneManager::instance().getSceneData();
+
     // =========================================================
     // 1. DISPLAY (ST7789 240x320 via SPI2)
     // =========================================================
@@ -119,6 +123,7 @@ bool DeviceProfile::setup(AppController& app)
 
     display_mgr->setBrightness(user.brightness);
     display_mgr->enableStateBinding(true);
+    bootData.boot_check_results[BOOT_DISPLAY] = BOOT_OK;
 
     // =========================================================
     // 2. POWER (Battery ADC)
@@ -146,6 +151,7 @@ bool DeviceProfile::setup(AppController& app)
     } else {
         ESP_LOGI(TAG, "Battery ADC not wired, skipping PowerManager");
     }
+    bootData.boot_check_results[BOOT_POWER] = BOOT_OK;
 
     // =========================================================
     // 3. MAX98357 CONTROL PINS
@@ -221,6 +227,7 @@ bool DeviceProfile::setup(AppController& app)
 
     i2s_channel_enable(tx_chan);
     ESP_LOGI(TAG, "I2S TX enabled (clock source for full-duplex)");
+    bootData.boot_check_results[BOOT_AUDIO] = BOOT_OK;
 
     // =========================================================
     // 5. SPI BRIDGE (Communication with C5 via SPI3)
@@ -294,9 +301,17 @@ bool DeviceProfile::setup(AppController& app)
             return false;
         }
 
-        uart_bridge->onStatusUpdate([](uint8_t interaction, uint8_t connectivity,
-                                        uint8_t system_state, uint8_t emotion) {
+        UartBridge* uart_raw = uart_bridge.get();
+        uart_bridge->onStatusUpdate([uart_raw](uint8_t interaction, uint8_t connectivity,
+                                                uint8_t system_state, uint8_t emotion) {
             auto& sm = StateManager::instance();
+
+            // C5 reset detection: if S3 is already RUNNING and C5 reports OFFLINE,
+            // re-send BOOT_DONE so C5 starts network without waiting for timeout
+            if (sm.getSystemState() == state::SystemState::RUNNING &&
+                static_cast<state::ConnectionState>(connectivity) == state::ConnectionState::OFFLINE) {
+                uart_raw->sendControlCmd(uart_proto::ControlCmd::BOOT_DONE);
+            }
 
             sm.setConnectionState(static_cast<state::ConnectionState>(connectivity));
             sm.setEmotionState(static_cast<state::EmotionState>(emotion));
@@ -345,9 +360,19 @@ bool DeviceProfile::setup(AppController& app)
                 break;
             }
         });
+        uart_bridge->onDeviceCmd([](uart_proto::ControlCmd cmd,
+                                    const uint8_t* data, size_t len) {
+            if (cmd == uart_proto::ControlCmd::BLE_PIN && len > 0 && len < 8) {
+                auto& sd = SceneManager::instance().getSceneData();
+                memcpy(sd.ble_pin, data, len);
+                sd.ble_pin[len] = '\0';
+                ESP_LOGI("UartDev", "BLE PIN: %s", sd.ble_pin);
+            }
+        });
     } else {
         ESP_LOGI(TAG, "UART bridge not wired, skipping UartBridge");
     }
+    bootData.boot_check_results[BOOT_COMMS] = BOOT_OK;
 
     // =========================================================
     // 7. TOUCH INPUT (Button)
@@ -368,6 +393,7 @@ bool DeviceProfile::setup(AppController& app)
         if (e == TouchInput::Event::PRESS)   app.postEvent(event::AppEvent::USER_BUTTON);
         if (e == TouchInput::Event::RELEASE) app.postEvent(event::AppEvent::RELEASE_BUTTON);
     });
+    bootData.boot_check_results[BOOT_TOUCH] = BOOT_OK;
 
     // =========================================================
     // 8. ATTACH MODULES -> APP CONTROLLER
