@@ -15,6 +15,8 @@ enum class ConnectionState : uint8_t
     ONLINE,             // Fully connected + authenticated
     RECONNECTING,       // Lost connection, auto-retry
     BLE_PROVISIONING,   // BLE config mode (no WiFi)
+    WS_ERROR,           // WiFi OK but server unreachable
+    BLE_CONNECTED,      // BLE provisioning successful
 };
 
 // === Connection Fail Reason ===
@@ -144,15 +146,19 @@ inline bool isValidConnectionTransition(ConnectionState from, ConnectionState to
     case CS::WIFI_CONNECTED:
         return to == CS::WS_CONNECTING || to == CS::OFFLINE;
     case CS::WS_CONNECTING:
-        return to == CS::WS_AUTHENTICATING || to == CS::RECONNECTING;
+        return to == CS::WS_AUTHENTICATING || to == CS::WS_ERROR || to == CS::RECONNECTING;
     case CS::WS_AUTHENTICATING:
-        return to == CS::ONLINE || to == CS::RECONNECTING || to == CS::BLE_PROVISIONING;
+        return to == CS::ONLINE || to == CS::WS_ERROR || to == CS::RECONNECTING || to == CS::BLE_PROVISIONING;
     case CS::ONLINE:
-        return to == CS::RECONNECTING;
+        return to == CS::RECONNECTING || to == CS::WS_ERROR;
     case CS::RECONNECTING:
         return to == CS::WS_CONNECTING || to == CS::WIFI_CONNECTING
             || to == CS::OFFLINE || to == CS::BLE_PROVISIONING;
+    case CS::WS_ERROR:
+        return to == CS::RECONNECTING || to == CS::OFFLINE || to == CS::WIFI_CONNECTING;
     case CS::BLE_PROVISIONING:
+        return to == CS::BLE_CONNECTED || to == CS::WIFI_CONNECTING;
+    case CS::BLE_CONNECTED:
         return to == CS::WIFI_CONNECTING;
     }
     return false;

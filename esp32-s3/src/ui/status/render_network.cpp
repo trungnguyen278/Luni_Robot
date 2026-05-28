@@ -1,8 +1,10 @@
 #include "ui/VariantRegistry.hpp"
+#include "ui/SceneManager.hpp"
 #include "display/GfxEngine.hpp"
 #include "display/MathHelpers.hpp"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 using namespace geom;
 using namespace math;
@@ -60,7 +62,10 @@ static void render_wifi_connect(GfxEngine& gfx, float t, const ColorContext& col
 
     gfx.drawText("CONNECTING", SCX, STATUS_H + 104, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER);
-    gfx.drawText("EVI-NETWORK", SCX, STATUS_H + 120, colors.accent, 1,
+
+    const auto& sd = SceneManager::instance().getSceneData();
+    const char* ssid = (sd.ssid[0] != '\0') ? sd.ssid : "WI-FI";
+    gfx.drawText(ssid, SCX, STATUS_H + 120, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 217);
 
     // Progress bar
@@ -108,7 +113,7 @@ static void render_offline(GfxEngine& gfx, float t, const ColorContext& colors) 
                  GfxEngine::TextAlign::CENTER, 140);
 }
 
-// network-ble-pair: BT icon with expanding pulse rings
+// network-bt-scan: BT icon with expanding pulse rings
 static void render_ble_pair(GfxEngine& gfx, float t, const ColorContext& colors) {
     // Pulse rings
     for (int w = 0; w < 2; w++) {
@@ -124,7 +129,16 @@ static void render_ble_pair(GfxEngine& gfx, float t, const ColorContext& colors)
 
     gfx.drawText("PAIRING MODE", SCX, STATUS_H + 126, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER);
-    gfx.drawText("OPEN EVI APP", SCX, SCREEN_H - 26, colors.accent, 1,
+
+    const auto& sd = SceneManager::instance().getSceneData();
+    if (sd.ble_pin[0] != '\0') {
+        gfx.drawText("PIN", SCX, STATUS_H + 148, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER, 140);
+        gfx.drawText(sd.ble_pin, SCX, STATUS_H + 162, colors.accent, 2,
+                     GfxEngine::TextAlign::CENTER);
+    }
+
+    gfx.drawText("OPEN APP", SCX, SCREEN_H - 26, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 217);
     gfx.drawText("TO CONNECT", SCX, SCREEN_H - 12, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 140);
@@ -152,17 +166,49 @@ static void render_server_error(GfxEngine& gfx, float t, const ColorContext& col
     gfx.popTransform();
 }
 
+// network-bt-paired: BT icon + phone + check mark + "BLUETOOTH ON"
+static void render_bt_paired(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float pop = t < 0.25f ? ease::out(t / 0.25f) : 1.0f;
+    float wave = sinf(t * TAU) * 0.5f + 0.5f;
+    uint8_t btOp = (uint8_t)(217 + wave * 38);
+
+    // BT icon on left
+    drawBTIcon(gfx, SCX - 60, SCY - 10, colors.accent, btOp);
+
+    // Phone shape on right
+    gfx.fillRoundedRect(SCX + 44, SCY - 36, 32, 52, 4, colors.accent);
+    gfx.fillRoundedRect(SCX + 48, SCY - 32, 24, 40, 2, colors.bg, 102);
+    gfx.fillCircle(SCX + 60, SCY + 10, 2, colors.bg, 255);
+
+    // Dashed link line
+    gfx.drawDashedLine(SCX - 38, SCY - 10, SCX + 40, SCY - 10,
+                       colors.accent, 2, 4, 4);
+
+    // Center check circle (pops in)
+    int16_t checkR = (int16_t)(14.0f * pop);
+    gfx.fillCircle(SCX, SCY - 10, checkR, colors.accent);
+    if (pop > 0.5f) {
+        // Checkmark inside circle
+        gfx.drawLine(SCX - 6, SCY - 10, SCX - 1, SCY - 5, colors.bg, 3);
+        gfx.drawLine(SCX - 1, SCY - 5, SCX + 7, SCY - 15, colors.bg, 3);
+    }
+
+    gfx.drawText("BLUETOOTH ON", SCX, SCY + 46, colors.eye, 1,
+                 GfxEngine::TextAlign::CENTER);
+}
+
 // --- Category registration ---
 const VariantDef NETWORK_VARIANTS[] = {
     {"network-wifi-scan",     "Searching",   1800, TONE_CYAN,   render_wifi_scan},
     {"network-wifi-connect",  "Connecting",  2400, TONE_CYAN,   render_wifi_connect},
     {"network-wifi-retry",    "Retrying",    2000, TONE_ORANGE, render_wifi_retry},
     {"network-offline",       "Offline",     2400, TONE_RED,    render_offline},
-    {"network-ble-pair",      "BLE pairing", 2200, TONE_PURPLE, render_ble_pair},
+    {"network-bt-scan",      "BLE pairing", 2200, TONE_PURPLE, render_ble_pair},
+    {"network-bt-paired",     "Bluetooth on",2600, TONE_PURPLE, render_bt_paired},
     {"network-server-error",  "Server down", 2400, TONE_RED,    render_server_error},
 };
 
 extern const CategoryDef CAT_NETWORK = {
-    "network", "Network", ContentKind::SCENE, TONE_CYAN,
+    "network", "Network", ContentKind::STATUS, TONE_CYAN,
     NETWORK_VARIANTS, sizeof(NETWORK_VARIANTS) / sizeof(NETWORK_VARIANTS[0])
 };

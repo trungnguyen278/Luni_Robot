@@ -38,6 +38,7 @@ public:
     void deinit();
 
     void onConfigComplete(OnConfigComplete cb) { config_cb_ = cb; }
+    const char* getPairingPin() const { return pairing_pin_; }
 
     // Access levels
     enum class AccessLevel : uint8_t { LEVEL_0 = 0, LEVEL_1 = 1, LEVEL_2 = 2 };

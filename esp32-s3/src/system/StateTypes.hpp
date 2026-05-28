@@ -15,6 +15,8 @@ enum class ConnectionState : uint8_t
     ONLINE,
     RECONNECTING,
     BLE_PROVISIONING,
+    WS_ERROR,
+    BLE_CONNECTED,
 };
 
 // === Interaction State (shared S3 + C5) ===

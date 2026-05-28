@@ -36,7 +36,7 @@ inline uint16_t rgb565(uint8_t r8, uint8_t g8, uint8_t b8) {
     return ((r8 >> 3) << 11) | ((g8 >> 2) << 5) | (b8 >> 3);
 }
 
-enum class ContentKind : uint8_t { EMOTION, SCENE };
+enum class ContentKind : uint8_t { EMOTION, SCENE, STATUS };
 
 struct ColorContext {
     uint16_t eye;

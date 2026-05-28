@@ -297,6 +297,10 @@ bool DeviceProfile::setup(AppController& app)
         case uart_proto::ControlCmd::REBOOT:
             esp_restart();
             break;
+        case uart_proto::ControlCmd::BOOT_DONE:
+            ESP_LOGI(TAG, "S3 boot complete, starting network");
+            AppController::instance().startNetwork();
+            break;
         case uart_proto::ControlCmd::WIFI_CONFIG: {
             if (len < 2) break;
             size_t pos = 0;

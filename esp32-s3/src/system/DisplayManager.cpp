@@ -334,6 +334,7 @@ void DisplayManager::taskEntry(void *arg)
 
 void DisplayManager::handleInteraction(state::InteractionState s, state::InputSource src)
 {
+    if (booting_.load()) return;
     switch (s)
     {
     case state::InteractionState::TRIGGERED:
@@ -356,6 +357,7 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
 
 void DisplayManager::handleConnectivity(state::ConnectionState s)
 {
+    if (booting_.load()) return;
     text_active_ = false;
     switch (s)
     {
@@ -364,13 +366,10 @@ void DisplayManager::handleConnectivity(state::ConnectionState s)
         break;
 
     case state::ConnectionState::WIFI_CONNECTING:
-        scene_mgr_.showScene("network", "network-wifi-connect");
+        scene_mgr_.showScene("network", "network-wifi-scan");
         break;
 
     case state::ConnectionState::WIFI_CONNECTED:
-        scene_mgr_.showScene("network", "network-wifi-connect");
-        break;
-
     case state::ConnectionState::WS_CONNECTING:
     case state::ConnectionState::WS_AUTHENTICATING:
         scene_mgr_.showScene("network", "network-wifi-connect");
@@ -385,13 +384,22 @@ void DisplayManager::handleConnectivity(state::ConnectionState s)
         break;
 
     case state::ConnectionState::BLE_PROVISIONING:
-        scene_mgr_.showScene("network", "network-ble-pair");
+        scene_mgr_.showScene("network", "network-bt-scan");
+        break;
+
+    case state::ConnectionState::WS_ERROR:
+        scene_mgr_.showScene("network", "network-server-error");
+        break;
+
+    case state::ConnectionState::BLE_CONNECTED:
+        scene_mgr_.showScene("network", "network-bt-paired");
         break;
     }
 }
 
 void DisplayManager::handleSystem(state::SystemState s)
 {
+    if (booting_.load()) return;
     switch (s)
     {
     case state::SystemState::BOOTING:
@@ -413,6 +421,7 @@ void DisplayManager::handleSystem(state::SystemState s)
 
 void DisplayManager::handlePower(state::PowerState s)
 {
+    if (booting_.load()) return;
     switch (s)
     {
     case state::PowerState::NORMAL:
@@ -438,6 +447,7 @@ void DisplayManager::handlePower(state::PowerState s)
 
 void DisplayManager::handleEmotion(state::EmotionState s)
 {
+    if (booting_.load()) return;
     switch (s)
     {
     case state::EmotionState::HAPPY:
@@ -567,6 +577,7 @@ void DisplayManager::clearText()
 void DisplayManager::playBootSequence()
 {
     ESP_LOGI(TAG, "Boot sequence starting");
+    booting_.store(true);
     text_active_ = false;
 
     scene_mgr_.showScene("boot", "boot-poweron");
@@ -581,6 +592,7 @@ void DisplayManager::playBootSequence()
     scene_mgr_.showScene("boot", "boot-ready-personal");
     vTaskDelay(pdMS_TO_TICKS(3000));
 
+    booting_.store(false);
     ESP_LOGI(TAG, "Boot sequence complete");
     scene_mgr_.showEmotion("normal");
 }

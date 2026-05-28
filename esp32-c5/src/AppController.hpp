@@ -34,6 +34,8 @@ public:
     void reboot();
 
     void postEvent(event::AppEvent evt);
+    void startNetwork();
+    bool isNetworkStarted() const { return network_started_.load(); }
 
     void attachModules(std::unique_ptr<NetworkManager> networkIn,
                        std::unique_ptr<SpiBridge> spiIn,
@@ -67,6 +69,7 @@ private:
     QueueHandle_t app_queue = nullptr;
     TaskHandle_t  app_task  = nullptr;
     std::atomic<bool> started{false};
+    std::atomic<bool> network_started_{false};
 
     BluetoothService ble_;
     bool ble_active_ = false;
