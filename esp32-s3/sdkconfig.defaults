@@ -4,3 +4,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4MB.csv"
 
 # FreeRTOS timer task needs more stack for PowerManager -> DisplayManager SPI calls
 CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+
+# Enable PSRAM (required for GfxEngine framebuffer)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y

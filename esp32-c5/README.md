@@ -1,419 +1,178 @@
-# Luni - Trợ Lý Giọng Nói ESP32
+# Luni V2 — ESP32-C5 Firmware
 
-Firmware modular, hướng sự kiện cho thiết bị trợ lý giọng nói dựa trên ESP32 với kết nối WiFi, xử lý âm thanh I/O, quản lý màn hình và tối ưu hóa năng lượng.
+Firmware cho MCU mang (network MCU) trong kien truc dual-MCU cua Luni Robot.
+ESP32-C5 dam nhan WiFi, WebSocket, BLE provisioning, va giao tiep voi ESP32-S3 qua SPI + UART.
 
-## 🎯 Tính Năng Chính
-
-- **Voice Input/Output**: Ghi âm I2S (mic INMP441) và phát âm thanh (loa MAX98357)
-- **Audio Codecs**: Hỗ trợ nén ADPCM và Opus
-- **Display Management**: Driver màn hình ST7789 với hệ thống animation, render trực tiếp qua AnimationPlayer (không dùng framebuffer)
-- **Network Connectivity**: Tích hợp WiFi, WebSocket và MQTT client
-- **MEO SDK Integration**: Tích hợp MEO feature invoke/event model cho IoT communication
-- **Emotion System**: Hệ thống cảm xúc điều khiển từ server (WebSocket/MQTT → `NetworkManager::parseEmotionCode()` → `StateManager` → Display)
-- **Power Management**: Giám sát pin qua ADC, phát hiện sạc TP4056
-- **State Management**: Event hub trung tâm với pattern publish-subscribe thread-safe
-- **Multi-threaded**: Kiến trúc đa luồng FreeRTOS
-- **Modular Design**: Tách biệt rõ ràng giữa hardware drivers và application logic
-- **OTA Update**: Hỗ trợ cập nhật firmware 
-- **WebSocket Configuration**: Cấu hình động qua WebSocket (xem docs/WEBSOCKET_CONFIG_*)
-
-## 📋 Yêu Cầu Hệ Thống
-
-- **Platform**: ESP32 (ESP-IDF framework)
-- **Framework**: ESP-IDF với C++17
-- **Build Tool**: PlatformIO
-- **Monitor Speed**: 115200 baud
-- **Flash Size**: 16MB (hỗ trợ OTA)
-
-## 🏗️ Tổng Quan Kiến Trúc
-
-Luni tuân theo kiến trúc phân lớp, hướng sự kiện:
+## Kien Truc Dual-MCU
 
 ```
-AppController (Bộ Điều Phối Trung Tâm)
-        ↑
-    StateManager (Event Hub - Thread-safe)
-        ↑
-   Managers (Business Logic)
-   ├── AudioManager       - Quản lý capture/playback
-   ├── DisplayManager     - Quản lý UI/animations (subscribe state trực tiếp)
-   ├── NetworkManager     - WiFi + WebSocket + OTA streaming
-   ├── PowerManager       - Giám sát pin, publish PowerState
-   └── OTAUpdater         - Ghi/validate firmware chunks
-        ↑
-    Drivers (Hardware Abstraction)
-   ├── I2SAudioInput_INMP441
-   ├── I2SAudioOutput_MAX98357
-   ├── DisplayDriver (ST7789)
-   ├── TouchInput
-   └── Power (ADC, GPIO)
-        ↑
-    Hardware (ESP32 peripherals)
+ESP32-C5 (Network MCU)              ESP32-S3 (Media MCU)
++---------------------------+       +---------------------------+
+| WiFi 802.11b/g/n/ax      |       | Display ST7789 240x240    |
+| WebSocket Client (WSS)   | SPI   | Audio I2S (Mic + Speaker) |
+| BLE Provisioning (NimBLE) |<----->| Power Management (ADC)    |
+| OTA Manager (HTTP)        | UART  | Touch/Button Input        |
+| DataSyncManager           |<----->| Scene/Emotion Rendering   |
++---------------------------+       +---------------------------+
 ```
 
-### Core Components
+- **SPI**: Full-duplex 256-byte transactions — audio Opus frames (frame-aligned)
+- **UART**: Variable-length frames — control/status/sync messages
 
-| Component | Trách Nhiệm |
-|-----------|-------------|
-| **AppController** | Bộ điều phối trung tâm, xử lý AppEvent qua hàng đợi FreeRTOS, điều khiển control logic |
-| **StateManager** | Event hub thread-safe với publish-subscribe pattern, quản lý tất cả state changes |
-| **AudioManager** | Quản lý capture/playback audio, codec pipeline, stream buffer |
-| **DisplayManager** | Điều khiển màn hình ST7789, animations, subscribe state để cập nhật UI tự động |
-| **NetworkManager** | WiFi, WebSocket, retry/portal logic, OTA streaming |
-| **PowerManager** | Giám sát ADC pin, smoothing %, publish PowerState |
+## Tinh Nang
 
-## 📁 Cấu Trúc Dự Án
+- **WebSocket**: Persistent WSS connection voi device token authentication
+- **BLE Provisioning**: 3-level access control (PIN + HMAC-SHA256 admin auth), 12 GATT characteristics
+- **OTA Update**: HTTP chunked download voi SHA256 verification
+- **Data Sync**: Nhan time/weather/lunar/location tu server, relay sang S3
+- **State Machine**: 8 connection states voi fail-reason-based retry + BLE fallback
+- **CLI Console**: UART0 debug console (status, config, set wifi/ws/token/name)
+
+## Yeu Cau
+
+- **Platform**: ESP32-C5 (RISC-V)
+- **Framework**: ESP-IDF 5.5 + PlatformIO
+- **C++ Standard**: C++17
+- **Flash**: 4MB
+
+## Cau Truc Du An
 
 ```
-Luni/
-├── src/
-│   ├── main.cpp                      # Entry point, khởi tạo AppController
-│   ├── AppController.cpp/hpp         # Orchestrator chính, xử lý AppEvent
-│   ├── Version.hpp                   # Metadata: APP_VERSION, DLuniCE_MODEL, BUILD_DATE
-│   ├── config/
-│   │   ├── DLuniceProfile.cpp/hpp     # Dependency injection, wiring managers/drivers
-│   ├── assets/                       # Compiled C++ assets
-│   │   ├── emotions/                 # Animation emotion (RLE-encoded)
-│   │   │   ├── neutral.cpp/hpp
-│   │   │   ├── idle.cpp/hpp
-│   │   │   ├── listening.cpp/hpp
-│   │   │   ├── happy.cpp/hpp
-│   │   │   ├── sad.cpp/hpp
-│   │   │   ├── thinking.cpp/hpp
-│   │   │   └── stun.cpp/hpp
-│   │   └── icons/                    # Icon assets (battery, charging, etc.)
-│   ├── system/
-│   │   ├── StateManager.cpp/hpp      # State hub (thread-safe)
-│   │   ├── StateTypes.hpp            # State enumerations
-│   │   ├── AudioManager.cpp/hpp      # Audio logic, codec tasks
-│   │   ├── DisplayManager.cpp/hpp    # Display logic, animation playback
-│   │   ├── NetworkManager.cpp/hpp    # Network logic, emotion parsing
-│   │   ├── PowerManager.cpp/hpp      # Power monitoring
-│   │   ├── BluetoothService.cpp/hpp  # Bluetooth support
-│   │   └── OTAUpdater.cpp/hpp        # OTA firmware update
-│   └── CMakeLists.txt
-├── lib/
-│   ├── audio/
-│   │   ├── AudioCodec.hpp            # Abstract codec interface
-│   │   ├── AudioInput.hpp/Output.hpp # Audio I/O abstractions
-│   │   ├── I2SAudioInput_INMP441.cpp/hpp   # INMP441 mic driver
-│   │   ├── I2SAudioOutput_MAX98357.cpp/hpp # MAX98357 speaker driver
-│   │   ├── AdpcmCodec.cpp/hpp        # ADPCM compression
-│   │   └── OpusCodec.cpp/hpp         # Opus compression
-│   ├── display/
-│   │   ├── DisplayDriver.cpp/hpp     # ST7789 low-level driver
-│   │   ├── AnimationPlayer.cpp/hpp   # Multi-frame RLE animation engine
-│   │   └── Font8x8.hpp               # Bitmap font data
-│   ├── network/
-│   │   ├── WifiService.cpp/hpp       # WiFi connectivity
-│   │   ├── WebSocketClient.cpp/hpp   # WebSocket client
-│   │   ├── MqttClient.cpp/hpp        # MQTT client (MEO SDK compatible)
-│   │   └── web_page.hpp              # Web UI assets (captive portal)
-│   ├── meo/
-│   │   └── MeoFeature.cpp/hpp        # MEO SDK feature invoke/event layer
-│   ├── power/
-│   │   └── Power.cpp/hpp             # Power driver (ADC, GPIO)
-│   └── touch/
-│       └── TouchInput.cpp/hpp        # Touch/button input wrapper
-├── include/
-│   └── system/
-│       └── MQTTConfig.hpp            # MQTT configuration
-├── docs/
-│   ├── MQTT_SPEC.md                  # Đặc tả giao thức MQTT
-│   ├── MQTT_SERVER_DEV.md            # Hướng dẫn phát triển MQTT server
-│   ├── BLE_APP_DEV.md                # Phát triển ứng dụng BLE provisioning
-│   └── key_concepts.md               # Các khái niệm chính MEO SDK
-├── scripts/
-│   ├── convert_assets.py             # Convert images/GIFs thành C++ arrays
-│   ├── convert_gif.py                # Convert GIF thành RLE animation
-│   └── convert_logo.py               # Convert logo
-├── server_test/
-│   ├── dummy_server.py               # Server test WebSocket
-│   └── dummy_server_cmd.py           # Server test command line
-├── managed_components/               # ESP-IDF managed components
-│   └── espressif__esp_websocket_client/
-├── CMakeLists.txt                    # ESP-IDF build config
-├── platformio.ini                    # PlatformIO config
-├── partitions_16mb_ota.csv           # Partition table cho OTA
-└── README.md
+esp32-c5/
++-- src/
+|   +-- main.cpp                         # Entry point
+|   +-- AppController.cpp/hpp            # Central orchestrator, event queue
+|   +-- Version.hpp                      # APP_VERSION, DLuniCE_MODEL
+|   +-- config/
+|   |   +-- DeviceProfile.cpp/hpp        # Dependency injection, module wiring
+|   |   +-- PinConfig.hpp                # GPIO assignments (SPI, UART, NVS reset)
+|   |   +-- ServerConfig.hpp             # WS URL, OTA URL defaults
+|   +-- protocol/
+|   |   +-- WsProtocol.cpp/hpp           # WS message types, JSON builders/parsers
+|   |   +-- WsMessageHandler.cpp/hpp     # Incoming WS message dispatcher
+|   +-- system/
+|   |   +-- StateManager.cpp/hpp         # Thread-safe state hub (pub-sub)
+|   |   +-- StateTypes.hpp               # ConnectionState(8), InteractionState(6),
+|   |   |                                # OtaState(8), EmotionState(16), etc.
+|   |   +-- NetworkManager.cpp/hpp       # WiFi + WS lifecycle, heartbeat, state sync
+|   |   +-- BluetoothService.cpp/hpp     # NimBLE GATT, 3-level auth, 12 characteristics
+|   |   +-- DataSyncManager.cpp/hpp      # Parse sync_data JSON, relay binary to S3
+|   |   +-- OtaManager.cpp/hpp           # HTTP OTA download + verify
+|   |   +-- LogManager.cpp/hpp           # Forward logs to server via WS
+|   |   +-- SpiBridge.cpp/hpp            # SPI slave, frame-aligned Opus transfer
+|   |   +-- UartBridge.cpp/hpp           # UART TX/RX, 6 message types
+|   |   +-- CliConsole.cpp/hpp           # UART0 debug CLI
++-- lib/
+|   +-- network/
+|   |   +-- WebSocketClient.cpp/hpp      # ESP websocket client wrapper
+|   |   +-- HttpClient.cpp/hpp           # HTTP client for OTA
+|   |   +-- WifiService.cpp/hpp          # WiFi STA management
+|   +-- uart/
+|   |   +-- UartProtocol.hpp             # Frame format, MsgType enum, StatusPayload
+|   +-- spi/
+|   |   +-- SpiProtocol.hpp              # 256-byte frame format, CRC8
++-- docs/
+|   +-- BLE_APP_DEV.md                   # Mobile app BLE provisioning guide
++-- platformio.ini
++-- sdkconfig.esp32-c5
 ```
 
-## 🔄 State Management (Quản Lý Trạng Thái)
+## State Management
 
-Hệ thống sử dụng state machine tập trung thread-safe với các loại state sau:
+### Connection State (C5 owns, relays to S3)
+| State | Description |
+|-------|-------------|
+| OFFLINE | No WiFi |
+| WIFI_CONNECTING | Scanning/connecting |
+| WIFI_CONNECTED | Got IP |
+| WS_CONNECTING | TCP + WS handshake |
+| WS_AUTHENTICATING | Sending device_token |
+| ONLINE | Fully connected |
+| RECONNECTING | Auto-retry with backoff |
+| BLE_PROVISIONING | BLE config mode |
 
-### Interaction State
-- `IDLE` - Hệ thống sẵn sàng, không hoạt động
-- `TRIGGERED` - Phát hiện input (nút, wakeword, VAD)
-- `LISTENING` - Đang ghi âm từ microphone
-- `PROCESSING` - Đang chờ phản hồi từ server/AI
-- `SPEAKING` - Đang phát âm thanh phản hồi
-- `CANCELLING` - User hủy tương tác
-- `MUTED` - Chế độ riêng tư (input disabled)
-- `SLEEPING` - Chế độ tiết kiệm năng lượng
+### Retry Strategy
+Dua tren `ConnectFailReason`:
+- **WIFI_AUTH_FAIL / AUTH_REJECTED**: Khong retry, fallback BLE provisioning
+- **SERVER_UNREACHABLE / WS_HANDSHAKE_FAIL**: Exponential backoff (1s-30s, max 10 retries)
+- **WIFI_NOT_FOUND / WIFI_TIMEOUT**: 3 retries, fallback BLE
+- **DNS_FAIL / INTERNET_CHECK_FAIL**: 5 retries, fallback BLE
 
-### Connectivity State
-- `OFFLINE` - Không có kết nối WiFi
-- `CONNECTING_WIFI` - Đang kết nối WiFi
-- `WIFI_PORTAL` - Chế độ AP để cấu hình
-- `CONNECTING_WS` - Đang kết nối WebSocket
-- `ONLINE` - Kết nối đầy đủ
+### Interaction State (shared C5 + S3)
+IDLE -> TRIGGERED -> LISTENING -> PROCESSING -> SPEAKING -> IDLE
 
-### Power State
-- `NORMAL` - Pin đầy đủ
-- `CHARGING` - Đang sạc
-- `FULL_BATTERY` - Sạc đầy
-- `CRITICAL` - Pin cực thấp (tự động deep sleep)
-- `ERROR` - Lỗi pin/ngắt kết nối
+### Emotion State (16 values)
+NEUTRAL, HAPPY, SAD, ANGRY, CONFUSED, EXCITED, CALM, THINKING,
+DISGUSTED, NERVOUS, EMBARRASSED, CURIOUS, ANNOYED, COOL, SUSPICIOUS, DETERMINED
 
-### System State
-- `BOOTING` - Khởi động
-- `RUNNING` - Hoạt động bình thường
-- `ERROR` - Lỗi hệ thống
-- `MAINTENANCE` - Chế độ bảo trì
-- `UPDATING_FIRMWARE` - Đang cập nhật OTA
-- `FACTORY_RESETTING` - Đang reset về cài đặt gốc
+## Communication Protocols
 
-### Emotion State
-- `NEUTRAL` - Mặc định, không cảm xúc đặc biệt (Code: "00")
-- `HAPPY` - Vui vẻ, thân thiện (Code: "01")
-- `ANGRY` - Cảnh báo, khẩn cấp (Code: "02")
-- `EXCITED` - Ngạc nhiên, phấn khích (Code: "03")
-- `SAD` - Đồng cảm, quan tâm (Code: "10")
-- `CONFUSED` - Không chắc chắn, cần làm rõ (Code: "12")
-- `CALM` - Nhẹ nhàng, an tâm (Code: "13")
-- `THINKING` - Đang xử lý (Code: "99")
+### UART Protocol (C5 <-> S3)
+Frame: `[0x55 start][type:1][len:1][payload:0-250][crc8:1]`
 
-## 🚀 Build và Flash
+| MsgType | Direction | Description |
+|---------|-----------|-------------|
+| STATUS_UPDATE (0x01) | C5->S3 | interaction + connection + system + emotion |
+| CONTROL_CMD (0x02) | S3->C5 | START, END, SET_VOLUME, REBOOT, etc. |
+| SYNC_DATA (0x03) | C5->S3 | Weather, time, lunar, city (binary packed) |
+| OTA_STATUS (0x04) | C5->S3 | OTA state + progress percent |
+| LOG_ENTRY (0x05) | S3->C5 | S3 logs forwarded to server |
+| DEVICE_CMD (0x06) | C5->S3 | Server commands (emotion, scene, TTS, etc.) |
 
-### Cài Đặt
+### SPI Protocol (C5 <-> S3)
+Fixed 256-byte full-duplex: `[0xA5 magic][type:1][len:2 LE][payload:250][seq:1][crc8:1]`
+
+**Frame-aligned Opus transfer** (C5->S3 downlink):
+```
+[frame_count:1][len_hi:1][len_lo:1][opus_data...]...[padding]
+```
+Moi Opus frame co 2-byte length header. Neu frame khong vua trong transaction,
+header duoc giu lai (`pending_header_`) cho transaction tiep theo.
+
+### WebSocket Protocol (C5 <-> Server)
+- **Text frames**: JSON messages (auth, device_info, state_update, heartbeat, etc.)
+- **Binary frames**: Opus audio (5-byte header: direction + sequence + length)
+- **Authentication**: Device token gui ngay sau WS handshake
+
+## Build & Flash
+
 ```bash
-# Cài PlatformIO
-pip install platformio
+# Build
+pio run
 
-# Cài ESP-IDF (nếu cần)
-# https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/
+# Upload + Monitor
+pio run -t upload && pio run -t monitor
+
+# Monitor only
+pio run -t monitor
 ```
 
-### Build
-```bash
-# Build project
-pio run -e esp32dev
+## CLI Commands
 
-# Build và monitor
-pio run -e esp32dev -t monitor
+Ket noi UART0 (115200 baud):
+
+```
+help                  Show commands
+status                Show state + heap
+config                Show NVS config
+set wifi <ssid> [pw]  Set WiFi credentials
+set ws <url>          Set WebSocket URL
+set token <tok>       Set device token
+set name <name>       Set device name
+erase_nvs             Erase all NVS & restart
+restart               Restart device
 ```
 
-### Upload
-```bash
-# Upload lên thiết bị
-pio run -e esp32dev -t upload
+## Tai Lieu
 
-# Upload và mở monitor
-pio run -e esp32dev -t uploadandmonitor
-```
+- [BLE_APP_DEV.md](docs/BLE_APP_DEV.md) — Mobile app BLE provisioning guide
+- [PLAN_ROBOT.md](../docs/plan/PLAN_ROBOT.md) — System refactoring plan
+- [SYSTEM_ARCHITECTURE.md](../docs/plan/SYSTEM_ARCHITECTURE.md) — Server + device architecture
 
-## 🔧 Cấu Hình
+## License
 
-Cấu hình chính trong `src/config/DLuniceProfile.cpp`:
-- **Pin assignments**: I2S, Display SPI, Touch, Power ADC
-- **WiFi credentials**: SSID, password (hoặc dùng captive portal)
-- **Audio buffer sizes**: Stream buffer sizes
-- **Display parameters**: Resolution, rotation
-- **Power thresholds**: Low battery, critical levels
+[TBD]
 
-## 📡 Yêu Cầu Phần Cứng
-
-### Linh Kiện Bắt Buộc
-- **MCU**: ESP32 DevKit (16MB flash khuyến nghị cho OTA)
-- **Microphone**: INMP441 (I2S digital audio)
-- **Speaker**: MAX98357 amplifier (I2S audio)
-- **Display**: ST7789 1.3" LCD (240x240, SPI)
-- **Battery**: Li-ion 3.7V + TP4056 charging module
-- **WiFi**: Tích hợp sẵn ESP32 (2.4GHz)
-
-### Pin Mapping
-Cấu hình trong `DLuniceProfile.cpp`:
-- **I2S MIC (INMP441)**: BCLK, LRCLK, DIN
-- **I2S Speaker (MAX98357)**: BCLK, LRCLK, DOUT
-- **SPI Display (ST7789)**: MOSI, CLK, CS, DC, RST, BL
-- **Power**: ADC pin cho battery voltage, GPIO cho TP4056 signals
-- **Touch/Button**: GPIO cho user input
-
-## 📚 Chi Tiết Modules
-
-### Audio System
-- **Input**: INMP441 digital microphone qua I2S
-- **Output**: MAX98357 class-D amplifier qua I2S
-- **Codecs**: ADPCM (bandwidth thấp) và Opus (chất lượng cao)
-- **Streaming**: Real-time capture/playback với codec support
-- **Tasks**: MicTask, CodecTask (core 0), SpkTask (core 1)
-
-### Display System
-- **Driver**: ST7789 SPI interface (240x240)
-- **AnimationPlayer**: Direct rendering, không dùng framebuffer
-- **Animations**: RLE-encoded sequences (xem `scripts/convert_assets.py`)
-- **Registered emotions**: neutral, idle, listening, happy, sad, thinking, stun
-- **Subscribe state**: DisplayManager tự động cập nhật UI khi state thay đổi
-
-### Network System
-- **WiFi**: ESP32 native 802.11b/g/n (2.4GHz)
-- **WebSocket**: Persistent connection cho bidirectional communication
-- **MQTT**: MEO SDK compatible client cho IoT messaging
-- **MEO SDK**: Feature invoke/event model (xem `docs/MQTT_SPEC.md`)
-- **BLE Provisioning**: Cấu hình WiFi + credentials qua Bluetooth
-- **Captive Portal**: AP mode để provisioning WiFi
-- **Retry Logic**: Tự động reconnect với backoff strategy
-- **OTA Streaming**: Nhận firmware chunks qua WebSocket/MQTT
-
-### MEO SDK Integration
-- **Feature Invoke**: Server → DLunice (topic: `meo/{userId}/{dLuniceId}/feature`)
-- **Feature Event**: DLunice → Server (topic: `meo/{userId}/{dLuniceId}/event/{eventName}`)
-- **Feature Response**: Topic: `meo/{userId}/{dLuniceId}/event/feature_response`
-- **BLE Provisioning**: Cấu hình dLuniceId, tx_key, userId qua BLE characteristics
-
-### Emotion System
-- **Flow**: Server gửi emotion code (2 chars) qua WebSocket/MQTT → `NetworkManager::parseEmotionCode()` → `StateManager::setEmotionState()` → `DisplayManager` tự động play animation
-- **Mapping**: Xem `docs/MQTT_SPEC.md` để biết chi tiết codes
-- **Thread-safe**: Callback được gọi ngoài lock để tránh deadlock
-
-### Power System
-- **Battery Monitoring**: ADC-based voltage measurement với smoothing
-- **Charging Detection**: TP4056 CHRG/STDBY signals
-- **Sleep Modes**: Light sleep và deep sleep (khi CRITICAL)
-- **Hysteresis**: Smooth battery percentage reporting
-
-## 🧵 Threading Model
-
-### Task Configuration
-| Task | Priority | Stack | Core | Ghi Chú |
-|------|----------|-------|------|---------|
-| AppControllerTask | 4 | 8KB | 1 | Main event loop |
-| DisplayLoop | 3 | 6KB | 1 | UI/animation rendering |
-| AudioSpkTask | 5 | 4KB | 1 | Speaker playback |
-| AudioMicTask | 5 | 4KB | 0 | Microphone capture |
-| AudioCodecTask | 4 | 8KB | 0 | Codec encode/decode |
-| NetworkLoop | 3 | 8KB | NO_AFFINITY | WiFi + WebSocket + MQTT |
-
-### Core Assignment
-- **Core 0**: WiFi driver, MQTT, AudioMicTask, AudioCodecTask
-- **Core 1**: AppControllerTask, DisplayLoop, AudioSpkTask
-
-## 🔌 Event Flow
-
-### State-driven (Reactive)
-```
-Hardware Change
-    ↓
-Driver detects
-    ↓
-Manager calls StateManager.setXxx()
-    ↓
-StateManager copies callbacks trong lock
-    ↓
-StateManager calls callbacks ngoài lock (thread-safe)
-    ↓
-AppController receives via queue (control logic)
-DisplayManager/AudioManager receive trực tiếp (UI/audio)
-```
-
-### Event-driven (Deterministic)
-```
-User Action / System Event
-    ↓
-AppEvent posted to AppController::postEvent()
-    ↓
-AppControllerTask processes sequentially
-    ↓
-Map event → state/actions
-    ↓
-Update StateManager
-    ↓
-Propagate to subscribers
-```
-
-## 🔄 Lifecycle (Chu Trình Khởi Động)
-
-### Khởi Động (app_main → AppController::start)
-1. `AppController::init()` - Khởi tạo event queue
-2. **Tạo AppControllerTask** (core 1, priority 4) - Đảm bảo queue ready
-3. `PowerManager::start()` - Sample pin sớm
-4. `DisplayManager::startLoop()` - Hiển thị boot UI
-5. `NetworkManager::start()` - Kết nối WiFi/WebSocket/MQTT
-6. `AudioManager::start()` - Khởi động audio pipeline
-7. `TouchInput::start()` - Kích hoạt input
-
-### Tắt (AppController::stop)
-Reverse order để tránh dangling references:
-1. `NetworkManager::stop()`
-2. `AudioManager::stop()`
-3. `DisplayManager::stopLoop()`
-4. `PowerManager::stop()`
-
-## 📝 Implementation Notes
-
-### Trạng Thái Hiện Tại
-- ✅ **Audio pipeline**: Mic → Codec → Speaker tasks hoạt động tốt
-- ✅ **Display system**: AnimationPlayer với RLE compression
-- ✅ **Emotion parsing**: NetworkManager → StateManager → DisplayManager
-- ✅ **State management**: Thread-safe publish-subscribe
-- ✅ **Power management**: ADC monitoring, TP4056 detection
-- ✅ **OTA Update**: OTAUpdater implemented
-- ✅ **MQTT Client**: MEO SDK compatible MQTT transport
-- ✅ **MEO Feature Layer**: Feature invoke/event model
-- ✅ **BLE Provisioning**: WiFi + credentials provisioning qua BLE
-- ⚠️ **NVS config**: Read/write helpers, cần UI để modify
-- ⚠️ **Touch input**: Basic support, cần polish UX
-- ⚠️ **Sleep/wake**: Logic implemented, cần test edge cases
-
-### Code Style
-- **C++17**: Modern C++ idioms
-- **RAII**: Resource management
-- **Smart pointers**: `std::unique_ptr` cho memory safety
-- **FreeRTOS**: Task-based concurrency
-- **Thread-safe**: Mutex + copy callbacks pattern
-- **No raw new/delete**: Sử dụng smart pointers
-
-## 🔧 Tool Scripts
-
-### Convert Assets
-```bash
-# Convert icon
-python scripts/convert_assets.py icon battery.png src/assets/icons/
-
-# Convert emotion (GIF → RLE animation)
-python scripts/convert_assets.py emotion happy.gif src/assets/emotions/ 20 true
-# Args: type, input, output_dir, fps, loop
-```
-
-## 🐛 Known Issues & Fixes
-
-- ✅ **Fixed**: Undefined TouchInput reference causing compilation errors
-- ✅ **Fixed**: DisplayManager animation race conditions
-- ✅ **Fixed**: MQTT reconnect after deep sleep
-- ⚠️ **Known**: BLE provisioning cần test với các thiết bị Android khác nhau
-
-## 📖 Tài Liệu Thêm
-
-- [`docs/MQTT_SPEC.md`](docs/MQTT_SPEC.md) - Đặc tả giao thức MQTT (MEO SDK compatible)
-- [`docs/MQTT_SERVER_DEV.md`](docs/MQTT_SERVER_DEV.md) - Hướng dẫn phát triển MQTT server
-- [`docs/BLE_APP_DEV.md`](docs/BLE_APP_DEV.md) - Phát triển ứng dụng BLE provisioning
-- [`docs/key_concepts.md`](docs/key_concepts.md) - Các khái niệm chính của MEO SDK
-
-## Repository
-
-## 📄 License
-
-[Thêm license tại đây]
-
-## 👥 Contributors
-
-**Trung Nguyen** - Core Developer
-
----
-
-**Phiên Bản**: v1.0.6  
-**DLunice Model**: Luni  
-**Trạng Thái**: Development (đang phát triển)  
-**Cập Nhật Cuối**: Tháng 5/2026
-```
+**Version**: 2.0.0
+**Model**: Luni-C5
+**Status**: Development

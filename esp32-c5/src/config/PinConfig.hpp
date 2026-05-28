@@ -4,7 +4,7 @@
 // Luni V2 - ESP32-C5 Pin Configuration
 // =============================================================================
 // ESP32-C5 has GPIO0-GPIO14 available.
-// Responsibilities: WiFi, WebSocket, MQTT, SPI slave bridge to S3
+// Responsibilities: WiFi, WebSocket, BLE, SPI slave bridge to S3
 // Audio, button, and display are now on S3.
 // =============================================================================
 

@@ -47,7 +47,7 @@ esp32-c5/
 │   │   ├── StateManager.cpp/hpp        # REFACTOR: thống nhất state machine
 │   │   ├── StateTypes.hpp              # REFACTOR: thêm ConnectionState, OtaState
 │   │   ├── NetworkManager.cpp/hpp      # VIẾT LẠI: WS-only + HTTP OTA
-│   │   ├── BluetoothService.cpp/hpp    # UPDATE: thêm device_token field
+│   │   ├── BluetoothService.cpp/hpp    # UPDATE: MAC-based identity, bỏ device_token
 │   │   ├── DataSyncManager.cpp/hpp     # MỚI: quản lý sync_data
 │   │   ├── OtaManager.cpp/hpp          # MỚI: HTTP-based OTA
 │   │   ├── LogManager.cpp/hpp          # MỚI: structured logging → server
@@ -99,7 +99,7 @@ enum class ConnectionState : uint8_t {
     WIFI_CONNECTING,    // Scanning/connecting WiFi
     WIFI_CONNECTED,     // WiFi OK, got IP
     WS_CONNECTING,      // DNS resolve + TCP connect + WS handshake
-    WS_AUTHENTICATING,  // WS open, sending device_token
+    WS_AUTHENTICATING,  // WS open, sending MAC identity
     ONLINE,             // Fully connected + authenticated
     RECONNECTING,       // Lost connection, auto-retry
     BLE_PROVISIONING,   // BLE config mode (no WiFi)
@@ -126,7 +126,7 @@ enum class ConnectFailReason : uint8_t {
     TLS_ERROR,           // Certificate verify fail
 
     // Auth layer
-    AUTH_REJECTED,       // device_token không hợp lệ (WS close 4001)
+    AUTH_REJECTED,       // MAC không được đăng ký trên server (WS close 4001)
     AUTH_TIMEOUT,        // Server không phản hồi auth trong 5s
 };
 
@@ -288,7 +288,7 @@ namespace ws {
 // Text frame message types — MUST match JSON "type" strings (see mapping below)
 enum class MsgType : uint8_t {
     // === Handshake ===
-    AUTH,               // Device → Server: first message (device_token + mac)
+    AUTH,               // Device → Server: first message (mac as device identity)
     AUTH_RESULT,        // Server → Device: { status: "ok"|"fail" }
 
     // === Device → Server ===
@@ -383,8 +383,8 @@ ParsedMessage parseMessage(const char* json, size_t len);
 
 class WebSocketClient {
 public:
-    // Connect with device token authentication
-    esp_err_t connect(const char* url, const char* device_token);
+    // Connect with MAC-based identification
+    esp_err_t connect(const char* url);
     void disconnect();
     bool isConnected() const;
 
@@ -407,10 +407,11 @@ public:
 
 private:
     // Authentication flow (sau WS open):
-    // 1. Gửi: { type: "auth", payload: { device_token, mac, fw_version, model } }
+    // 1. Gửi: { type: "auth", payload: { mac, fw_version, model } }
+    //    MAC = BLE MAC (ESP_MAC_BT), là device identity vĩnh viễn
     // 2. Chờ: { type: "auth_result", payload: { status: "ok" } } — timeout 5s
     // 3. OK → transition ONLINE, gửi device_info
-    //    Fail → server close 4001, device → RECONNECTING
+    //    Fail → server close 4001 (MAC chưa đăng ký) → BLE_PROVISIONING
     esp_err_t authenticate();
 
     // Auto-reconnect với exponential backoff
@@ -542,11 +543,12 @@ void NetworkManager::runConnectionStateMachine() {
 
             case ConnectionState::WS_AUTHENTICATING:
                 // WebSocketClient::authenticate() flow:
-                // 1. Send { type: "auth", payload: { device_token, mac, fw_version, model } }
+                // 1. Send { type: "auth", payload: { mac, fw_version, model } }
+                //    MAC (BLE) = device identity, survive NVS reset
                 // 2. Wait auth_result (timeout 5s)
                 // 3. status:"ok" → ONLINE
                 // 4. status:"fail" or timeout → RECONNECTING
-                // 5. WS close 4001 (invalid_token) → stop reconnect, → BLE_PROVISIONING
+                // 5. WS close 4001 (MAC chưa đăng ký) → BLE_PROVISIONING
                 break;
 
             case ConnectionState::ONLINE:
@@ -1013,7 +1015,7 @@ enum BleCharacteristic {
     CHAR_SSID         = 0x0001,  // WiFi SSID (R/W, max 32 bytes)
     CHAR_PASSWORD     = 0x0002,  // WiFi password (W-only, max 64 bytes)
     CHAR_WS_URL       = 0x0003,  // Server URL (R/W, max 128 bytes)
-    CHAR_DEV_TOKEN    = 0x0004,  // Device token (W-only, max 128 bytes)
+    // 0x0004 — removed (device_token replaced by MAC identity)
     CHAR_USER_ID      = 0x0005,  // Owner user ID (R/W, max 36 bytes, UUID)
 
     // === Info (Level 0+) ===
@@ -1068,14 +1070,14 @@ App (admin)                              Robot (ESP32-C5)
     │◀── Notify: 0x00 (OK) ──────────────────│ → Level 1
     │                                        │
     │── App calls server: ───────────────────│
-    │   POST /api/v1/devices/:id/ble-token   │
+    │   POST /api/v1/devices/:mac/ble-token  │
     │   → server returns admin_token         │
-    │   (HMAC-SHA256(device_token + ts,      │
+    │   (HMAC-SHA256(mac + ts,               │
     │    admin_secret))                      │
     │                                        │
     │── Write CHAR_ADMIN_AUTH ───────────────▶│
     │   { token: "hex64", ts: epoch }        │ Device verify:
-    │                                        │  HMAC(device_token + ts, admin_secret)
+    │                                        │  HMAC(mac + ts, admin_secret)
     │                                        │  Check ts within 5 min
     │◀── Notify: 0x00 (OK) ──────────────────│ → Level 2
     │                                        │
@@ -1087,14 +1089,15 @@ App (admin)                              Robot (ESP32-C5)
 ```
 
 **admin_secret provisioning:**
-- Server derives: `admin_secret = HMAC-SHA256(device_token, SERVER_SECRET_KEY)`
+- Server derives: `admin_secret = HMAC-SHA256(mac, SERVER_SECRET_KEY)`
 - Server trả `admin_secret` trong response của `POST /api/v1/devices` (register)
-- App ghi `admin_secret` vào device qua BLE (`CHAR_ADMIN_SECRET` 0x0014) cùng lúc với `device_token`
-- Khi `device_token` bị rotate → `admin_secret` cũng đổi → cần ghi lại qua BLE
+- App ghi `admin_secret` vào device qua BLE (`CHAR_ADMIN_SECRET` 0x0014)
+- `admin_secret` ổn định vì MAC không đổi — chỉ thay khi admin rotate SERVER_SECRET_KEY
 
 **Admin token verification trên device:**
-- `admin_secret` lưu trong NVS, provisioned qua BLE trong lúc pairing (xem trên)
-- Verify: `HMAC-SHA256(device_token || timestamp, admin_secret) == received_token`
+- `admin_secret` lưu trong NVS, provisioned qua BLE trong lúc pairing
+- Verify: `HMAC-SHA256(mac || timestamp, admin_secret) == received_token`
+- MAC = BLE MAC (ESP_MAC_BT), vĩnh viễn, survive NVS reset
 - Timestamp phải trong ±5 phút (device dùng NTP time hoặc millis delta)
 - Token dùng 1 lần (replay protection)
 
@@ -1123,7 +1126,7 @@ App (admin)                              Robot (ESP32-C5)
 |---|---|---|
 | `wifi_ssid` | ERASE | ERASE |
 | `wifi_password` | ERASE | ERASE |
-| `device_token` | ERASE | ERASE |
+| ~~`device_token`~~ | — (removed: MAC is device identity) | — |
 | `admin_secret` | ERASE | ERASE |
 | `ws_url` | KEEP | ERASE |
 | `user_id` | KEEP | ERASE |
@@ -1161,7 +1164,7 @@ App handling:
 `CLEAR_USERS (0x15)`: Xóa `user_id` trong NVS local.
 
 - Server-side `devices.owner_id` và `device_shares` **KHÔNG** bị ảnh hưởng.
-- Device vẫn kết nối server bình thường (dùng `device_token`, không dùng `user_id`).
+- Device vẫn kết nối server bình thường (dùng MAC identity, không dùng `user_id`).
 - Để xóa quyền truy cập server-side → dùng web admin hoặc API `DELETE /devices/:id/shares`.
 - Use case: reset device local identity trước khi chuyển cho user khác (kết hợp factory_reset).
 

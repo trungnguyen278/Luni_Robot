@@ -62,22 +62,48 @@ void UartBridge::stop()
     ESP_LOGI(TAG, "UartBridge stopped");
 }
 
+bool UartBridge::sendFrame(uart_proto::MsgType type, const uint8_t* payload, uint8_t len)
+{
+    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+    size_t frame_len = uart_proto::buildFrame(frame, type, payload, len);
+    if (frame_len == 0) return false;
+    int written = uart_write_bytes(cfg_.uart_num, frame, frame_len);
+    return written == (int)frame_len;
+}
+
 bool UartBridge::sendStatusUpdate(uint8_t interaction, uint8_t connectivity,
                                    uint8_t system_state, uint8_t emotion)
 {
     uart_proto::StatusPayload sp;
     sp.interaction   = interaction;
-    sp.connectivity  = connectivity;
+    sp.connection    = connectivity;
     sp.system_state  = system_state;
     sp.emotion       = emotion;
+    return sendFrame(uart_proto::MsgType::STATUS_UPDATE, (const uint8_t*)&sp, sizeof(sp));
+}
 
-    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
-    size_t frame_len = uart_proto::buildFrame(frame, uart_proto::MsgType::STATUS_UPDATE,
-                                               (const uint8_t*)&sp, sizeof(sp));
-    if (frame_len == 0) return false;
+bool UartBridge::sendSyncData(const uint8_t* data, size_t len)
+{
+    if (len > uart_proto::MAX_PAYLOAD) return false;
+    return sendFrame(uart_proto::MsgType::SYNC_DATA, data, (uint8_t)len);
+}
 
-    int written = uart_write_bytes(cfg_.uart_num, frame, frame_len);
-    return written == (int)frame_len;
+bool UartBridge::sendOtaStatus(uint8_t state, uint8_t progress)
+{
+    uint8_t payload[2] = { state, progress };
+    return sendFrame(uart_proto::MsgType::OTA_STATUS, payload, 2);
+}
+
+bool UartBridge::sendDeviceCmd(uart_proto::ControlCmd cmd,
+                                const uint8_t* data, size_t len)
+{
+    if (1 + len > uart_proto::MAX_PAYLOAD) return false;
+    uint8_t payload[uart_proto::MAX_PAYLOAD];
+    payload[0] = (uint8_t)cmd;
+    if (data && len > 0) {
+        for (size_t i = 0; i < len; ++i) payload[1 + i] = data[i];
+    }
+    return sendFrame(uart_proto::MsgType::DEVICE_CMD, payload, (uint8_t)(1 + len));
 }
 
 void UartBridge::rxTaskEntry(void* arg)
@@ -103,9 +129,13 @@ void UartBridge::rxLoop()
 
             if (type == (uint8_t)uart_proto::MsgType::CONTROL_CMD && payload_len >= 1) {
                 auto cmd = static_cast<uart_proto::ControlCmd>(payload[0]);
-                ESP_LOGI(TAG, "RX CONTROL_CMD: cmd=%d len=%d", payload[0], payload_len);
+                ESP_LOGI(TAG, "RX CONTROL_CMD: cmd=0x%02X len=%d", payload[0], payload_len);
                 if (control_cb_) {
                     control_cb_(cmd, &payload[1], payload_len - 1);
+                }
+            } else if (type == (uint8_t)uart_proto::MsgType::LOG_ENTRY && payload_len > 0) {
+                if (log_cb_) {
+                    log_cb_(payload, payload_len);
                 }
             }
         }

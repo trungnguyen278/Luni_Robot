@@ -12,7 +12,7 @@ network status), and how the boot/network state machines work.
 | Category | Variants | Default Tone | Data Source | Real-time? |
 |----------|----------|-------------|-------------|-----------|
 | boot | 4 | red | Internal FSM | No |
-| network | 6 | cyan | ConnectivityState | Yes |
+| network | 6 | cyan | ConnectionState | Yes |
 | weather | 5 | cyan | OpenWeather API | Periodic (10 min) |
 | clock | 3 | cyan | NTP | Yes (1 Hz) |
 | music | 3 | rose | App/server event | Event |
@@ -190,10 +190,10 @@ From `ui_design/REQUIREMENTS.md` §10:
 ## 4. SceneData — Live Data Structure
 
 ```cpp
-// esp32-s3/src/ui/SceneData.hpp
+// esp32-s3/src/ui/SceneManager.hpp
 
 struct SceneData {
-    // --- Time (from NTP via C5) ---
+    // --- Time (from server sync via C5) ---
     uint8_t  hours   = 0;       // 0-23
     uint8_t  minutes = 0;       // 0-59
     uint8_t  seconds = 0;       // 0-59
@@ -202,16 +202,22 @@ struct SceneData {
     uint8_t  month   = 1;       // 1-12
     uint16_t year    = 2026;
     bool     time_valid = false;
+    int64_t  unix_time = 0;     // Unix timestamp from server
+    int8_t   utc_offset = 0;    // UTC offset in hours
 
-    // --- Weather (from OpenWeather API via C5) ---
-    int16_t  weather_temp_c = 0;       // Temperature in Celsius
-    uint8_t  weather_condition = 0;    // See WeatherCondition enum
-    char     weather_desc[16] = {};    // "SUNNY", "RAINY", etc.
+    // --- Weather (from server sync via C5) ---
+    int8_t   temperature = 0;          // Celsius
+    uint8_t  humidity = 0;             // 0-100%
+    uint8_t  weather_condition = 0;    // Enum: 0=unknown, 1=clear, ...
+    uint8_t  aqi = 0;                  // Air quality index
     bool     weather_valid = false;
 
-    // --- Timer ---
-    uint16_t timer_remaining_s = 0;
-    uint16_t timer_total_s = 0;
+    // --- Calendar (from server sync via C5) ---
+    uint8_t  lunar_day = 0;
+    uint8_t  lunar_month = 0;
+
+    // --- Location (from server sync via C5) ---
+    char     city[32] = {};
 
     // --- Boot ---
     uint8_t  boot_progress_pct = 0;    // 0-100
@@ -224,42 +230,18 @@ struct SceneData {
     uint8_t  retry_max = 3;
     uint16_t error_code = 0;           // HTTP/server error code
 
-    // --- Music ---
-    char     track_name[32] = {};
-    float    music_progress = 0;       // 0.0 - 1.0
-
-    // --- Fitness ---
-    uint16_t heart_rate = 0;           // BPM
-    uint32_t steps = 0;
-    uint32_t step_goal = 10000;
-
-    // --- Call ---
-    char     caller_name[32] = {};
-    uint8_t  call_type = 0;            // 0=incoming, 1=active, 2=missed
-
-    // --- Message ---
-    char     sender_name[32] = {};
-    uint8_t  message_count = 0;
-
-    // --- Navigation ---
-    float    nav_bearing = 0;          // Degrees (0=N, 90=E)
-    float    nav_distance_km = 0;
-    char     nav_destination[32] = {};
-
-    // --- Calendar ---
-    char     event_name[32] = {};
-    uint8_t  event_hour = 0;
-    uint8_t  event_minute = 0;
-};
-
-enum class WeatherCondition : uint8_t {
-    SUNNY   = 0,  // OpenWeather: 800
-    CLOUDY  = 1,  // OpenWeather: 801-804
-    RAINY   = 2,  // OpenWeather: 300-531
-    SNOW    = 3,  // OpenWeather: 600-622
-    STORM   = 4,  // OpenWeather: 200-232
+    // --- Local sensors (S3) ---
+    uint8_t  battery_percent = 0;
+    bool     is_charging = false;
+    int8_t   wifi_rssi = 0;
 };
 ```
+
+> **Note**: SceneData is defined in `SceneManager.hpp`. Weather data arrives
+> via UART SYNC_DATA (0x03) as a binary-packed payload from C5's
+> `DataSyncManager`, not as individual TIME_SYNC/WEATHER_UPDATE messages.
+> The C5 parses the server's JSON `sync_data` WS message and relays a compact
+> binary: `[temp][humidity][condition][aqi][unix_time:4LE][utc_offset][lunar_day][lunar_month][city:null-term]`.
 
 ---
 
@@ -268,18 +250,18 @@ enum class WeatherCondition : uint8_t {
 ```
 ┌──────────────────────────────────────────┐
 │               ESP32-C5                    │
-│  (WiFi + BLE + MQTT + API calls)         │
+│  (WiFi + BLE + WebSocket)                │
 │                                           │
-│  ┌─────────┐  ┌──────────────┐           │
-│  │  NTP    │  │ OpenWeather  │           │
-│  │  Client │  │ HTTP Client  │           │
-│  └────┬────┘  └──────┬───────┘           │
-│       │              │                    │
-│       ▼              ▼                    │
+│  ┌─────────────┐  ┌──────────────┐       │
+│  │ WebSocket   │  │ DataSync     │       │
+│  │ Client(WSS) │  │ Manager      │       │
+│  └──────┬──────┘  └──────┬───────┘       │
+│         │                │                │
+│         ▼                ▼                │
 │  ┌──────────────────────────────┐        │
 │  │  UartBridge (TX to S3)      │        │
-│  │  TIME_SYNC / WEATHER_UPDATE │        │
-│  │  STATUS_UPDATE (existing)   │        │
+│  │  STATUS_UPDATE / SYNC_DATA  │        │
+│  │  OTA_STATUS / DEVICE_CMD    │        │
 │  └──────────────┬───────────────┘        │
 └─────────────────┼────────────────────────┘
                   │ UART1 (115200 baud)
@@ -294,9 +276,9 @@ enum class WeatherCondition : uint8_t {
 │                 ▼                         │
 │  ┌──────────────────────────────┐        │
 │  │  StateManager                │        │
-│  │  + TimeState (new)           │        │
-│  │  + WeatherState (new)        │        │
-│  │  + ConnectivityState (exists)│        │
+│  │  + ConnectionState (from C5) │        │
+│  │  + OtaState (from C5)        │        │
+│  │  + SyncData (weather/time)   │        │
 │  └──────────────┬───────────────┘        │
 │                 │ state change events     │
 │                 ▼                         │
@@ -322,115 +304,109 @@ The existing protocol (`UartProtocol.hpp`) uses a simple frame format:
 [0x55 start][type:1][len:1][payload:0-250][crc8:1]
 ```
 
-### 6.1 New Message Types
-
-Add to `MsgType` enum:
+### 6.1 Message Types (Implemented)
 
 ```cpp
 enum class MsgType : uint8_t {
-    STATUS_UPDATE  = 0x01,  // existing: C5 → S3 state snapshot
-    CONTROL_CMD    = 0x02,  // existing: S3 → C5 command
-    TIME_SYNC      = 0x03,  // new: C5 → S3 time data
-    WEATHER_UPDATE = 0x04,  // new: C5 → S3 weather data
-    SCENE_TRIGGER  = 0x05,  // new: C5 → S3 show specific scene
+    STATUS_UPDATE  = 0x01,  // C5 → S3: interaction + connection + system + emotion
+    CONTROL_CMD    = 0x02,  // S3 → C5: START, END, SET_VOLUME, REBOOT, etc.
+    SYNC_DATA      = 0x03,  // C5 → S3: weather, time, lunar, city (binary packed)
+    OTA_STATUS     = 0x04,  // C5 → S3: OTA state + progress percent
+    LOG_ENTRY      = 0x05,  // S3 → C5: log from S3, forwarded to server via WS
+    DEVICE_CMD     = 0x06,  // C5 → S3: server commands (emotion, scene, TTS, etc.)
 };
 ```
 
-### 6.2 TIME_SYNC Payload (7 bytes)
+### 6.2 SYNC_DATA Payload (~40 bytes, from DataSyncManager)
+
+C5 receives a JSON `sync_data` message via WebSocket, parses it, and
+relays a compact binary to S3:
 
 ```
-Byte 0: hours    (0-23)
-Byte 1: minutes  (0-59)
-Byte 2: seconds  (0-59)
-Byte 3: day_of_week (0-6, 0=Sunday)
-Byte 4: day      (1-31)
-Byte 5: month    (1-12)
-Byte 6-7: year   (uint16_t LE, e.g. 2026)
+Byte 0:     temperature (int8_t, Celsius)
+Byte 1:     humidity (uint8_t, 0-100)
+Byte 2:     weather_condition (enum)
+Byte 3:     aqi (uint8_t)
+Byte 4-7:   unix_time (uint32_t LE)
+Byte 8:     utc_offset (int8_t, hours)
+Byte 9:     lunar_day (uint8_t)
+Byte 10:    lunar_month (uint8_t)
+Byte 11+:   city (null-terminated string, max ~30 chars)
 ```
 
-C5 sends this every 60 seconds after NTP sync, or immediately on first
-sync after boot.
+S3's `DisplayManager::handleSyncData()` unpacks this into `SceneData`.
 
-### 6.3 WEATHER_UPDATE Payload (variable, max 20 bytes)
-
-```
-Byte 0:   condition (WeatherCondition enum: 0-4)
-Byte 1-2: temp_c    (int16_t LE, in Celsius)
-Byte 3:   desc_len  (length of description string)
-Byte 4+:  desc      (ASCII string, e.g. "SUNNY", max 16 chars)
-```
-
-C5 sends this every 10 minutes from OpenWeather API, or on demand.
-
-### 6.4 SCENE_TRIGGER Payload (variable)
+### 6.3 OTA_STATUS Payload (2 bytes)
 
 ```
-Byte 0:   category_id_len
-Byte 1+:  category_id  (ASCII, e.g. "weather")
-Byte N:   variant_id_len (0 = auto-pick)
-Byte N+1: variant_id   (ASCII, e.g. "sunny")
+Byte 0: ota_state (OtaState enum: IDLE..FAILED)
+Byte 1: progress_percent (0-100)
 ```
 
-Allows the server/C5 to trigger specific scenes on the display.
+### 6.4 DEVICE_CMD Payload (variable)
 
-### 6.5 Updated StatusPayload
+```
+Byte 0:   sub-command (ControlCmd enum)
+Byte 1+:  command-specific data
+```
 
-The existing `StatusPayload` stays unchanged. The new message types are
-separate frames, not extensions of STATUS_UPDATE.
+Sub-commands: SET_EMOTION (0x20), SET_SCENE (0x21), TTS_PLAY (0x22),
+AUDIO_STOP (0x23), CONFIG_UPDATE (0x24), INTERACTION_MSG (0x25).
+
+### 6.5 StatusPayload (4 bytes)
+
+```cpp
+struct StatusPayload {
+    uint8_t interaction;   // InteractionState enum
+    uint8_t connection;    // ConnectionState enum
+    uint8_t system_state;  // SystemState enum
+    uint8_t emotion;       // EmotionState enum
+};
+```
 
 ---
 
 ## 7. StateManager Extension
 
-### 7.1 New State Types
+### 7.1 State Types (Implemented)
 
-Add to `StateTypes.hpp`:
-
-```cpp
-// Time state (populated by NTP via C5)
-struct TimeState {
-    uint8_t  hours = 0;
-    uint8_t  minutes = 0;
-    uint8_t  seconds = 0;
-    uint8_t  day_of_week = 0;
-    uint8_t  day = 1;
-    uint8_t  month = 1;
-    uint16_t year = 2026;
-    bool     valid = false;
-    uint32_t last_sync_ms = 0;  // millis() of last NTP sync
-};
-
-// Weather state (populated by OpenWeather API via C5)
-struct WeatherState {
-    int16_t  temp_c = 0;
-    uint8_t  condition = 0;     // WeatherCondition enum
-    char     desc[16] = {};
-    bool     valid = false;
-    uint32_t last_update_ms = 0;
-};
-```
-
-### 7.2 Expanded EmotionState
-
-The current `EmotionState` enum has only 8 values. It needs expansion to
-cover all 37 emotion categories:
+S3 `StateTypes.hpp` now contains:
 
 ```cpp
+// ConnectionState (mirrored from C5 via UART STATUS_UPDATE)
+enum class ConnectionState : uint8_t {
+    OFFLINE, WIFI_CONNECTING, WIFI_CONNECTED, WS_CONNECTING,
+    WS_AUTHENTICATING, ONLINE, RECONNECTING, BLE_PROVISIONING,
+};
+
+// InteractionState (shared S3 + C5)
+enum class InteractionState : uint8_t {
+    IDLE, TRIGGERED, LISTENING, PROCESSING, SPEAKING, CANCELLING,
+};
+
+// OtaState (from C5 via UART OTA_STATUS)
+enum class OtaState : uint8_t {
+    IDLE, CHECKING, AVAILABLE, DOWNLOADING, VERIFYING,
+    FLASHING, REBOOTING, FAILED,
+};
+
+// EmotionState (16 values, from C5 via WS)
 enum class EmotionState : uint8_t {
-    NEUTRAL = 0,
-    HAPPY, SAD, ANGRY, CONFUSED, EXCITED, CALM, THINKING,
-    // v2.0 additions:
-    GREET, BORED, LOVE, SHY, EMBARRASSED, WINK, SMUG, PROUD,
-    COOL, MISCHIEVOUS, SUSPICIOUS, CURIOUS, ANNOYED, NERVOUS,
-    SLEEPY, SLEEPING, HUNGRY, CRYING, DISGUSTED, FOCUSED,
-    DETERMINED, LOADING, CHARGING, DIZZY, DEAD, ERROR, MUTE,
-    SCARED, SURPRISED,
-    COUNT
+    NEUTRAL, HAPPY, SAD, ANGRY, CONFUSED, EXCITED, CALM, THINKING,
+    DISGUSTED, NERVOUS, EMBARRASSED, CURIOUS, ANNOYED, COOL,
+    SUSPICIOUS, DETERMINED,
 };
 ```
 
-The C5 sends the expanded emotion ID in `StatusPayload.emotion`. The S3
-maps it to a category key via lookup table.
+Time/weather data flows through `SceneData` (populated by
+`DisplayManager::handleSyncData()`) rather than separate state types.
+
+### 7.2 Future EmotionState Expansion
+
+The current 16-value EmotionState covers the core emotions. When UI
+porting (Phase D) requires additional emotions (37 total), the enum will
+be extended. The UART StatusPayload already uses `uint8_t` so it
+supports up to 255 values without protocol changes.
 
 ---
 
@@ -562,25 +538,30 @@ Source: `ui_design/REQUIREMENTS.md` §6.5.2 and `scenes-network.jsx`.
              │   └──────────────┘
 ```
 
-### 9.2 Mapping ConnectivityState to Scene Variants
+### 9.2 Mapping ConnectionState to Scene Variants
 
 ```cpp
-void DisplayManager::handleConnectivity(ConnectivityState state) {
+void DisplayManager::handleConnectivity(ConnectionState state) {
     switch (state) {
-    case ConnectivityState::OFFLINE:
+    case ConnectionState::OFFLINE:
         scene_mgr_->showScene("network", "network-offline");
         break;
-    case ConnectivityState::CONNECTING_WIFI:
+    case ConnectionState::WIFI_CONNECTING:
         scene_mgr_->showScene("network", "network-wifi-connect");
         break;
-    case ConnectivityState::WIFI_CONNECTED:
-        // Brief wifi-scan display, then proceed to WS connection
+    case ConnectionState::WIFI_CONNECTED:
+    case ConnectionState::WS_CONNECTING:
+    case ConnectionState::WS_AUTHENTICATING:
+        // Keep wifi-connect scene while handshaking
         break;
-    case ConnectivityState::CONNECTING_WS:
-        // Show connecting indicator or keep wifi-connect
-        break;
-    case ConnectivityState::ONLINE:
+    case ConnectionState::ONLINE:
         scene_mgr_->exitScene(); // Return to emotion idle loop
+        break;
+    case ConnectionState::RECONNECTING:
+        scene_mgr_->showScene("network", "network-wifi-retry");
+        break;
+    case ConnectionState::BLE_PROVISIONING:
+        scene_mgr_->showScene("network", "network-ble-pair");
         break;
     }
 }
@@ -593,70 +574,70 @@ User-facing emotions should not interrupt connectivity status displays.
 
 ---
 
-## 10. NTP Time Integration
+## 10. Time & Weather Data Integration
 
-### 10.1 ESP32-C5 Side
+### 10.1 Data Flow (Implemented)
 
-```cpp
-// After WiFi connected:
-void initNTP() {
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_init();
-}
+Time, weather, lunar, and location data are delivered as a single
+`sync_data` JSON message via WebSocket from the server:
 
-// Periodic sync task (every 60s):
-void ntpSyncTask() {
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-
-    uint8_t payload[8];
-    payload[0] = timeinfo.tm_hour;
-    payload[1] = timeinfo.tm_min;
-    payload[2] = timeinfo.tm_sec;
-    payload[3] = timeinfo.tm_wday;
-    payload[4] = timeinfo.tm_mday;
-    payload[5] = timeinfo.tm_mon + 1;
-    payload[6] = (timeinfo.tm_year + 1900) & 0xFF;
-    payload[7] = ((timeinfo.tm_year + 1900) >> 8) & 0xFF;
-
-    uart_bridge.send(MsgType::TIME_SYNC, payload, 8);
-}
-```
-
-### 10.2 ESP32-S3 Side
-
-```cpp
-// In UartBridge RX handler:
-case MsgType::TIME_SYNC:
-    if (len >= 8) {
-        TimeState ts;
-        ts.hours       = payload[0];
-        ts.minutes     = payload[1];
-        ts.seconds     = payload[2];
-        ts.day_of_week = payload[3];
-        ts.day         = payload[4];
-        ts.month       = payload[5];
-        ts.year        = payload[6] | (payload[7] << 8);
-        ts.valid       = true;
-        ts.last_sync_ms = millis();
-        state_mgr_->setTimeState(ts);
+```json
+{
+    "type": "sync_data",
+    "payload": {
+        "time": { "unix": 1716900000, "utc_offset": 7 },
+        "weather": { "temp": 32, "humidity": 75, "condition": "clear", "aqi": 45 },
+        "lunar": { "day": 15, "month": 4 },
+        "location": { "city": "Ho Chi Minh" }
     }
-    break;
+}
 ```
 
-Between syncs, S3 increments seconds locally using elapsed millis.
+### 10.2 ESP32-C5 Side (DataSyncManager)
 
-### 10.3 Status Bar Time Display
-
-The status bar always shows current time (top-left, cyan, 11px monospace):
+`DataSyncManager` parses the JSON and builds a compact binary payload
+(~40 bytes), then sends it via UART `SYNC_DATA` (0x03) to S3:
 
 ```cpp
-void StatusBar::render(GfxEngine& gfx, const TimeState& time) {
+void DataSyncManager::handleSyncData(cJSON* payload) {
+    // Parse nested objects: time, weather, lunar, location
+    // Build binary: [temp][humidity][condition][aqi][unix:4LE][utc_offset]
+    //               [lunar_day][lunar_month][city:null-term]
+    relayToS3(uart_bridge);
+}
+```
+
+### 10.3 ESP32-S3 Side (DisplayManager)
+
+`DisplayManager::handleSyncData()` unpacks the binary into `SceneData`
+fields, making them available to scene render functions:
+
+```cpp
+void DisplayManager::handleSyncData(const state::SyncDataPacket& pkt) {
+    auto& sd = SceneManager::instance().getSceneData();
+    sd.temperature = pkt.temperature;
+    sd.humidity = pkt.humidity;
+    sd.weather_condition = pkt.condition;
+    sd.aqi = pkt.aqi;
+    sd.unix_time = pkt.unix_time;
+    sd.utc_offset = pkt.utc_offset;
+    sd.lunar_day = pkt.lunar_day;
+    sd.lunar_month = pkt.lunar_month;
+    memcpy(sd.city, pkt.city, sizeof(sd.city));
+    sd.weather_valid = true;
+    sd.time_valid = true;
+}
+```
+
+### 10.4 Status Bar Time Display
+
+The status bar shows current time (top-left, cyan, 11px monospace):
+
+```cpp
+void StatusBar::render(GfxEngine& gfx, const SceneData& data) {
+    if (!data.time_valid) return;
     char buf[6]; // "HH:MM"
-    snprintf(buf, sizeof(buf), "%02d:%02d", time.hours, time.minutes);
+    snprintf(buf, sizeof(buf), "%02d:%02d", data.hours, data.minutes);
     gfx.drawText(buf, 8, 14, FONT_11, TONE_LUT[TONE_CYAN],
                  TextAlign::LEFT, 217); // 85% opacity
 }
@@ -664,45 +645,22 @@ void StatusBar::render(GfxEngine& gfx, const TimeState& time) {
 
 ---
 
-## 11. Weather API Integration
+## 11. Weather Data & Scene Rendering
 
-### 11.1 ESP32-C5 Side
+### 11.1 Weather Condition Mapping
 
-```cpp
-// HTTP GET every 10 minutes:
-// https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}&units=metric
+The server provides weather condition as a string in `sync_data`.
+`DataSyncManager::conditionToEnum()` maps it:
 
-void weatherTask() {
-    // Parse JSON response:
-    // - temp: main.temp (float → int16_t)
-    // - condition: weather[0].id → WeatherCondition enum
-    //   200-232 → STORM, 300-531 → RAINY, 600-622 → SNOW,
-    //   800 → SUNNY, 801-804 → CLOUDY
-    // - desc: weather[0].main (uppercase, max 16 chars)
+| Server String | Enum Value | Scene Variant | Tone |
+|--------------|------------|---------------|------|
+| "clear"      | 1          | weather-sunny | warm |
+| "cloudy"     | 2          | weather-cloudy | cyan |
+| "rain"       | 3          | weather-rainy | blue |
+| "snow"       | 4          | weather-snow | white |
+| "storm"      | 5          | weather-storm | purple |
 
-    uint8_t payload[20];
-    payload[0] = condition;
-    int16_t temp = (int16_t)roundf(main_temp);
-    memcpy(&payload[1], &temp, 2);
-    uint8_t desc_len = strlen(desc);
-    payload[3] = desc_len;
-    memcpy(&payload[4], desc, desc_len);
-
-    uart_bridge.send(MsgType::WEATHER_UPDATE, payload, 4 + desc_len);
-}
-```
-
-### 11.2 OpenWeather Condition Code Mapping
-
-| OpenWeather ID | WeatherCondition | Scene Variant | Tone |
-|---------------|-----------------|---------------|------|
-| 200-232 | STORM | weather-storm | purple |
-| 300-531 | RAINY | weather-rainy | blue |
-| 600-622 | SNOW | weather-snow | white |
-| 800 | SUNNY | weather-sunny | warm |
-| 801-804 | CLOUDY | weather-cloudy | cyan |
-
-### 11.3 Weather Scene Rendering
+### 11.2 Weather Scene Rendering
 
 Weather scenes are data-driven — they read temperature and condition from
 `SceneData`:
@@ -711,7 +669,7 @@ Weather scenes are data-driven — they read temperature and condition from
 void render_weather_sunny(GfxEngine& gfx, float t, const ColorContext& colors) {
     auto& data = SceneManager::instance().getSceneData();
 
-    // Sun icon with rotating rays (8 lines)
+    // Sun icon with rotating rays
     int16_t cx = SCX - 60, cy = CY - 10;
     gfx.pushTransform();
     gfx.translate(cx, cy);
@@ -728,10 +686,8 @@ void render_weather_sunny(GfxEngine& gfx, float t, const ColorContext& colors) {
 
     // Temperature from live data
     char temp[8];
-    snprintf(temp, sizeof(temp), "%d\xC2\xB0", data.weather_temp_c);
+    snprintf(temp, sizeof(temp), "%d\xC2\xB0", data.temperature);
     gfx.drawText(temp, SCX + 60, cy - 4, FONT_36, colors.eye, TextAlign::CENTER);
-    gfx.drawText(data.weather_desc, SCX + 60, cy + 26, FONT_12,
-                 colors.eye, TextAlign::CENTER, 178);
 }
 ```
 
@@ -758,31 +714,35 @@ scene is active.
 
 ## 13. Implementation Checklist
 
-### Phase 1: Core infrastructure
-- [ ] Add `MsgType::TIME_SYNC`, `WEATHER_UPDATE`, `SCENE_TRIGGER` to UartProtocol.hpp (both C5 and S3)
-- [ ] Add `TimeState`, `WeatherState` to StateTypes.hpp
-- [ ] Extend `StateManager` with `setTimeState()`, `setWeatherState()`
-- [ ] Extend `UartBridge` RX handler for new message types
-- [ ] Implement `SceneData` struct
-- [ ] Implement `VariantRegistry` with category/variant registration
-- [ ] Implement `SceneManager` lifecycle (show/exit/render)
+### Firmware Infrastructure (Done)
+- [x] UART protocol: SYNC_DATA, OTA_STATUS, LOG_ENTRY, DEVICE_CMD message types
+- [x] S3 StateTypes: ConnectionState(8), InteractionState(6), OtaState(8), EmotionState(16)
+- [x] S3 StateManager: connection, OTA subscriptions
+- [x] S3 UartBridge: SYNC_DATA, OTA_STATUS, DEVICE_CMD dispatch
+- [x] C5 DataSyncManager: parse sync_data JSON, relay binary to S3
+- [x] C5 WsMessageHandler: incoming WS message dispatcher
+- [x] SceneData struct (in SceneManager.hpp)
+- [x] VariantRegistry with category/variant registration
+- [x] SceneManager lifecycle (show/exit/render)
+- [x] DisplayManager: handleSyncData(), handleOtaStatus(), handleConnectivity()
 
-### Phase 2: Boot + Network
-- [ ] Implement boot FSM in AppController
-- [ ] Port 4 boot scene render functions from `scenes-boot.jsx`
-- [ ] Port 6 network scene render functions from `scenes-network.jsx`
-- [ ] Wire `ConnectivityState` changes to network scene triggers
-- [ ] Port shared glyphs: `WifiIcon`, `BTIcon`, `CloudIcon`, `MonoLabel`
+### Rendering Engine (Phase B — Todo)
+- [ ] GfxEngine core with PSRAM framebuffer
+- [ ] Primitive rendering (rect, circle, line, arc, polygon, text)
+- [ ] Transform stack, alpha blending
+- [ ] High-level: drawEye, drawEyes, fillHeart, fillStar
 
-### Phase 3: Time + Weather
-- [ ] Implement NTP client on C5
-- [ ] Implement OpenWeather HTTP client on C5
-- [ ] Send TIME_SYNC and WEATHER_UPDATE via UART
+### Boot + Network Scenes (Phase E1-E2 — Todo)
+- [ ] Port 4 boot scene render functions
+- [ ] Port 6 network scene render functions
+- [ ] Wire ConnectionState changes to network scene triggers
+
+### Time + Weather Scenes (Phase E3-E4 — Todo)
 - [ ] Port 3 clock scene render functions
 - [ ] Port 5 weather scene render functions
-- [ ] Wire status bar time display
+- [ ] Status bar live time display
 
-### Phase 4: Remaining scenes
-- [ ] Port scene categories in priority order (music, timer, fitness, etc.)
-- [ ] Implement SCENE_TRIGGER from server for on-demand scene display
-- [ ] Add scene preemption logic
+### Remaining Scenes + Emotions (Phase D + E — Todo)
+- [ ] Port 37 emotion categories (168 variants)
+- [ ] Port 21 scene categories (59 variants)
+- [ ] Scene preemption logic

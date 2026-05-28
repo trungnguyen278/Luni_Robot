@@ -66,6 +66,10 @@ private:
 
     uint8_t tx_seq_ = 0;
 
+    // Pending opus frame header when a frame didn't fit in the previous SPI payload
+    uint8_t pending_header_[2] = {};
+    bool has_pending_header_ = false;
+
     AudioUplinkCb audio_ul_cb_;
     std::function<size_t()> ul_space_query_;  // Returns WS tx_buffer free bytes
 };

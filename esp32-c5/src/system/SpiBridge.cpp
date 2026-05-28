@@ -150,39 +150,75 @@ void SpiBridge::handleRxFrame(const uint8_t* rx_buf)
 }
 
 // === Prepare next TX frame ===
-// Always produces a frame (real data or EMPTY). Called once per iteration.
-// Audio downlink is raw byte streaming — no frame parsing here.
+// Frame-aligned: packs complete [2B len][opus] frames into SPI payload.
+// Format: [frame_count:1] [2B len + opus data]... [padding]
+// Dropping an entire SPI payload only loses complete opus frames (PLC handles it),
+// instead of breaking byte-stream alignment permanently.
 void SpiBridge::prepareTxFrame(uint8_t* tx_buf)
 {
-    // 1. Audio downlink: read up to MAX_PAYLOAD raw bytes from stream buffer.
-    //    No frame alignment — S3 reassembles [2B len][opus] from its stream buffer.
-    if (dl_audio_sb_) {
-        size_t avail = xStreamBufferBytesAvailable(dl_audio_sb_);
-        if (avail > 0) {
-            uint8_t payload[spi_proto::MAX_PAYLOAD];
-            size_t to_read = (avail > spi_proto::MAX_PAYLOAD) ? spi_proto::MAX_PAYLOAD : avail;
-            size_t got = xStreamBufferReceive(dl_audio_sb_, payload, to_read, 0);
-            if (got > 0) {
-                static uint32_t dl_tx_count = 0;
-                dl_tx_count++;
-                if (dl_tx_count == 1 || dl_tx_count % 200 == 0) {
-                    ESP_LOGI(TAG, "TX AUDIO_DL #%lu: %zu bytes (avail=%zu)",
-                             (unsigned long)dl_tx_count, got, avail);
-                }
-                spi_proto::buildFrame(tx_buf, (uint8_t)spi_proto::MsgFromC5::AUDIO_DOWNLINK,
-                                      payload, (uint16_t)got, tx_seq_++);
-                return;
-            }
+    if (!dl_audio_sb_ || (xStreamBufferBytesAvailable(dl_audio_sb_) == 0 && !has_pending_header_)) {
+        if (ul_space_query_) {
+            size_t free_bytes = ul_space_query_();
+            uint8_t free_kb = (uint8_t)std::min(free_bytes / 1024, (size_t)255);
+            spi_proto::buildFrame(tx_buf, (uint8_t)spi_proto::MsgFromC5::EMPTY,
+                                  &free_kb, 1, tx_seq_++);
+        } else {
+            spi_proto::buildEmptyFrame(tx_buf, tx_seq_++);
         }
+        return;
     }
 
-    // 2. Nothing to send — include WS tx_buffer free space for S3 flow control.
-    if (ul_space_query_) {
-        size_t free_bytes = ul_space_query_();
-        uint8_t free_kb = (uint8_t)(free_bytes / 1024);
-        if (free_kb > 255) free_kb = 255;
-        spi_proto::buildFrame(tx_buf, (uint8_t)spi_proto::MsgFromC5::EMPTY,
-                              &free_kb, 1, tx_seq_++);
+    uint8_t payload[spi_proto::MAX_PAYLOAD];
+    size_t pos = 1;   // byte 0 = frame count
+    uint8_t frame_count = 0;
+
+    while (pos + 2 < spi_proto::MAX_PAYLOAD) {
+        uint8_t header[2];
+
+        if (has_pending_header_) {
+            header[0] = pending_header_[0];
+            header[1] = pending_header_[1];
+            has_pending_header_ = false;
+        } else {
+            size_t avail = xStreamBufferBytesAvailable(dl_audio_sb_);
+            if (avail < 2) break;
+            size_t got = xStreamBufferReceive(dl_audio_sb_, header, 2, 0);
+            if (got < 2) break;
+        }
+
+        uint16_t frame_len = header[0] | ((uint16_t)header[1] << 8);
+        if (frame_len == 0 || frame_len > 512) {
+            ESP_LOGW(TAG, "Bad opus header in stream: %u, skipping", frame_len);
+            break;
+        }
+
+        size_t needed = 2 + frame_len;
+        if (pos + needed > spi_proto::MAX_PAYLOAD) {
+            pending_header_[0] = header[0];
+            pending_header_[1] = header[1];
+            has_pending_header_ = true;
+            break;
+        }
+
+        size_t avail = xStreamBufferBytesAvailable(dl_audio_sb_);
+        if (avail < frame_len) {
+            pending_header_[0] = header[0];
+            pending_header_[1] = header[1];
+            has_pending_header_ = true;
+            break;
+        }
+
+        payload[pos++] = header[0];
+        payload[pos++] = header[1];
+        size_t got = xStreamBufferReceive(dl_audio_sb_, &payload[pos], frame_len, 0);
+        pos += got;
+        frame_count++;
+    }
+
+    if (frame_count > 0) {
+        payload[0] = frame_count;
+        spi_proto::buildFrame(tx_buf, (uint8_t)spi_proto::MsgFromC5::AUDIO_DOWNLINK,
+                              payload, (uint16_t)pos, tx_seq_++);
     } else {
         spi_proto::buildEmptyFrame(tx_buf, tx_seq_++);
     }

@@ -4,6 +4,9 @@
 #include <cstring>
 #include <algorithm>
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+
+static const char* TAG = "GfxEngine";
 
 // ─────────────────────────────────────────────────────────
 // Lifecycle
@@ -19,7 +22,14 @@ GfxEngine::~GfxEngine() {
 bool GfxEngine::init() {
     size_t sz = width_ * height_ * sizeof(uint16_t);
     fb_ = (uint16_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
-    if (!fb_) return false;
+    if (!fb_) {
+        ESP_LOGW(TAG, "PSRAM alloc failed (%u bytes), falling back to internal RAM", (unsigned)sz);
+        fb_ = (uint16_t*)heap_caps_malloc(sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!fb_) {
+        ESP_LOGE(TAG, "Framebuffer alloc failed (%u bytes)", (unsigned)sz);
+        return false;
+    }
     clear(COLOR_BG);
     return true;
 }

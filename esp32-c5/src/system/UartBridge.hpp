@@ -21,6 +21,7 @@ public:
 
     using ControlCmdCb = std::function<void(uart_proto::ControlCmd cmd,
                                              const uint8_t* data, size_t len)>;
+    using LogEntryCb = std::function<void(const uint8_t* data, size_t len)>;
 
     UartBridge() = default;
     ~UartBridge();
@@ -33,10 +34,19 @@ public:
     bool sendStatusUpdate(uint8_t interaction, uint8_t connectivity,
                           uint8_t system_state, uint8_t emotion);
 
-    // Callback for control commands received from S3
+    // Send new message types to S3
+    bool sendSyncData(const uint8_t* data, size_t len);
+    bool sendOtaStatus(uint8_t state, uint8_t progress);
+    bool sendDeviceCmd(uart_proto::ControlCmd cmd,
+                       const uint8_t* data = nullptr, size_t len = 0);
+
+    // Callbacks for messages received from S3
     void onControlCmd(ControlCmdCb cb) { control_cb_ = std::move(cb); }
+    void onLogEntry(LogEntryCb cb) { log_cb_ = std::move(cb); }
 
 private:
+    bool sendFrame(uart_proto::MsgType type, const uint8_t* payload, uint8_t len);
+
     static void rxTaskEntry(void* arg);
     void rxLoop();
 
@@ -44,4 +54,5 @@ private:
     std::atomic<bool> started_{false};
     TaskHandle_t rx_task_ = nullptr;
     ControlCmdCb control_cb_;
+    LogEntryCb log_cb_;
 };

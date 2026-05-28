@@ -2,7 +2,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "AppController.hpp"
-#include "config/DLuniceProfile.hpp"
+#include "config/DeviceProfile.hpp"
 #include "system/StateManager.hpp"
 
 static const char* TAG = "MAIN";
@@ -13,8 +13,8 @@ extern "C" void app_main(void)
 
     auto& app = AppController::instance();
 
-    if (!DLuniceProfile::setup(app)) {
-        ESP_LOGE(TAG, "DLuniceProfile setup failed");
+    if (!DeviceProfile::setup(app)) {
+        ESP_LOGE(TAG, "DeviceProfile setup failed");
         return;
     }
 

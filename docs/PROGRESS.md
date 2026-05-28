@@ -46,14 +46,14 @@
 
 | # | Task | Status | File(s) | Ghi chú |
 |---|------|--------|---------|---------|
-| C1 | VariantRegistry | Todo | `src/ui/VariantRegistry.hpp/.cpp` | Category/variant đăng ký |
-| C2 | SceneManager | Todo | `src/ui/SceneManager.hpp/.cpp` | Lifecycle, data injection, idle loop |
-| C3 | SceneData struct | Todo | `src/ui/SceneData.hpp` | Live data cho scenes |
+| C1 | VariantRegistry | Done | `src/ui/VariantRegistry.hpp/.cpp` | Category/variant đăng ký |
+| C2 | SceneManager | Done | `src/ui/SceneManager.hpp/.cpp` | Lifecycle, data injection, idle loop |
+| C3 | SceneData struct | Done | `src/ui/SceneManager.hpp` | Live data cho scenes (in SceneManager.hpp) |
 | C4 | StatusBar renderer | Todo | `src/ui/StatusBar.hpp/.cpp` | Fixed cyan, time + wifi + battery |
-| C5 | DisplayManager refactor | Todo | `src/system/DisplayManager.hpp/.cpp` | Dual-mode: legacy RLE + GfxEngine |
-| C6 | StateTypes mở rộng | Todo | `src/system/StateTypes.hpp` | TimeState, WeatherState, EmotionState 37 values |
-| C7 | UartProtocol mở rộng | Todo | `lib/uart/UartProtocol.hpp` | TIME_SYNC, WEATHER_UPDATE, SCENE_TRIGGER |
-| C8 | UartBridge RX handlers | Todo | `src/system/UartBridge.cpp` | Parse new msg types |
+| C5 | DisplayManager refactor | Done | `src/system/DisplayManager.hpp/.cpp` | handleSyncData, handleOtaStatus, handleConnectivity |
+| C6 | StateTypes rewrite | Done | `src/system/StateTypes.hpp` | ConnectionState(8), OtaState(8), EmotionState(16) |
+| C7 | UartProtocol rewrite | Done | `lib/uart/UartProtocol.hpp` | SYNC_DATA, OTA_STATUS, LOG_ENTRY, DEVICE_CMD |
+| C8 | UartBridge RX handlers | Done | `src/system/UartBridge.cpp` | Parse new msg types |
 
 ---
 
@@ -137,14 +137,40 @@ Shared glyphs cần port trước E2: `WifiIcon`, `BTIcon`, `CloudIcon`, `MonoLa
 
 | # | Task | Status | Ghi chú |
 |---|------|--------|---------|
-| F1 | NTP client trên C5 | Todo | sntp, sync mỗi 60s |
-| F2 | OpenWeather HTTP client trên C5 | Todo | Free tier, mỗi 10 phút |
-| F3 | UART TIME_SYNC handler | Todo | C5 → S3 |
-| F4 | UART WEATHER_UPDATE handler | Todo | C5 → S3 |
+| F1 | DataSyncManager (C5) | Done | Parse sync_data JSON, relay binary to S3 via UART |
+| F2 | UART SYNC_DATA handler (S3) | Done | UartBridge dispatch + DisplayManager::handleSyncData |
+| F3 | OTA_STATUS handler (S3) | Done | UartBridge dispatch + DisplayManager::handleOtaStatus |
+| F4 | DEVICE_CMD handler (S3) | Done | UartBridge dispatch for server commands |
 | F5 | Status bar live time | Todo | Hiển thị giờ realtime |
 | F6 | Boot sequence async | Todo | Scene chạy song song subsystem init |
-| F7 | Network scene auto-trigger | Todo | ConnectivityState → scene mapping |
-| F8 | SCENE_TRIGGER từ server | Todo | MQTT/WS → C5 → S3 |
+| F7 | Network scene auto-trigger | Done | ConnectionState → scene mapping in DisplayManager |
+| F8 | DEVICE_CMD from server | Done | WS → WsMessageHandler → UART → S3 |
+
+## Phase G: Firmware Refactor (WS-only + OTA + BLE v2)
+
+> Refactor hoàn thành 2026-05-28. Xoá MQTT, chuyển sang WebSocket-only,
+> thêm HTTP OTA, thống nhất state machine, cập nhật BLE provisioning.
+
+| # | Task | Status | Ghi chú |
+|---|------|--------|---------|
+| G1 | C5 StateTypes rewrite | Done | ConnectionState(8), ConnectFailReason(11), OtaState(8), EmotionState(16), RetryPolicy |
+| G2 | C5 ServerConfig + WsProtocol + WebSocketClient | Done | WS auth, JSON msg builders/parsers |
+| G3 | C5 NetworkManager rewrite | Done | WS-only connection state machine, heartbeat |
+| G4 | C5 WsMessageHandler | Done | Incoming WS message dispatcher |
+| G5 | C5 OtaManager | Done | HTTP chunked download + SHA256 verify |
+| G6 | C5 DataSyncManager | Done | Parse sync_data JSON, compact binary relay |
+| G7 | C5 BluetoothService rewrite | Done | 12 chars, 3-level auth (PIN + HMAC-SHA256) |
+| G8 | C5+S3 UartProtocol update | Done | SYNC_DATA, OTA_STATUS, LOG_ENTRY, DEVICE_CMD |
+| G9 | C5+S3 UartBridge update | Done | New msg types, sendFrame DRY helper |
+| G10 | C5 SpiBridge frame-aligned SPI | Done | Opus frame alignment, pending_header_ |
+| G11 | S3 StateTypes rewrite | Done | ConnectionState, OtaState, EmotionState(16), SyncDataPacket |
+| G12 | S3 DisplayManager update | Done | handleSyncData, handleOtaStatus, ConnectionState switch |
+| G13 | S3 SceneManager SceneData update | Done | New fields: unix_time, temperature, humidity, aqi, city, battery |
+| G14 | Delete MQTT (C5) | Done | git rm MqttClient, MQTTConfig, remove from CMake/platformio |
+| G15 | C5 DeviceProfile rewrite | Done | No MQTT, device_token NVS, DeviceProfile class name |
+| G16 | C5+S3 AppController update | Done | ConnectionState, no parseEmotionCode |
+| G17 | Cleanup stale refs | Done | ConnectivityState→ConnectionState, CliConsole, SpiProtocol, Version.hpp |
+| G18 | Build verified | Done | Both C5 + S3 compile successfully |
 
 ---
 
@@ -152,12 +178,13 @@ Shared glyphs cần port trước E2: `WifiIcon`, `BTIcon`, `CloudIcon`, `MonoLa
 
 | Milestone | Mô tả | Target | Status |
 |-----------|--------|--------|--------|
+| M0 | Firmware refactor: WS-only + OTA + BLE v2 + state unification | — | Done |
 | M1 | Docs hoàn thành | — | Done |
 | M2 | GfxEngine renders `normal-steady` đúng | — | Todo |
-| M3 | Boot sequence 4 scenes chạy trên dLunice | — | Todo |
-| M4 | Network scenes + ConnectivityState wired | — | Todo |
-| M5 | Status bar với live time (NTP) | — | Todo |
-| M6 | Weather scenes với live data (API) | — | Todo |
+| M3 | Boot sequence 4 scenes chạy trên device | — | Todo |
+| M4 | Network scenes + ConnectionState wired | — | Todo |
+| M5 | Status bar với live time (sync_data) | — | Todo |
+| M6 | Weather scenes với live data (sync_data) | — | Todo |
 | M7 | Tất cả 37 emotion categories ported | — | Todo |
 | M8 | Tất cả 21 scene categories ported | — | Todo |
 | M9 | Full system: 227 variants + real-time data | — | Todo |

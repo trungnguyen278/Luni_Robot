@@ -40,9 +40,6 @@ public:
     // Disconnect
     void disconnect();
 
-    // Disable auto-reconnect
-    void disableAutoConnect();
-
     // Status
     bool isConnected() const { return connected; }
     std::string getIp() const;
@@ -73,7 +70,6 @@ private:
     std::string sta_pass;
 
     bool connected = false;
-    bool auto_connect_enabled = true;
     bool wifi_started = false;
 
     esp_netif_t* sta_netif = nullptr;

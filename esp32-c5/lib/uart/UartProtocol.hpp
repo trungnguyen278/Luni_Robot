@@ -7,7 +7,7 @@
 // Variable-length frames for control/status messages.
 // Frame: [0x55 start][type:1][len:1][payload:0-250][crc8:1]
 //
-// STATUS_UPDATE: C5 -> S3 (interaction, connectivity, system_state, emotion)
+// STATUS_UPDATE: C5 -> S3 (interaction, connection, system_state, emotion)
 // CONTROL_CMD:   S3 -> C5 (START, END, SET_VOLUME, REBOOT, config...)
 // =============================================================================
 
@@ -23,9 +23,13 @@ static constexpr size_t  MAX_FRAME_SIZE = HEADER_SIZE + MAX_PAYLOAD + FOOTER_SIZ
 enum class MsgType : uint8_t {
     STATUS_UPDATE  = 0x01,  // C5 -> S3: state snapshot
     CONTROL_CMD    = 0x02,  // S3 -> C5: command
+    SYNC_DATA      = 0x03,  // C5 -> S3: weather, time, calendar (from server)
+    OTA_STATUS     = 0x04,  // C5 -> S3: OTA state + progress
+    LOG_ENTRY      = 0x05,  // S3 -> C5: log from S3 → forward to server
+    DEVICE_CMD     = 0x06,  // C5 -> S3: command from server/app (emotion, scene, etc.)
 };
 
-// Control command sub-types (same as SPI)
+// Control command sub-types
 enum class ControlCmd : uint8_t {
     START          = 0x01,
     END            = 0x02,
@@ -33,14 +37,20 @@ enum class ControlCmd : uint8_t {
     REBOOT         = 0x04,
     SET_BRIGHTNESS = 0x05,
     WIFI_CONFIG    = 0x10,
-    MQTT_CONFIG    = 0x11,
     WS_CONFIG      = 0x12,
+
+    SET_EMOTION    = 0x20,
+    SET_SCENE      = 0x21,
+    TTS_PLAY       = 0x22,
+    AUDIO_STOP     = 0x23,
+    CONFIG_UPDATE  = 0x24,
+    INTERACTION_MSG= 0x25,
 };
 
 // Status payload (same as SPI)
 struct StatusPayload {
     uint8_t interaction;
-    uint8_t connectivity;
+    uint8_t connection;
     uint8_t system_state;
     uint8_t emotion;
 };

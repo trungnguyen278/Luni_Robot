@@ -13,7 +13,7 @@ namespace app_meta {
 
 inline void getDLuniceMacBytes(uint8_t out_mac[6])
 {
-    esp_read_mac(out_mac, ESP_MAC_WIFI_STA);
+    esp_read_mac(out_mac, ESP_MAC_BT);
 }
 
 inline const char* getDLuniceEfuseID()

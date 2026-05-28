@@ -2,7 +2,10 @@
 
 ## Overview
 
-Document này dành cho **mobile app developers** để implement BLE provisioning cho Luni dLunice. App sử dụng BLE GATT để cấu hình WiFi, MQTT broker, và MEO credentials.
+Document cho **mobile app developers** de implement BLE provisioning cho Luni.
+App su dung BLE GATT de cau hinh WiFi, WebSocket URL, va device token.
+
+Luni su dung **3 cap do truy cap** (Access Level) de bao ve cac thao tac nhay cam.
 
 ---
 
@@ -16,8 +19,9 @@ Service: 0xFF01 (Luni Config Service)
 
 ### Scanning
 
-- **DLunice Name:** `Luni` hoặc custom name
+- **Device Name:** `Luni` hoac custom name
 - **Advertising:** Connectable, Scannable
+- **MTU:** Khuyen nghi 512
 
 ---
 
@@ -25,168 +29,170 @@ Service: 0xFF01 (Luni Config Service)
 
 ### Full Characteristics Table
 
-| UUID | Name | Properties | Auth Required | Description |
-|------|------|------------|---------------|-------------|
-| 0xFF02 | DLuniCE_NAME | R/W | No | DLunice name (max 32 chars) |
-| 0xFF03 | VOLUME | R/W | No | Volume 0-100 (1 byte) |
-| 0xFF04 | BRIGHTNESS | R/W | No | Brightness 0-100 (1 byte) |
-| 0xFF05 | WIFI_SSID | R/W | No | WiFi SSID (max 32 chars) |
-| 0xFF06 | WIFI_PASS | W | No | WiFi Password (max 64 chars) |
-| 0xFF07 | APP_VERSION | R | - | Firmware version string |
-| 0xFF08 | BUILD_INFO | R | - | Build date/commit info |
-| 0xFF09 | SAVE_CMD | W | No | Write 0x01 to save config |
-| 0xFF0A | DLuniCE_ID | R | - | DLunice MAC ID (12 hex chars) |
-| 0xFF0B | WIFI_LIST | R | - | Cached WiFi networks (JSON) |
-| 0xFF0C | WS_URL | R/W | **Yes** | WebSocket server URL |
-| 0xFF0D | MQTT_URL | R/W | **Yes** | MQTT broker URL |
-| 0xFF0E | USER_ID | R/W | No | MEO user namespace |
-| 0xFF0F | TX_KEY | W | **Yes** | MQTT password (write-only) |
-| 0xFF10 | PRODUCT_ID | R | - | Product identifier |
-| 0xFF11 | DEV_MODEL | R | - | DLunice model name |
-| 0xFF12 | DEV_MANUF | R | - | Manufacturer name |
-| 0xFF13 | MAC_ADDR | R | - | Raw MAC address (6 bytes) |
+| UUID   | Name         | Properties | Min Level | Description |
+|--------|--------------|------------|-----------|-------------|
+| 0x0001 | SSID         | R/W        | 1         | WiFi SSID (max 32 chars) |
+| 0x0002 | PASSWORD     | W          | 1         | WiFi Password (max 64 chars, write-only) |
+| 0x0003 | WS_URL       | R/W        | 1         | WebSocket server URL |
+| 0x0004 | DEV_TOKEN    | W          | 1         | Device authentication token (write-only) |
+| 0x0005 | USER_ID      | R/W        | 0         | User namespace ID |
+| 0x0006 | DEVICE_INFO  | R          | 0         | JSON: name, model, version, MAC |
+| 0x0007 | DIAG_INFO    | R          | 0         | JSON: heap, uptime, connection state |
+| 0x0010 | AUTH_UNLOCK  | W          | 0         | Write 6-digit PIN to unlock Level 1 |
+| 0x0011 | COMMAND      | W          | 1/2       | BLE command byte (see §4) |
+| 0x0012 | ADMIN_AUTH   | W          | 1         | HMAC-SHA256 admin auth (unlock Level 2) |
+| 0x0013 | LOG_LEVEL    | R/W        | 2         | Log verbosity (0=OFF, 5=VERBOSE) |
+| 0x0014 | ADMIN_SECRET | W          | 2         | Set admin secret key (write-only) |
 
 ---
 
-## 3. Authentication Mechanism
+## 3. Access Levels
 
-### Protected Characteristics
+### Level 0 (Unauthenticated)
+- Read DEVICE_INFO, DIAG_INFO, USER_ID
+- Write AUTH_UNLOCK (to enter Level 1)
 
-Các characteristics sau yêu cầu **unlock trước khi write**:
-- `WS_URL` (0xFF0C)
-- `MQTT_URL` (0xFF0D)
-- `TX_KEY` (0xFF0F)
+### Level 1 (PIN Authenticated)
+- All Level 0 permissions
+- Read/Write: SSID, WS_URL
+- Write: PASSWORD, DEV_TOKEN, USER_ID
+- Write: COMMAND (RESTART only)
+- Write: ADMIN_AUTH (to enter Level 2)
 
-### Auth Token
+### Level 2 (Admin)
+- All Level 1 permissions
+- Write: ADMIN_SECRET, LOG_LEVEL
+- Write: COMMAND (all commands including FACTORY_RESET, FULL_WIPE, etc.)
 
-```
-Token: "Luni_OK"
-```
+### PIN Authentication (Level 0 -> Level 1)
 
-### Unlock Flow
-
-1. **Write token** vào characteristic cần unlock
-2. DLunice sẽ log `"... auth unlocked by token"`
-3. **Write actual value** vào cùng characteristic
-4. Repeat cho các protected chars khác
-
-```
-// Ví dụ unlock MQTT_URL
-Write "Luni_OK" → 0xFF0D   // Unlock
-Write "mqtt://broker:1883" → 0xFF0D   // Set value
-```
-
-> ⚠️ Token chỉ cần write 1 lần. Sau khi unlock, có thể write nhiều protected chars.
-
----
-
-## 4. Provisioning Flow
-
-### Complete Flow Diagram
+PIN 6 chu so duoc hien thi tren man hinh robot. App gui PIN vao `AUTH_UNLOCK` (0x0010):
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  1. SCAN & CONNECT                                  │
-├─────────────────────────────────────────────────────┤
-│  • Scan for dLunices with service 0xFF01             │
-│  • Connect to selected dLunice                       │
-│  • Discover services & characteristics              │
-│  • Request MTU (recommend 512)                      │
-└───────────────────────────┬─────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────┐
-│  2. READ DLuniCE INFO (Optional)                     │
-├─────────────────────────────────────────────────────┤
-│  • Read 0xFF0A → DLunice ID                          │
-│  • Read 0xFF07 → Firmware version                   │
-│  • Read 0xFF0B → WiFi list (for network picker)     │
-│  • Read 0xFF02 → Current dLunice name                │
-└───────────────────────────┬─────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────┐
-│  3. WRITE BASIC CONFIG                              │
-├─────────────────────────────────────────────────────┤
-│  • Write 0xFF05 ← WiFi SSID                         │
-│  • Write 0xFF06 ← WiFi Password                     │
-│  • Write 0xFF03 ← Volume (optional)                 │
-│  • Write 0xFF04 ← Brightness (optional)             │
-└───────────────────────────┬─────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────┐
-│  4. UNLOCK PROTECTED CHARS                          │
-├─────────────────────────────────────────────────────┤
-│  • Write "Luni_OK" → 0xFF0D (or 0xFF0C/0xFF0F)     │
-└───────────────────────────┬─────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────┐
-│  5. WRITE MEO CREDENTIALS                           │
-├─────────────────────────────────────────────────────┤
-│  • Write 0xFF0D ← MQTT URL (e.g., mqtt://x.x.x:1883)│
-│  • Write 0xFF0E ← User ID (namespace)               │
-│  • Write 0xFF0F ← TX Key (MQTT password)            │
-│  • Write 0xFF0C ← WS URL (optional)                 │
-└───────────────────────────┬─────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────┐
-│  6. SAVE & RESTART                                  │
-├─────────────────────────────────────────────────────┤
-│  • Write 0x01 → 0xFF09 (SAVE_CMD)                   │
-│  • DLunice saves to NVS & restarts                   │
-│  • Connection will be lost (expected)               │
-└─────────────────────────────────────────────────────┘
+Write "123456" -> 0x0010
+// Ket qua tra ve qua notification tren COMMAND (0x0011):
+//   0x00 = OK (Level 1 granted)
+//   0x01 = FAIL (wrong PIN)
+```
+
+### Admin Authentication (Level 1 -> Level 2)
+
+Su dung HMAC-SHA256 voi timestamp de chong replay attack:
+
+```
+Payload: [timestamp:4 LE][hmac:32]
+  - timestamp: Unix timestamp (UTC), +-5 phut tolerance
+  - hmac: HMAC-SHA256(admin_secret, timestamp_bytes)
+
+Write payload -> 0x0012
+// Ket qua: 0x00=OK, 0x01=FAIL, 0x02=UNAUTHORIZED
 ```
 
 ---
 
-## 5. Code Examples
+## 4. BLE Commands
+
+Write 1 byte vao COMMAND (0x0011):
+
+| Byte | Command        | Min Level | Description |
+|------|----------------|-----------|-------------|
+| 0x01 | RESTART        | 1         | Restart device |
+| 0x10 | FACTORY_RESET  | 2         | Xoa WiFi, device_token, admin_secret |
+| 0x11 | FULL_WIPE      | 2         | Xoa toan bo NVS |
+| 0x12 | ROLLBACK_FW    | 2         | Rollback firmware (OTA) |
+| 0x13 | ENABLE_DEBUG   | 2         | Bat debug logging |
+| 0x14 | DISABLE_DEBUG  | 2         | Tat debug logging |
+| 0x15 | CLEAR_USERS    | 2         | Xoa danh sach users |
+| 0x16 | ENTER_DFU      | 2         | Vao DFU mode |
+
+Command response tra ve qua notification:
+- `0x00` CMD_OK
+- `0x01` CMD_FAIL
+- `0x02` CMD_UNAUTHORIZED
+
+---
+
+## 5. Provisioning Flow
+
+```
++---------------------------------------------------+
+|  1. SCAN & CONNECT                                |
+|  - Scan for devices with service 0xFF01           |
+|  - Connect to selected device                     |
+|  - Discover services & characteristics            |
+|  - Request MTU 512                                |
++-------------------------+-------------------------+
+                          |
+                          v
++---------------------------------------------------+
+|  2. READ DEVICE INFO (Optional)                   |
+|  - Read 0x0006 -> device name, model, version     |
+|  - Read 0x0007 -> diagnostics                     |
++-------------------------+-------------------------+
+                          |
+                          v
++---------------------------------------------------+
+|  3. AUTHENTICATE (PIN)                            |
+|  - Read PIN from robot screen (6 digits)          |
+|  - Write PIN -> 0x0010                            |
+|  - Wait for notification: 0x00 = success          |
++-------------------------+-------------------------+
+                          |
+                          v
++---------------------------------------------------+
+|  4. WRITE CONFIG                                  |
+|  - Write 0x0001 <- WiFi SSID                     |
+|  - Write 0x0002 <- WiFi Password                 |
+|  - Write 0x0003 <- WebSocket URL                 |
+|  - Write 0x0004 <- Device Token                  |
+|  - Write 0x0005 <- User ID (optional)            |
++-------------------------+-------------------------+
+                          |
+                          v
++---------------------------------------------------+
+|  5. RESTART                                       |
+|  - Write 0x01 -> 0x0011 (RESTART command)         |
+|  - Device saves config to NVS & restarts          |
+|  - BLE connection will be lost (expected)         |
++---------------------------------------------------+
+```
+
+---
+
+## 6. Code Examples
 
 ### Android (Kotlin)
 
 ```kotlin
-// UUIDs
 val SERVICE_UUID = UUID.fromString("0000FF01-0000-1000-8000-00805f9b34fb")
-val CHAR_WIFI_SSID = UUID.fromString("0000FF05-0000-1000-8000-00805f9b34fb")
-val CHAR_WIFI_PASS = UUID.fromString("0000FF06-0000-1000-8000-00805f9b34fb")
-val CHAR_MQTT_URL = UUID.fromString("0000FF0D-0000-1000-8000-00805f9b34fb")
-val CHAR_USER_ID = UUID.fromString("0000FF0E-0000-1000-8000-00805f9b34fb")
-val CHAR_TX_KEY = UUID.fromString("0000FF0F-0000-1000-8000-00805f9b34fb")
-val CHAR_SAVE_CMD = UUID.fromString("0000FF09-0000-1000-8000-00805f9b34fb")
+val CHAR_SSID      = UUID.fromString("00000001-0000-1000-8000-00805f9b34fb")
+val CHAR_PASSWORD   = UUID.fromString("00000002-0000-1000-8000-00805f9b34fb")
+val CHAR_WS_URL     = UUID.fromString("00000003-0000-1000-8000-00805f9b34fb")
+val CHAR_DEV_TOKEN  = UUID.fromString("00000004-0000-1000-8000-00805f9b34fb")
+val CHAR_USER_ID    = UUID.fromString("00000005-0000-1000-8000-00805f9b34fb")
+val CHAR_AUTH       = UUID.fromString("00000010-0000-1000-8000-00805f9b34fb")
+val CHAR_COMMAND    = UUID.fromString("00000011-0000-1000-8000-00805f9b34fb")
 
-val AUTH_TOKEN = "Luni_OK"
-
-// Provisioning function
-suspend fun provisionDLunice(
+suspend fun provision(
     gatt: BluetoothGatt,
-    ssid: String,
-    password: String,
-    mqttUrl: String,
-    userId: String,
-    txKey: String
+    pin: String,
+    ssid: String, password: String,
+    wsUrl: String, deviceToken: String
 ) {
     val service = gatt.getService(SERVICE_UUID)
-    
-    // 1. Write WiFi credentials
-    writeCharacteristic(service, CHAR_WIFI_SSID, ssid.toByteArray())
-    writeCharacteristic(service, CHAR_WIFI_PASS, password.toByteArray())
-    
-    // 2. Unlock protected chars
-    writeCharacteristic(service, CHAR_MQTT_URL, AUTH_TOKEN.toByteArray())
-    delay(100)
-    
-    // 3. Write MEO credentials
-    writeCharacteristic(service, CHAR_MQTT_URL, mqttUrl.toByteArray())
-    writeCharacteristic(service, CHAR_USER_ID, userId.toByteArray())
-    writeCharacteristic(service, CHAR_TX_KEY, txKey.toByteArray())
-    
-    // 4. Save and restart
-    writeCharacteristic(service, CHAR_SAVE_CMD, byteArrayOf(0x01))
-    
-    // DLunice will restart - connection will be lost
+
+    // 1. Authenticate with PIN
+    writeCharacteristic(service, CHAR_AUTH, pin.toByteArray())
+    delay(200) // Wait for Level 1
+
+    // 2. Write config
+    writeCharacteristic(service, CHAR_SSID, ssid.toByteArray())
+    writeCharacteristic(service, CHAR_PASSWORD, password.toByteArray())
+    writeCharacteristic(service, CHAR_WS_URL, wsUrl.toByteArray())
+    writeCharacteristic(service, CHAR_DEV_TOKEN, deviceToken.toByteArray())
+
+    // 3. Restart
+    writeCharacteristic(service, CHAR_COMMAND, byteArrayOf(0x01))
 }
 ```
 
@@ -197,59 +203,50 @@ import CoreBluetooth
 
 class LuniProvisioner: NSObject, CBPeripheralDelegate {
     let serviceUUID = CBUUID(string: "FF01")
-    let wifiSSIDChar = CBUUID(string: "FF05")
-    let wifiPassChar = CBUUID(string: "FF06")
-    let mqttURLChar = CBUUID(string: "FF0D")
-    let userIDChar = CBUUID(string: "FF0E")
-    let txKeyChar = CBUUID(string: "FF0F")
-    let saveCmdChar = CBUUID(string: "FF09")
-    
-    let authToken = "Luni_OK".data(using: .utf8)!
-    
+    let authChar    = CBUUID(string: "0010")
+    let ssidChar    = CBUUID(string: "0001")
+    let passChar    = CBUUID(string: "0002")
+    let wsUrlChar   = CBUUID(string: "0003")
+    let tokenChar   = CBUUID(string: "0004")
+    let cmdChar     = CBUUID(string: "0011")
+
     func provision(
-        peripheral: CBPeripheral,
-        ssid: String,
-        password: String,
-        mqttUrl: String,
-        userId: String,
-        txKey: String
+        peripheral: CBPeripheral, pin: String,
+        ssid: String, password: String,
+        wsUrl: String, deviceToken: String
     ) {
         guard let service = peripheral.services?.first(where: { $0.uuid == serviceUUID }),
               let chars = service.characteristics else { return }
-        
-        // Helper to find characteristic
-        func char(_ uuid: CBUUID) -> CBCharacteristic? {
+
+        func chr(_ uuid: CBUUID) -> CBCharacteristic? {
             chars.first { $0.uuid == uuid }
         }
-        
-        // 1. Write WiFi
-        if let c = char(wifiSSIDChar) {
-            peripheral.writeValue(ssid.data(using: .utf8)!, for: c, type: .withResponse)
+
+        // 1. PIN auth
+        if let c = chr(authChar) {
+            peripheral.writeValue(pin.data(using: .utf8)!, for: c, type: .withResponse)
         }
-        if let c = char(wifiPassChar) {
-            peripheral.writeValue(password.data(using: .utf8)!, for: c, type: .withResponse)
-        }
-        
-        // 2. Unlock & write MQTT
-        if let c = char(mqttURLChar) {
-            peripheral.writeValue(authToken, for: c, type: .withResponse)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                peripheral.writeValue(mqttUrl.data(using: .utf8)!, for: c, type: .withResponse)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            // 2. Write config
+            if let c = chr(self.ssidChar) {
+                peripheral.writeValue(ssid.data(using: .utf8)!, for: c, type: .withResponse)
             }
-        }
-        
-        // 3. Write MEO credentials
-        if let c = char(userIDChar) {
-            peripheral.writeValue(userId.data(using: .utf8)!, for: c, type: .withResponse)
-        }
-        if let c = char(txKeyChar) {
-            peripheral.writeValue(txKey.data(using: .utf8)!, for: c, type: .withResponse)
-        }
-        
-        // 4. Save
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            if let c = char(self.saveCmdChar) {
-                peripheral.writeValue(Data([0x01]), for: c, type: .withResponse)
+            if let c = chr(self.passChar) {
+                peripheral.writeValue(password.data(using: .utf8)!, for: c, type: .withResponse)
+            }
+            if let c = chr(self.wsUrlChar) {
+                peripheral.writeValue(wsUrl.data(using: .utf8)!, for: c, type: .withResponse)
+            }
+            if let c = chr(self.tokenChar) {
+                peripheral.writeValue(deviceToken.data(using: .utf8)!, for: c, type: .withResponse)
+            }
+
+            // 3. Restart
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                if let c = chr(self.cmdChar) {
+                    peripheral.writeValue(Data([0x01]), for: c, type: .withResponse)
+                }
             }
         }
     }
@@ -263,96 +260,40 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 class LuniProvisioner {
   static const serviceUuid = Guid("0000FF01-0000-1000-8000-00805f9b34fb");
-  static const wifiSsidUuid = Guid("0000FF05-0000-1000-8000-00805f9b34fb");
-  static const wifiPassUuid = Guid("0000FF06-0000-1000-8000-00805f9b34fb");
-  static const mqttUrlUuid = Guid("0000FF0D-0000-1000-8000-00805f9b34fb");
-  static const userIdUuid = Guid("0000FF0E-0000-1000-8000-00805f9b34fb");
-  static const txKeyUuid = Guid("0000FF0F-0000-1000-8000-00805f9b34fb");
-  static const saveCmdUuid = Guid("0000FF09-0000-1000-8000-00805f9b34fb");
-  
-  static const authToken = "Luni_OK";
+  static const authUuid    = Guid("00000010-0000-1000-8000-00805f9b34fb");
+  static const ssidUuid    = Guid("00000001-0000-1000-8000-00805f9b34fb");
+  static const passUuid    = Guid("00000002-0000-1000-8000-00805f9b34fb");
+  static const wsUrlUuid   = Guid("00000003-0000-1000-8000-00805f9b34fb");
+  static const tokenUuid   = Guid("00000004-0000-1000-8000-00805f9b34fb");
+  static const cmdUuid     = Guid("00000011-0000-1000-8000-00805f9b34fb");
 
   Future<void> provision(
-    BluetoothDLunice dLunice, {
+    BluetoothDevice device, {
+    required String pin,
     required String ssid,
     required String password,
-    required String mqttUrl,
-    required String userId,
-    required String txKey,
+    required String wsUrl,
+    required String deviceToken,
   }) async {
-    final services = await dLunice.discoverServices();
+    final services = await device.discoverServices();
     final service = services.firstWhere((s) => s.uuid == serviceUuid);
-    
-    BluetoothCharacteristic char(Guid uuid) =>
+
+    BluetoothCharacteristic chr(Guid uuid) =>
         service.characteristics.firstWhere((c) => c.uuid == uuid);
-    
-    // 1. WiFi credentials
-    await char(wifiSsidUuid).write(ssid.codeUnits);
-    await char(wifiPassUuid).write(password.codeUnits);
-    
-    // 2. Unlock protected chars
-    await char(mqttUrlUuid).write(authToken.codeUnits);
-    await Future.delayed(Duration(milliseconds: 100));
-    
-    // 3. MEO credentials
-    await char(mqttUrlUuid).write(mqttUrl.codeUnits);
-    await char(userIdUuid).write(userId.codeUnits);
-    await char(txKeyUuid).write(txKey.codeUnits);
-    
-    // 4. Save & restart
-    await char(saveCmdUuid).write([0x01]);
-    
-    // DLunice will disconnect
+
+    // 1. PIN auth
+    await chr(authUuid).write(pin.codeUnits);
+    await Future.delayed(Duration(milliseconds: 200));
+
+    // 2. Write config
+    await chr(ssidUuid).write(ssid.codeUnits);
+    await chr(passUuid).write(password.codeUnits);
+    await chr(wsUrlUuid).write(wsUrl.codeUnits);
+    await chr(tokenUuid).write(deviceToken.codeUnits);
+
+    // 3. Restart
+    await chr(cmdUuid).write([0x01]);
   }
-}
-```
-
----
-
-## 6. Reading WiFi List
-
-### Characteristic: 0xFF0B (WIFI_LIST)
-
-Returns JSON array of cached networks:
-
-```json
-[
-  {"ssid": "HomeWiFi", "rssi": -45, "auth": 3},
-  {"ssid": "Office5G", "rssi": -62, "auth": 4},
-  {"ssid": "Guest", "rssi": -78, "auth": 0}
-]
-```
-
-### Auth Types
-
-| Value | Meaning |
-|-------|---------|
-| 0 | Open (no password) |
-| 1 | WEP |
-| 2 | WPA_PSK |
-| 3 | WPA2_PSK |
-| 4 | WPA_WPA2_PSK |
-| 5 | WPA2_ENTERPRISE |
-
-### Reading Large Data (MTU Chunking)
-
-WiFi list có thể lớn hơn MTU. DLunice hỗ trợ streaming:
-- Mỗi read trả về chunk tiếp theo
-- Kết thúc khi nhận được chunk rỗng hoặc `]`
-
-```kotlin
-// Android example
-suspend fun readWifiList(gatt: BluetoothGatt): String {
-    val char = gatt.getService(SERVICE_UUID)
-        .getCharacteristic(CHAR_WIFI_LIST)
-    
-    val builder = StringBuilder()
-    do {
-        val chunk = readCharacteristic(char)
-        builder.append(String(chunk))
-    } while (chunk.isNotEmpty() && !builder.endsWith("]"))
-    
-    return builder.toString()
 }
 ```
 
@@ -360,142 +301,65 @@ suspend fun readWifiList(gatt: BluetoothGatt): String {
 
 ## 7. URL Formats
 
-### MQTT URL
-
-```
-mqtt://hostname:port
-mqtt://192.168.1.100:1883
-mqtts://secure.broker.com:8883
-```
-
 ### WebSocket URL
 
 ```
 ws://hostname:port/ws
-ws://192.168.1.100:8000/ws
 wss://secure.server.com/ws
 ```
-
-> DLunice sẽ tự động normalize URLs (thêm scheme/path nếu thiếu)
 
 ---
 
 ## 8. Error Handling
 
-### BLE Connection Errors
-
 | Error | Cause | Solution |
 |-------|-------|----------|
-| Connection timeout | DLunice out of range | Move closer |
-| Service not found | Wrong dLunice | Verify dLunice name |
-| Write failed | Auth not unlocked | Send "Luni_OK" first |
-| Disconnected after save | Expected behavior | Wait & reconnect if needed |
+| Connection timeout | Device out of range | Move closer |
+| Service not found | Wrong device | Verify device name |
+| Write returns 0x01 (FAIL) | Wrong PIN or bad data | Re-enter PIN |
+| Write returns 0x02 (UNAUTHORIZED) | Access level too low | Authenticate first |
+| Disconnected after restart | Expected behavior | Wait & reconnect if needed |
 
 ### Validation
 
+- **PIN:** Exactly 6 digits
 - **SSID:** Max 32 chars, non-empty
-- **Password:** Max 64 chars (can be empty for open networks)
-- **MQTT URL:** Must be valid URL or host:port
-- **User ID:** Non-empty string
-- **TX Key:** Non-empty string (sensitive)
+- **Password:** Max 64 chars (empty = open network)
+- **WS URL:** Must be `ws://` or `wss://` URL
+- **Device Token:** Non-empty string (sensitive)
 
 ---
 
-## 9. UI/UX Recommendations
+## 9. NVS Keys
 
-### Provisioning Screen Flow
+Cac NVS keys luu tru boi firmware:
 
-```
-┌─────────────────────────┐
-│  1. Scan for DLunices    │
-│  ┌───────────────────┐  │
-│  │ Luni-A0B1C2      │  │
-│  │ Luni-D3E4F5      │  │
-│  └───────────────────┘  │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  2. WiFi Selection      │
-│  ┌───────────────────┐  │
-│  │ HomeWiFi    -45dB │  │
-│  │ Office5G    -62dB │  │
-│  └───────────────────┘  │
-│  Password: [________]   │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  3. Server Settings     │
-│  MQTT: [broker:1883___] │
-│  User: [my_namespace__] │
-│  Key:  [************__] │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  4. Provisioning...     │
-│  ████████░░░░ 60%       │
-│  Writing MQTT URL...    │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐
-│  ✓ Setup Complete!      │
-│  DLunice will restart    │
-└─────────────────────────┘
-```
+| NVS Key        | Source Characteristic | Description |
+|----------------|---------------------|-------------|
+| `device_name`  | DEVICE_INFO         | Device display name |
+| `ssid`         | SSID (0x0001)       | WiFi SSID |
+| `pass`         | PASSWORD (0x0002)   | WiFi password |
+| `ws_url`       | WS_URL (0x0003)     | WebSocket server URL |
+| `device_token` | DEV_TOKEN (0x0004)  | Authentication token |
+| `user_id`      | USER_ID (0x0005)    | User namespace |
+| `admin_secret` | ADMIN_SECRET (0x0014)| Admin HMAC key |
 
-### Progress States
-
-1. Connecting...
-2. Reading dLunice info...
-3. Writing WiFi credentials...
-4. Writing server settings...
-5. Saving configuration...
-6. ✓ Complete (dLunice restarting)
+**FACTORY_RESET** xoa: `ssid`, `pass`, `device_token`, `admin_secret`
+**FULL_WIPE** xoa: toan bo NVS partition
 
 ---
 
 ## 10. Testing Checklist
 
-- [ ] Scan finds Luni dLunices
-- [ ] Can read dLunice ID and version
-- [ ] Can read WiFi list
-- [ ] Basic writes work (volume, brightness)
-- [ ] Auth unlock works for MQTT_URL
-- [ ] All MEO credentials save successfully
-- [ ] DLunice restarts after SAVE_CMD
-- [ ] DLunice connects to WiFi after restart
-- [ ] DLunice connects to MQTT after restart
+- [ ] Scan tim duoc Luni devices
+- [ ] Doc duoc DEVICE_INFO va DIAG_INFO (Level 0)
+- [ ] PIN auth hoat dong (Level 0 -> Level 1)
+- [ ] Write SSID, PASSWORD, WS_URL, DEV_TOKEN (Level 1)
+- [ ] RESTART command hoat dong (Level 1)
+- [ ] Device khoi dong lai va ket noi WiFi + WebSocket
+- [ ] Admin auth hoat dong voi HMAC-SHA256 (Level 1 -> Level 2)
+- [ ] FACTORY_RESET xoa dung cac NVS keys (Level 2)
 
 ---
 
-## 11. Troubleshooting
-
-### "Write blocked" error
-
-**Cause:** Protected characteristic not unlocked  
-**Solution:** Write `"Luni_OK"` to the characteristic first
-
-### DLunice doesn't restart after save
-
-**Cause:** SAVE_CMD not received properly  
-**Solution:** Ensure writing `0x01` byte (not string "1")
-
-### WiFi not connecting
-
-**Cause:** Wrong credentials or SSID  
-**Solution:** Verify SSID matches exactly (case-sensitive)
-
-### MQTT not connecting
-
-**Cause:** Wrong URL format or credentials  
-**Solution:** Check format is `mqtt://host:port`, verify tx_key
-
----
-
-## Contact
-
-- Firmware: Luni Team  
-- BLE Protocol Version: 1.0
+BLE Protocol Version: 2.0

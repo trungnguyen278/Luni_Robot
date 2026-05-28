@@ -7,32 +7,35 @@
 // Central state hub for ESP32-S3.
 // Manages interaction, connectivity, system, power, and emotion state.
 // S3 owns: InteractionState (button+audio), PowerState (battery ADC).
-// C5 owns: ConnectivityState (WiFi/WS), EmotionState (parses WS text).
+// C5 owns: ConnectionState (WiFi/WS), EmotionState (parses WS text).
 // Synced via SPI bridge.
 class StateManager {
 public:
     using InteractionCb  = std::function<void(state::InteractionState, state::InputSource)>;
-    using ConnectivityCb = std::function<void(state::ConnectivityState)>;
+    using ConnectivityCb = std::function<void(state::ConnectionState)>;
     using SystemCb       = std::function<void(state::SystemState)>;
     using PowerCb        = std::function<void(state::PowerState)>;
     using EmotionCb      = std::function<void(state::EmotionState)>;
+    using OtaCb          = std::function<void(state::OtaState)>;
 
     static StateManager& instance();
 
     // Setters
     void setInteractionState(state::InteractionState s, state::InputSource src = state::InputSource::UNKNOWN);
-    void setConnectivityState(state::ConnectivityState s);
+    void setConnectionState(state::ConnectionState s);
     void setSystemState(state::SystemState s);
     void setPowerState(state::PowerState s);
     void setEmotionState(state::EmotionState s);
+    void setOtaState(state::OtaState s);
 
     // Getters
     state::InteractionState  getInteractionState();
     state::InputSource       getInteractionSource();
-    state::ConnectivityState getConnectivityState();
+    state::ConnectionState getConnectionState();
     state::SystemState       getSystemState();
     state::PowerState        getPowerState();
     state::EmotionState      getEmotionState();
+    state::OtaState          getOtaState();
 
     // Subscribe (returns subscription id)
     int subscribeInteraction(InteractionCb cb);
@@ -40,6 +43,7 @@ public:
     int subscribeSystem(SystemCb cb);
     int subscribePower(PowerCb cb);
     int subscribeEmotion(EmotionCb cb);
+    int subscribeOta(OtaCb cb);
 
     // Unsubscribe
     void unsubscribeInteraction(int id);
@@ -47,6 +51,7 @@ public:
     void unsubscribeSystem(int id);
     void unsubscribePower(int id);
     void unsubscribeEmotion(int id);
+    void unsubscribeOta(int id);
 
 private:
     StateManager() = default;
@@ -57,10 +62,11 @@ private:
 
     state::InteractionState  interaction_state  = state::InteractionState::IDLE;
     state::InputSource       interaction_source = state::InputSource::UNKNOWN;
-    state::ConnectivityState connectivity_state = state::ConnectivityState::OFFLINE;
+    state::ConnectionState connectivity_state = state::ConnectionState::OFFLINE;
     state::SystemState       system_state       = state::SystemState::BOOTING;
     state::PowerState        power_state        = state::PowerState::NORMAL;
     state::EmotionState      emotion_state      = state::EmotionState::NEUTRAL;
+    state::OtaState          ota_state          = state::OtaState::IDLE;
 
     int next_sub_id = 1;
     std::vector<std::pair<int, InteractionCb>>  interaction_cbs;
@@ -68,4 +74,5 @@ private:
     std::vector<std::pair<int, SystemCb>>       system_cbs;
     std::vector<std::pair<int, PowerCb>>        power_cbs;
     std::vector<std::pair<int, EmotionCb>>      emotion_cbs;
+    std::vector<std::pair<int, OtaCb>>          ota_cbs;
 };

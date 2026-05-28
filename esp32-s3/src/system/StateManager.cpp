@@ -25,7 +25,7 @@ void StateManager::setInteractionState(state::InteractionState s, state::InputSo
     for (auto& [id, cb] : cbs) cb(s, src);
 }
 
-void StateManager::setConnectivityState(state::ConnectivityState s)
+void StateManager::setConnectionState(state::ConnectionState s)
 {
     decltype(connectivity_cbs) cbs;
     {
@@ -73,14 +73,27 @@ void StateManager::setEmotionState(state::EmotionState s)
     for (auto& [id, cb] : cbs) cb(s);
 }
 
+void StateManager::setOtaState(state::OtaState s)
+{
+    decltype(ota_cbs) cbs;
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (s == ota_state) return;
+        ota_state = s;
+        cbs = ota_cbs;
+    }
+    for (auto& [id, cb] : cbs) cb(s);
+}
+
 // === Getters ===
 
 state::InteractionState  StateManager::getInteractionState()  { std::lock_guard<std::mutex> lock(mtx); return interaction_state; }
 state::InputSource       StateManager::getInteractionSource() { std::lock_guard<std::mutex> lock(mtx); return interaction_source; }
-state::ConnectivityState StateManager::getConnectivityState()  { std::lock_guard<std::mutex> lock(mtx); return connectivity_state; }
+state::ConnectionState StateManager::getConnectionState()  { std::lock_guard<std::mutex> lock(mtx); return connectivity_state; }
 state::SystemState       StateManager::getSystemState()        { std::lock_guard<std::mutex> lock(mtx); return system_state; }
 state::PowerState        StateManager::getPowerState()         { std::lock_guard<std::mutex> lock(mtx); return power_state; }
 state::EmotionState      StateManager::getEmotionState()       { std::lock_guard<std::mutex> lock(mtx); return emotion_state; }
+state::OtaState          StateManager::getOtaState()           { std::lock_guard<std::mutex> lock(mtx); return ota_state; }
 
 // === Subscribe ===
 
@@ -89,6 +102,7 @@ int StateManager::subscribeConnectivity(ConnectivityCb cb) { std::lock_guard<std
 int StateManager::subscribeSystem(SystemCb cb)             { std::lock_guard<std::mutex> lock(mtx); int id = next_sub_id++; system_cbs.push_back({id, std::move(cb)}); return id; }
 int StateManager::subscribePower(PowerCb cb)               { std::lock_guard<std::mutex> lock(mtx); int id = next_sub_id++; power_cbs.push_back({id, std::move(cb)}); return id; }
 int StateManager::subscribeEmotion(EmotionCb cb)           { std::lock_guard<std::mutex> lock(mtx); int id = next_sub_id++; emotion_cbs.push_back({id, std::move(cb)}); return id; }
+int StateManager::subscribeOta(OtaCb cb)                   { std::lock_guard<std::mutex> lock(mtx); int id = next_sub_id++; ota_cbs.push_back({id, std::move(cb)}); return id; }
 
 // === Unsubscribe ===
 
@@ -116,4 +130,9 @@ void StateManager::unsubscribeEmotion(int id) {
     std::lock_guard<std::mutex> lock(mtx);
     emotion_cbs.erase(std::remove_if(emotion_cbs.begin(), emotion_cbs.end(),
         [id](auto& p){ return p.first == id; }), emotion_cbs.end());
+}
+void StateManager::unsubscribeOta(int id) {
+    std::lock_guard<std::mutex> lock(mtx);
+    ota_cbs.erase(std::remove_if(ota_cbs.begin(), ota_cbs.end(),
+        [id](auto& p){ return p.first == id; }), ota_cbs.end());
 }

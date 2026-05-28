@@ -55,7 +55,7 @@ private:
     void processQueue();
 
     void onInteractionStateChanged(state::InteractionState, state::InputSource);
-    void onConnectivityStateChanged(state::ConnectivityState);
+    void onConnectionStateChanged(state::ConnectionState);
     void onSystemStateChanged(state::SystemState);
     void onPowerStateChanged(state::PowerState);
     void onEmotionStateChanged(state::EmotionState);

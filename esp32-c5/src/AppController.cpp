@@ -3,6 +3,8 @@
 #include "system/SpiBridge.hpp"
 #include "system/UartBridge.hpp"
 
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_log.h"
 #include <utility>
 
@@ -11,19 +13,17 @@ static const char* TAG = "AppController";
 struct AppMessage {
     enum class Type : uint8_t {
         INTERACTION,
-        CONNECTIVITY,
+        CONNECTION,
         SYSTEM,
         APP_EVENT
     } type;
 
-    state::InteractionState  interaction_state;
-    state::InputSource       interaction_source;
-    state::ConnectivityState connectivity_state;
-    state::SystemState       system_state;
-    event::AppEvent          app_event;
+    state::InteractionState interaction_state;
+    state::InputSource      interaction_source;
+    state::ConnectionState  connection_state;
+    state::SystemState      system_state;
+    event::AppEvent         app_event;
 };
-
-// === Singleton ===
 
 AppController& AppController::instance()
 {
@@ -36,12 +36,10 @@ AppController::~AppController()
     stop();
     auto& sm = StateManager::instance();
     if (sub_inter_id != -1) sm.unsubscribeInteraction(sub_inter_id);
-    if (sub_conn_id != -1)  sm.unsubscribeConnectivity(sub_conn_id);
+    if (sub_conn_id != -1)  sm.unsubscribeConnection(sub_conn_id);
     if (sub_sys_id != -1)   sm.unsubscribeSystem(sub_sys_id);
     if (app_queue) { vQueueDelete(app_queue); app_queue = nullptr; }
 }
-
-// === Module attachment ===
 
 void AppController::attachModules(std::unique_ptr<NetworkManager> networkIn,
                                    std::unique_ptr<SpiBridge> spiIn,
@@ -52,8 +50,6 @@ void AppController::attachModules(std::unique_ptr<NetworkManager> networkIn,
     spi     = std::move(spiIn);
     uart    = std::move(uartIn);
 }
-
-// === Lifecycle ===
 
 bool AppController::init()
 {
@@ -74,10 +70,10 @@ bool AppController::init()
             if (app_queue) xQueueSend(app_queue, &msg, 0);
         });
 
-    sub_conn_id = sm.subscribeConnectivity(
-        [this](state::ConnectivityState s) {
-            AppMessage msg{}; msg.type = AppMessage::Type::CONNECTIVITY;
-            msg.connectivity_state = s;
+    sub_conn_id = sm.subscribeConnection(
+        [this](state::ConnectionState s, state::ConnectFailReason) {
+            AppMessage msg{}; msg.type = AppMessage::Type::CONNECTION;
+            msg.connection_state = s;
             if (app_queue) xQueueSend(app_queue, &msg, 0);
         });
 
@@ -133,15 +129,6 @@ void AppController::postEvent(event::AppEvent evt)
     xQueueSend(app_queue, &msg, 0);
 }
 
-// === Emotion parsing ===
-
-state::EmotionState AppController::parseEmotionCode(const std::string& code)
-{
-    return NetworkManager::parseEmotionCode(code);
-}
-
-// === Task & Queue ===
-
 void AppController::controllerTask(void* param)
 {
     static_cast<AppController*>(param)->processQueue();
@@ -153,7 +140,7 @@ void AppController::sendStatusHeartbeat()
     auto& sm = StateManager::instance();
     uart->sendStatusUpdate(
         (uint8_t)sm.getInteractionState(),
-        (uint8_t)sm.getConnectivityState(),
+        (uint8_t)sm.getConnectionState(),
         (uint8_t)sm.getSystemState(),
         (uint8_t)sm.getEmotionState());
 }
@@ -169,8 +156,8 @@ void AppController::processQueue()
             case AppMessage::Type::INTERACTION:
                 onInteractionStateChanged(msg.interaction_state, msg.interaction_source);
                 break;
-            case AppMessage::Type::CONNECTIVITY:
-                onConnectivityStateChanged(msg.connectivity_state);
+            case AppMessage::Type::CONNECTION:
+                onConnectionStateChanged(msg.connection_state);
                 break;
             case AppMessage::Type::SYSTEM:
                 onSystemStateChanged(msg.system_state);
@@ -194,32 +181,29 @@ void AppController::processQueue()
     vTaskDelete(nullptr);
 }
 
-// === State callbacks ===
-
 void AppController::onInteractionStateChanged(state::InteractionState s, state::InputSource src)
 {
     ESP_LOGI(TAG, "Interaction: %d (src=%d)", (int)s, (int)src);
 
-    // Forward state to S3 via UART
     if (uart) {
         uart->sendStatusUpdate(
             (uint8_t)s,
-            (uint8_t)StateManager::instance().getConnectivityState(),
+            (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)StateManager::instance().getSystemState(),
             (uint8_t)StateManager::instance().getEmotionState());
     }
-
-    // WS immune mode during SPEAKING
-    if (network) {
-        network->setWSImmuneMode(s == state::InteractionState::SPEAKING);
-    }
 }
 
-void AppController::onConnectivityStateChanged(state::ConnectivityState s)
+void AppController::onConnectionStateChanged(state::ConnectionState s)
 {
-    ESP_LOGI(TAG, "Connectivity: %d", (int)s);
+    ESP_LOGI(TAG, "Connection: %d", (int)s);
 
-    // Forward to S3 via UART
+    if (s == state::ConnectionState::BLE_PROVISIONING) {
+        startBleProvisioning();
+    } else if (ble_active_) {
+        stopBleProvisioning();
+    }
+
     if (uart) {
         uart->sendStatusUpdate(
             (uint8_t)StateManager::instance().getInteractionState(),
@@ -227,6 +211,52 @@ void AppController::onConnectivityStateChanged(state::ConnectivityState s)
             (uint8_t)StateManager::instance().getSystemState(),
             (uint8_t)StateManager::instance().getEmotionState());
     }
+}
+
+void AppController::startBleProvisioning()
+{
+    if (ble_active_) return;
+
+    if (!ble_.init("Luni")) {
+        ESP_LOGE(TAG, "BLE init failed");
+        return;
+    }
+
+    ble_.onConfigComplete([this](const BluetoothService::ConfigData& cfg) {
+        ESP_LOGI(TAG, "BLE config received: ssid='%s'", cfg.ssid.c_str());
+
+        nvs_handle_t h;
+        if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
+            if (!cfg.ssid.empty())
+                nvs_set_str(h, "ssid", cfg.ssid.c_str());
+            if (!cfg.pass.empty())
+                nvs_set_str(h, "pass", cfg.pass.c_str());
+            if (!cfg.ws_url.empty())
+                nvs_set_str(h, "ws_url", cfg.ws_url.c_str());
+            if (!cfg.user_id.empty())
+                nvs_set_str(h, "user_id", cfg.user_id.c_str());
+            if (!cfg.admin_secret.empty())
+                nvs_set_str(h, "admin_secret", cfg.admin_secret.c_str());
+            nvs_commit(h);
+            nvs_close(h);
+        }
+
+        if (network) {
+            network->setCredentials(cfg.ssid, cfg.pass);
+        }
+    });
+
+    ble_.start();
+    ble_active_ = true;
+    ESP_LOGI(TAG, "BLE provisioning started");
+}
+
+void AppController::stopBleProvisioning()
+{
+    if (!ble_active_) return;
+    ble_.deinit();
+    ble_active_ = false;
+    ESP_LOGI(TAG, "BLE provisioning stopped");
 }
 
 void AppController::onSystemStateChanged(state::SystemState s)
@@ -236,7 +266,7 @@ void AppController::onSystemStateChanged(state::SystemState s)
     if (uart) {
         uart->sendStatusUpdate(
             (uint8_t)StateManager::instance().getInteractionState(),
-            (uint8_t)StateManager::instance().getConnectivityState(),
+            (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)s,
             (uint8_t)StateManager::instance().getEmotionState());
     }

@@ -1,16 +1,18 @@
 #include "NetworkManager.hpp"
 #include "WifiService.hpp"
 #include "WebSocketClient.hpp"
-#include "MqttClient.hpp"
-#include "SpiBridge.hpp"
-#include "UartBridge.hpp"
-#include "UartProtocol.hpp"
-#include "BluetoothService.hpp"
+#include "system/OtaManager.hpp"
+#include "system/DataSyncManager.hpp"
+#include "system/LogManager.hpp"
+#include "system/SpiBridge.hpp"
+#include "system/UartBridge.hpp"
+#include "protocol/WsProtocol.hpp"
+#include "protocol/WsMessageHandler.hpp"
+#include "config/ServerConfig.hpp"
 #include "Version.hpp"
 
 #include "esp_log.h"
 #include "esp_wifi.h"
-#include "nvs_flash.h"
 #include "cJSON.h"
 #include <cstring>
 
@@ -22,13 +24,21 @@ NetworkManager::~NetworkManager() { stop(); }
 bool NetworkManager::init(const Config& cfg)
 {
     cfg_ = cfg;
-    ESP_LOGI(TAG, "init: ws=%s, mqtt=%s", cfg_.ws_url.c_str(), cfg_.mqtt_url.c_str());
+    wifi_credentials_exist_ = !cfg_.wifi_ssid.empty();
+
+    ESP_LOGI(TAG, "init: ws=%s mac=%s",
+             cfg_.ws_url.c_str(), getDLuniceEfuseID());
 
     wifi_ = std::make_unique<WifiService>();
     ws_   = std::make_unique<WebSocketClient>();
+    ota_  = std::make_unique<OtaManager>();
+    sync_ = std::make_unique<DataSyncManager>();
 
     wifi_->init();
     ws_->init();
+    ws_->setDeviceInfo(getDLuniceEfuseID(), app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
+    ota_->init(StateManager::instance());
+    sync_->init();
 
     setupWifi();
     setupWebSocket();
@@ -41,11 +51,8 @@ void NetworkManager::start()
     if (started_) return;
     started_ = true;
 
-    if (!cfg_.wifi_ssid.empty()) {
-        wifi_->connectWithCredentials(cfg_.wifi_ssid.c_str(), cfg_.wifi_pass.c_str());
-    } else {
-        wifi_->autoConnect();
-    }
+    xTaskCreatePinnedToCore(&NetworkManager::connectionTaskEntry,
+                            "net_conn", 4096, this, 5, &conn_task_, 0);
 
     ESP_LOGI(TAG, "NetworkManager started");
 }
@@ -55,10 +62,18 @@ void NetworkManager::stop()
     if (!started_) return;
     started_ = false;
 
-    if (ws_) ws_->close();
-    if (mqtt_) mqtt_->stop();
+    stopHeartbeat();
+
+    if (log_flush_timer_) {
+        esp_timer_stop(log_flush_timer_);
+        esp_timer_delete(log_flush_timer_);
+        log_flush_timer_ = nullptr;
+    }
+
+    if (ws_) ws_->disconnect();
 
     vTaskDelay(pdMS_TO_TICKS(200));
+    conn_task_ = nullptr;
     ESP_LOGI(TAG, "NetworkManager stopped");
 }
 
@@ -66,11 +81,9 @@ void NetworkManager::setCredentials(const std::string& ssid, const std::string& 
 {
     cfg_.wifi_ssid = ssid;
     cfg_.wifi_pass = pass;
-    if (wifi_) wifi_->connectWithCredentials(ssid.c_str(), pass.c_str());
+    wifi_credentials_exist_ = !ssid.empty();
+    awaiting_provision_ = false;
 }
-
-void NetworkManager::setSpiBridge(SpiBridge* bridge)   { spi_bridge_ = bridge; }
-void NetworkManager::setUartBridge(UartBridge* bridge) { uart_bridge_ = bridge; }
 
 // === WiFi setup ===
 
@@ -80,27 +93,12 @@ void NetworkManager::setupWifi()
         switch (status) {
         case 2: // GOT_IP
             ESP_LOGI(TAG, "WiFi connected");
-            StateManager::instance().setConnectivityState(state::ConnectivityState::WIFI_CONNECTED);
-            if (ws_ && !cfg_.ws_url.empty()) {
-                StateManager::instance().setConnectivityState(state::ConnectivityState::CONNECTING_WS);
-                ws_->setUrl(cfg_.ws_url);
-                ws_->connect();
-            }
             break;
         case 0: // DISCONNECTED
             ESP_LOGW(TAG, "WiFi disconnected");
-            if (!ws_immune_) {
-                if (speaking_session_active_) {
-                    endSpeakingSession();
-                    StateManager::instance().setInteractionState(
-                        state::InteractionState::IDLE, state::InputSource::SERVER_COMMAND);
-                }
-                StateManager::instance().setConnectivityState(state::ConnectivityState::OFFLINE);
-                ws_connected_ = false;
-            }
+            ws_connected_ = false;
             break;
         case 1: // CONNECTING
-            StateManager::instance().setConnectivityState(state::ConnectivityState::CONNECTING_WIFI);
             break;
         }
     });
@@ -110,91 +108,57 @@ void NetworkManager::setupWifi()
 
 void NetworkManager::setupWebSocket()
 {
-    ws_->onStatus([this](int status) {
-        switch (status) {
-        case 2: // OPEN
-            ESP_LOGI(TAG, "WebSocket connected");
-            ws_connected_ = true;
-            StateManager::instance().setConnectivityState(state::ConnectivityState::ONLINE);
-            sendDLuniceHandshake();
-
-            // Deferred MQTT: start in a background task after 10s delay
-            // so the TCP connect attempt doesn't disrupt the WS connection
-            if (!mqtt_ && !cfg_.mqtt_url.empty() && !mqtt_init_pending_) {
-                startMqttDeferred();
-            }
-            break;
-
-        case 0: // CLOSED
-            ESP_LOGW(TAG, "WebSocket disconnected");
-            ws_connected_ = false;
+    ws_->onStateChange([this](bool connected) {
+        ws_connected_ = connected;
+        if (!connected) {
             if (speaking_session_active_) {
-                ESP_LOGW(TAG, "WS disconnected mid-stream, ending speaking session");
                 endSpeakingSession();
                 StateManager::instance().setInteractionState(
                     state::InteractionState::IDLE, state::InputSource::SERVER_COMMAND);
             }
-            if (!ws_immune_) {
-                StateManager::instance().setConnectivityState(state::ConnectivityState::WIFI_CONNECTED);
-            }
-            break;
-
-        case 1: // CONNECTING
-            break;
         }
     });
 
-    // Server text commands -> parse emotion + relay interaction state to S3 via SPI
-    ws_->onText([this](const std::string& msg) {
-        ESP_LOGI(TAG, "WS text: %s", msg.c_str());
+    ws_->onAuthResult([this](bool success, int close_code) {
+        if (success) {
+            ESP_LOGI(TAG, "WS authenticated");
+            sendDeviceInfo();
+            startHeartbeat();
 
-        std::string command = msg;
-
-        // Check for emotion code prefix
-        if (msg.length() >= 2) {
-            std::string potential_code = msg.substr(0, 2);
-            if (potential_code[0] >= '0' && potential_code[0] <= '9' &&
-                potential_code[1] >= '0' && potential_code[1] <= '9') {
-                auto emotion = parseEmotionCode(potential_code);
-                StateManager::instance().setEmotionState(emotion);
-                command = (msg.length() > 2) ? msg.substr(2) : "";
+            // Start log flush timer
+            if (!log_flush_timer_) {
+                esp_timer_create_args_t args = {};
+                args.callback = &NetworkManager::logFlushTimerCb;
+                args.arg = this;
+                args.name = "log_flush";
+                esp_timer_create(&args, &log_flush_timer_);
+                esp_timer_start_periodic(log_flush_timer_,
+                    server_cfg::LOG_FLUSH_INTERVAL_MS * 1000);
             }
-        }
-
-        if (command.empty()) return;
-
-        // Process server commands and relay state to S3 via SPI STATUS_UPDATE
-        auto& sm = StateManager::instance();
-        if (command == "PROCESSING_START" || command == "PROCESSING") {
-            sm.setInteractionState(state::InteractionState::PROCESSING, state::InputSource::SERVER_COMMAND);
-        } else if (command == "AUDIO_START" || command == "SPEAKING" || command == "SPEAK_START") {
-            if (!speaking_session_active_) {
-                startSpeakingSession();
-                sm.setInteractionState(state::InteractionState::SPEAKING, state::InputSource::SERVER_COMMAND);
-            }
-        } else if (command == "IDLE" || command == "SPEAK_END" || command == "DONE" || command == "TTS_END") {
-            endSpeakingSession();
-            sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::SERVER_COMMAND);
         }
     });
 
-    // Server binary -> relay raw bytes to S3 via SPI audio downlink stream.
-    // Data is concatenated [2-byte LE len][opus data] frames. We push raw bytes
-    // into SpiBridge's stream buffer — S3 parses [2B len][opus] from its own
-    // stream buffer, which handles frame boundaries transparently.
+    // Incoming text messages — dispatch via WsMessageHandler
+    ws_->onText([this](const char* data, size_t len) {
+        ws::ParsedMessage msg = ws::parseMessage(data, len);
+        if (!msg.valid) {
+            ESP_LOGW(TAG, "Invalid WS message");
+            return;
+        }
+
+        WsMessageHandler::handleMessage(msg, this);
+
+        if (msg.root) cJSON_Delete(msg.root);
+    });
+
+    // Binary audio from server → relay to S3 via SPI
     ws_->onBinary([this](const uint8_t* data, size_t len) {
         if (!data || len == 0 || !spi_bridge_) return;
 
-        static uint32_t bin_msg_count = 0;
-        bin_msg_count++;
-        if (bin_msg_count == 1 || bin_msg_count % 100 == 0) {
-            ESP_LOGI(TAG, "WS binary #%lu: %zu bytes", (unsigned long)bin_msg_count, len);
-        }
-
         if (!speaking_session_active_) {
-            auto state = StateManager::instance().getInteractionState();
-            if (state == state::InteractionState::PROCESSING ||
-                state == state::InteractionState::SPEAKING) {
+            auto s = StateManager::instance().getInteractionState();
+            if (s == state::InteractionState::PROCESSING ||
+                s == state::InteractionState::SPEAKING) {
                 startSpeakingSession();
                 StateManager::instance().setInteractionState(
                     state::InteractionState::SPEAKING, state::InputSource::SERVER_COMMAND);
@@ -207,216 +171,11 @@ void NetworkManager::setupWebSocket()
     });
 }
 
-// === MQTT setup ===
+// === Send operations ===
 
-void NetworkManager::mqttPublishResponse(const char* cmd, const char* status, const char* extra_json)
+void NetworkManager::sendText(const char* json, size_t len)
 {
-    std::string topic = "dLunices/" + std::string(getDLuniceEfuseID()) + "/status";
-    char buf[256];
-    if (extra_json) {
-        snprintf(buf, sizeof(buf),
-            "{\"cmd\":\"%s\",\"status\":\"%s\",\"dLunice_id\":\"%s\",%s}",
-            cmd, status, getDLuniceEfuseID(), extra_json);
-    } else {
-        snprintf(buf, sizeof(buf),
-            "{\"cmd\":\"%s\",\"status\":\"%s\",\"dLunice_id\":\"%s\"}",
-            cmd, status, getDLuniceEfuseID());
-    }
-    ESP_LOGI(TAG, "MQTT TX: topic=%s", topic.c_str());
-    bool ok = mqtt_->publish(topic, buf);
-    ESP_LOGI(TAG, "MQTT TX result: %s payload=%s", ok ? "OK" : "FAIL", buf);
-}
-
-bool NetworkManager::nvsSetU8(const char* key, uint8_t val)
-{
-    nvs_handle_t h;
-    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK) return false;
-    esp_err_t err = nvs_set_u8(h, key, val);
-    if (err == ESP_OK) nvs_commit(h);
-    nvs_close(h);
-    return err == ESP_OK;
-}
-
-bool NetworkManager::nvsSetString(const char* key, const char* val)
-{
-    nvs_handle_t h;
-    if (nvs_open("storage", NVS_READWRITE, &h) != ESP_OK) return false;
-    esp_err_t err = nvs_set_str(h, key, val);
-    if (err == ESP_OK) nvs_commit(h);
-    nvs_close(h);
-    return err == ESP_OK;
-}
-
-void NetworkManager::setupMqtt()
-{
-    mqtt_->onConnected([this]() {
-        ESP_LOGI(TAG, "MQTT connected");
-        std::string cmd_topic = "dLunices/" + std::string(getDLuniceEfuseID()) + "/cmd";
-        mqtt_->subscribe(cmd_topic);
-    });
-
-    mqtt_->onMessage([this](const std::string& topic, const std::string& payload) {
-        ESP_LOGI(TAG, "MQTT RX: topic=%s", topic.c_str());
-        ESP_LOGI(TAG, "MQTT RX: payload=%.*s", (int)payload.size(), payload.c_str());
-
-        cJSON* root = cJSON_Parse(payload.c_str());
-        if (!root) {
-            ESP_LOGE(TAG, "MQTT RX: JSON parse FAILED");
-            return;
-        }
-
-        cJSON* cmd_item = cJSON_GetObjectItem(root, "cmd");
-        if (!cmd_item || !cJSON_IsString(cmd_item)) {
-            ESP_LOGW(TAG, "MQTT RX: missing or invalid 'cmd' field");
-            cJSON_Delete(root);
-            return;
-        }
-
-        std::string cmd = cmd_item->valuestring;
-        ESP_LOGI(TAG, "MQTT CMD: '%s'", cmd.c_str());
-
-        // ----- set_volume -----
-        if (cmd == "set_volume") {
-            cJSON* vol = cJSON_GetObjectItem(root, "volume");
-            if (!vol || !cJSON_IsNumber(vol)) {
-                mqttPublishResponse("set_volume", "error", "\"message\":\"missing volume param\"");
-            } else {
-                uint8_t v = (uint8_t)vol->valueint;
-                nvsSetU8("volume", v);
-
-                if (uart_bridge_) {
-                    uint8_t frame_payload[] = { (uint8_t)uart_proto::ControlCmd::SET_VOLUME, v };
-                    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
-                    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::CONTROL_CMD,
-                                                        frame_payload, sizeof(frame_payload));
-                    if (len > 0) {
-                        uart_write_bytes(UART_NUM_1, frame, len);
-                        ESP_LOGI(TAG, "UART TX: SET_VOLUME %d -> S3", v);
-                    }
-                }
-
-                char extra[32];
-                snprintf(extra, sizeof(extra), "\"volume\":%d", v);
-                mqttPublishResponse("set_volume", "ok", extra);
-            }
-
-        // ----- set_brightness -----
-        } else if (cmd == "set_brightness") {
-            cJSON* br = cJSON_GetObjectItem(root, "brightness");
-            if (!br || !cJSON_IsNumber(br)) {
-                mqttPublishResponse("set_brightness", "error", "\"message\":\"missing brightness param\"");
-            } else {
-                uint8_t b = (uint8_t)br->valueint;
-                nvsSetU8("brightness", b);
-
-                if (uart_bridge_) {
-                    uint8_t frame_payload[] = { (uint8_t)uart_proto::ControlCmd::SET_BRIGHTNESS, b };
-                    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
-                    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::CONTROL_CMD,
-                                                        frame_payload, sizeof(frame_payload));
-                    if (len > 0) {
-                        uart_write_bytes(UART_NUM_1, frame, len);
-                        ESP_LOGI(TAG, "UART TX: SET_BRIGHTNESS %d -> S3", b);
-                    }
-                }
-
-                char extra[40];
-                snprintf(extra, sizeof(extra), "\"brightness\":%d", b);
-                mqttPublishResponse("set_brightness", "ok", extra);
-            }
-
-        // ----- set_dLunice_name -----
-        } else if (cmd == "set_dLunice_name") {
-            cJSON* name = cJSON_GetObjectItem(root, "dLunice_name");
-            if (!name || !cJSON_IsString(name)) {
-                mqttPublishResponse("set_dLunice_name", "error", "\"message\":\"missing dLunice_name param\"");
-            } else {
-                nvsSetString("dLunice_name", name->valuestring);
-
-                char extra[96];
-                snprintf(extra, sizeof(extra), "\"dLunice_name\":\"%s\"", name->valuestring);
-                mqttPublishResponse("set_dLunice_name", "ok", extra);
-            }
-
-        // ----- set_emotion -----
-        } else if (cmd == "set_emotion") {
-            cJSON* code = cJSON_GetObjectItem(root, "code");
-            if (!code || !cJSON_IsString(code)) {
-                mqttPublishResponse("set_emotion", "error", "\"message\":\"missing code param\"");
-            } else {
-                auto emotion = parseEmotionCode(code->valuestring);
-                StateManager::instance().setEmotionState(emotion);
-
-                char extra[48];
-                snprintf(extra, sizeof(extra), "\"code\":\"%s\"", code->valuestring);
-                mqttPublishResponse("set_emotion", "ok", extra);
-            }
-
-        // ----- reboot -----
-        } else if (cmd == "reboot") {
-            mqttPublishResponse("reboot", "ok", "\"message\":\"rebooting\"");
-            vTaskDelay(pdMS_TO_TICKS(500));
-            esp_restart();
-
-        // ----- request_status -----
-        } else if (cmd == "request_status") {
-            auto& sm = StateManager::instance();
-            std::string resp_topic = "dLunices/" + std::string(getDLuniceEfuseID()) + "/status";
-            char buf[300];
-            snprintf(buf, sizeof(buf),
-                "{\"cmd\":\"request_status\",\"status\":\"ok\","
-                "\"dLunice_id\":\"%s\",\"firmware_version\":\"%s\","
-                "\"connectivity\":%d,\"interaction\":%d,"
-                "\"free_heap\":%lu,\"uptime_ms\":%lu}",
-                getDLuniceEfuseID(), app_meta::APP_VERSION,
-                (int)sm.getConnectivityState(), (int)sm.getInteractionState(),
-                (unsigned long)esp_get_free_heap_size(),
-                (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-            ESP_LOGI(TAG, "MQTT TX: topic=%s", resp_topic.c_str());
-            bool ok = mqtt_->publish(resp_topic, buf);
-            ESP_LOGI(TAG, "MQTT TX result: %s payload=%s", ok ? "OK" : "FAIL", buf);
-
-        // ----- request_ble_config -----
-        } else if (cmd == "request_ble_config") {
-            if (ble_config_active_) {
-                mqttPublishResponse("request_ble_config", "ok", "\"message\":\"BLE config already active\"");
-            } else {
-                startBleConfigMode();
-                mqttPublishResponse("request_ble_config", "ok", "\"message\":\"BLE config mode started\"");
-            }
-
-        // ----- set_wifi -----
-        } else if (cmd == "set_wifi") {
-            mqttPublishResponse("set_wifi", "not_supported", "\"message\":\"Use BLE provisioning\"");
-
-        // ----- set_ws_url -----
-        } else if (cmd == "set_ws_url") {
-            mqttPublishResponse("set_ws_url", "not_supported", "\"message\":\"Use BLE provisioning\"");
-
-        // ----- stop_audio -----
-        } else if (cmd == "stop_audio") {
-            endSpeakingSession();
-            StateManager::instance().setInteractionState(
-                state::InteractionState::IDLE, state::InputSource::SERVER_COMMAND);
-            mqttPublishResponse("stop_audio", "ok");
-
-        // ----- unknown -----
-        } else {
-            ESP_LOGW(TAG, "MQTT CMD unknown: '%s'", cmd.c_str());
-            char extra[96];
-            snprintf(extra, sizeof(extra), "\"message\":\"unknown command: %s\"", cmd.c_str());
-            mqttPublishResponse(cmd.c_str(), "invalid_command", extra);
-        }
-
-        cJSON_Delete(root);
-    });
-}
-
-// === WebSocket operations ===
-
-void NetworkManager::sendText(const std::string& msg)
-{
-    if (ws_ && ws_connected_) ws_->sendText(msg);
+    if (ws_ && ws_connected_) ws_->sendText(json, len);
 }
 
 void NetworkManager::sendBinary(const uint8_t* data, size_t len)
@@ -434,235 +193,254 @@ size_t NetworkManager::getWsTxFreeSpace() const
     return ws_ ? ws_->getTxFreeSpace() : 0;
 }
 
-void NetworkManager::setWSImmuneMode(bool enable) { ws_immune_ = enable; }
-
-void NetworkManager::sendDLuniceHandshake()
+void NetworkManager::sendDeviceInfo()
 {
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-        "{\"cmd\":\"dLunice_handshake\",\"dLunice_id\":\"%s\","
-        "\"firmware_version\":\"%s\",\"dLunice_name\":\"%s\"}",
-        getDLuniceEfuseID(), app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
-    sendText(buf);
+    cJSON* msg = ws::createDeviceInfo(
+        getDLuniceEfuseID(), app_meta::APP_VERSION,
+        app_meta::DLuniCE_MODEL, cfg_.device_name.c_str());
+    if (msg && ws_) {
+        ws_->sendMessage(msg);
+    }
 }
 
-// === Deferred MQTT init ===
-
-void NetworkManager::startMqttDeferred()
+void NetworkManager::sendStateUpdate(const state::StateEvent& event)
 {
-    mqtt_init_pending_ = true;
-    // One-shot task: waits 10s for WS to stabilize, then starts MQTT.
-    // Runs on Core 0 at low priority so it doesn't interfere with WS or SPI.
-    xTaskCreatePinnedToCore(&NetworkManager::mqttInitTaskEntry, "mqtt_init",
-                            3072, this, 1, nullptr, 0);
+    const char* category = nullptr;
+    switch (event.type) {
+    case state::StateEvent::Type::CONNECTION:  category = "connectivity"; break;
+    case state::StateEvent::Type::INTERACTION: category = "interaction"; break;
+    case state::StateEvent::Type::OTA:         category = "ota"; break;
+    case state::StateEvent::Type::SYSTEM:      category = "system"; break;
+    case state::StateEvent::Type::EMOTION:     category = "emotion"; break;
+    default: return;
+    }
+
+    cJSON* msg = ws::createStateUpdate(category, event.old_value, event.new_value);
+    if (msg && ws_) {
+        ws_->sendMessage(msg);
+    }
 }
 
-void NetworkManager::mqttInitTaskEntry(void* arg)
+void NetworkManager::sendAudioUplink(const uint8_t* opus_data, size_t len)
+{
+    sendBinary(opus_data, len);
+}
+
+void NetworkManager::checkOtaUpdate()
+{
+    if (ota_) ota_->checkUpdate(app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
+}
+
+// === Heartbeat ===
+
+void NetworkManager::heartbeatTimerCb(void* arg)
 {
     auto* self = static_cast<NetworkManager*>(arg);
+    self->sendHeartbeat();
+}
 
-    // Wait 10s — let WS connection fully stabilize
-    vTaskDelay(pdMS_TO_TICKS(10000));
+void NetworkManager::startHeartbeat()
+{
+    if (heartbeat_timer_) return;
 
-    // Only proceed if WS is still connected and MQTT wasn't started yet
-    if (!self->ws_connected_ || self->mqtt_) {
-        ESP_LOGI(TAG, "MQTT deferred init cancelled (ws=%d mqtt=%d)",
-                 (int)self->ws_connected_, self->mqtt_ != nullptr);
-        self->mqtt_init_pending_ = false;
-        vTaskDelete(nullptr);
-        return;
+    esp_timer_create_args_t args = {};
+    args.callback = &NetworkManager::heartbeatTimerCb;
+    args.arg = this;
+    args.name = "heartbeat";
+    esp_timer_create(&args, &heartbeat_timer_);
+    esp_timer_start_periodic(heartbeat_timer_,
+        server_cfg::HEARTBEAT_INTERVAL_MS * 1000);
+}
+
+void NetworkManager::stopHeartbeat()
+{
+    if (heartbeat_timer_) {
+        esp_timer_stop(heartbeat_timer_);
+        esp_timer_delete(heartbeat_timer_);
+        heartbeat_timer_ = nullptr;
+    }
+}
+
+void NetworkManager::sendHeartbeat()
+{
+    if (!ws_ || !ws_connected_) return;
+
+    wifi_ap_record_t ap;
+    int8_t rssi = 0;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        rssi = ap.rssi;
     }
 
-    size_t free_heap = esp_get_free_heap_size();
-    if (free_heap < 20000) {
-        ESP_LOGW(TAG, "MQTT skipped - low heap (%lu)", (unsigned long)free_heap);
-        self->mqtt_init_pending_ = false;
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Deferred MQTT init (free heap: %lu)", (unsigned long)free_heap);
-    self->mqtt_ = std::make_unique<MqttClient>();
-    self->mqtt_->init();
-    self->setupMqtt();
-    self->mqtt_->setUri(self->cfg_.mqtt_url);
-    std::string user = self->cfg_.user_id.empty()
-                           ? std::string(getDLuniceEfuseID())
-                           : self->cfg_.user_id;
-    self->mqtt_->setCredentials(user, self->cfg_.tx_key);
-    self->mqtt_->start();
-
-    self->mqtt_init_pending_ = false;
-    vTaskDelete(nullptr);
+    cJSON* msg = ws::createHeartbeat(
+        (uint32_t)(esp_timer_get_time() / 1000000),
+        (uint32_t)esp_get_free_heap_size(),
+        rssi);
+    if (msg) ws_->sendMessage(msg);
 }
 
-// === Emotion parsing ===
-
-state::EmotionState NetworkManager::parseEmotionCode(const std::string& code)
-{
-    if (code == "01") return state::EmotionState::HAPPY;
-    if (code == "11") return state::EmotionState::SAD;
-    if (code == "02") return state::EmotionState::ANGRY;
-    if (code == "12") return state::EmotionState::CONFUSED;
-    if (code == "03") return state::EmotionState::EXCITED;
-    if (code == "13") return state::EmotionState::CALM;
-    return state::EmotionState::NEUTRAL;
-}
-
-// === BLE Config Mode (runtime, triggered by MQTT) ===
-
-void NetworkManager::startBleConfigMode()
-{
-    if (ble_config_active_) return;
-    ble_config_active_ = true;
-
-    xTaskCreatePinnedToCore(&NetworkManager::bleConfigTaskEntry, "ble_cfg",
-                            4096, this, 2, nullptr, 0);
-}
-
-void NetworkManager::stopBleConfigMode()
-{
-    if (!ble_config_active_) return;
-    if (ble_) {
-        ble_->deinit();
-        delete ble_;
-        ble_ = nullptr;
-    }
-    ble_config_active_ = false;
-    ESP_LOGI(TAG, "BLE config mode stopped");
-}
-
-void NetworkManager::bleConfigTaskEntry(void* arg)
+void NetworkManager::logFlushTimerCb(void* arg)
 {
     auto* self = static_cast<NetworkManager*>(arg);
-
-    size_t free_heap = esp_get_free_heap_size();
-    ESP_LOGI(TAG, "BLE config task start, free heap: %lu", (unsigned long)free_heap);
-
-    if (free_heap < 60000) {
-        ESP_LOGW(TAG, "Not enough heap for BLE (%lu), aborting", (unsigned long)free_heap);
-        self->mqttPublishResponse("request_ble_config", "error",
-                                  "\"message\":\"insufficient memory for BLE\"");
-        self->ble_config_active_ = false;
-        vTaskDelete(nullptr);
-        return;
+    if (self->ws_ && self->ws_connected_) {
+        LogManager::instance().flush(*self->ws_);
     }
+}
 
-    // Scan WiFi networks to provide list via BLE
-    wifi_scan_config_t scan_cfg = {};
-    esp_wifi_scan_start(&scan_cfg, true);
-    uint16_t ap_count = 0;
-    esp_wifi_scan_get_ap_num(&ap_count);
-    std::vector<wifi_ap_record_t> ap_records(ap_count);
-    esp_wifi_scan_get_ap_records(&ap_count, ap_records.data());
+// === Connection state machine ===
 
-    std::vector<WifiInfo> networks;
-    for (int i = 0; i < ap_count; i++) {
-        WifiInfo info;
-        info.ssid = (const char*)ap_records[i].ssid;
-        info.rssi = ap_records[i].rssi;
-        networks.push_back(info);
-    }
-    ESP_LOGI(TAG, "BLE config: scanned %d WiFi networks", (int)networks.size());
+void NetworkManager::transition(state::ConnectionState to, state::ConnectFailReason reason)
+{
+    conn_state_ = to;
+    last_fail_ = reason;
+    StateManager::instance().setConnectionState(to, reason);
+}
 
-    // Prepare current config to pre-fill BLE characteristics
-    BluetoothService::ConfigData current_cfg;
-    {
-        nvs_handle_t h;
-        if (nvs_open("storage", NVS_READONLY, &h) == ESP_OK) {
-            size_t len = 0;
-            char buf[128];
+void NetworkManager::connectionTaskEntry(void* arg)
+{
+    static_cast<NetworkManager*>(arg)->runConnectionStateMachine();
+}
 
-            len = sizeof(buf);
-            if (nvs_get_str(h, "dLunice_name", buf, &len) == ESP_OK) current_cfg.dLunice_name = buf;
-            len = sizeof(buf);
-            if (nvs_get_str(h, "ws_url", buf, &len) == ESP_OK) current_cfg.ws_url = buf;
-            len = sizeof(buf);
-            if (nvs_get_str(h, "mqtt_url", buf, &len) == ESP_OK) current_cfg.mqtt_url = buf;
-            len = sizeof(buf);
-            if (nvs_get_str(h, "user_id", buf, &len) == ESP_OK) current_cfg.mqtt_user = buf;
-            len = sizeof(buf);
-            if (nvs_get_str(h, "tx_key", buf, &len) == ESP_OK) current_cfg.mqtt_pass = buf;
+void NetworkManager::runConnectionStateMachine()
+{
+    ESP_LOGI(TAG, "Connection task started");
 
-            nvs_get_u8(h, "volume", &current_cfg.volume);
-            nvs_get_u8(h, "brightness", &current_cfg.brightness);
-            nvs_close(h);
+    while (started_) {
+        switch (conn_state_) {
+        case state::ConnectionState::OFFLINE:
+            if (wifi_credentials_exist_) {
+                transition(state::ConnectionState::WIFI_CONNECTING);
+                wifi_->connectWithCredentials(cfg_.wifi_ssid.c_str(), cfg_.wifi_pass.c_str());
+            } else {
+                transition(state::ConnectionState::BLE_PROVISIONING);
+            }
+            break;
+
+        case state::ConnectionState::WIFI_CONNECTING: {
+            int timeout_ms = was_online_ ? 30000 : 10000;
+            bool connected = false;
+            for (int ms = 0; ms < timeout_ms && started_; ms += 200) {
+                vTaskDelay(pdMS_TO_TICKS(200));
+                if (wifi_->isConnected()) {
+                    connected = true;
+                    break;
+                }
+            }
+
+            if (connected) {
+                transition(state::ConnectionState::WIFI_CONNECTED);
+            } else if (!was_online_) {
+                transition(state::ConnectionState::BLE_PROVISIONING,
+                           state::ConnectFailReason::WIFI_TIMEOUT);
+            } else {
+                transition(state::ConnectionState::RECONNECTING,
+                           state::ConnectFailReason::WIFI_TIMEOUT);
+            }
+            break;
+        }
+
+        case state::ConnectionState::WIFI_CONNECTED:
+            transition(state::ConnectionState::WS_CONNECTING);
+            break;
+
+        case state::ConnectionState::WS_CONNECTING: {
+            if (!ws_ || cfg_.ws_url.empty()) {
+                transition(state::ConnectionState::RECONNECTING,
+                           state::ConnectFailReason::SERVER_UNREACHABLE);
+                break;
+            }
+
+            esp_err_t err = ws_->connect(cfg_.ws_url.c_str());
+            if (err != ESP_OK) {
+                transition(state::ConnectionState::RECONNECTING,
+                           state::ConnectFailReason::SERVER_UNREACHABLE);
+                break;
+            }
+
+            // Wait for auth to complete
+            for (int ms = 0; ms < 15000 && started_; ms += 200) {
+                vTaskDelay(pdMS_TO_TICKS(200));
+                if (ws_->isAuthenticated()) break;
+                if (!ws_->isConnected()) break;
+            }
+
+            if (ws_->isAuthenticated()) {
+                reconnect_attempts_ = 0;
+                was_online_ = true;
+                transition(state::ConnectionState::ONLINE);
+            } else {
+                ws_->disconnect();
+                transition(state::ConnectionState::RECONNECTING,
+                           state::ConnectFailReason::WS_HANDSHAKE_FAIL);
+            }
+            break;
+        }
+
+        case state::ConnectionState::WS_AUTHENTICATING:
+            // Handled within WS_CONNECTING flow
+            vTaskDelay(pdMS_TO_TICKS(100));
+            break;
+
+        case state::ConnectionState::ONLINE:
+            // Wait for disconnect
+            while (started_ && ws_ && ws_->isConnected() && ws_->isAuthenticated()) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+
+            if (started_) {
+                stopHeartbeat();
+                transition(state::ConnectionState::RECONNECTING,
+                           state::ConnectFailReason::NONE);
+            }
+            break;
+
+        case state::ConnectionState::RECONNECTING: {
+            stopHeartbeat();
+
+            auto policy = state::getRetryPolicy(last_fail_);
+
+            if (was_online_ || reconnect_attempts_ < policy.max_retries) {
+                uint32_t delay = state::calculateBackoff(policy,
+                    was_online_ ? (reconnect_attempts_ % policy.max_retries)
+                                : reconnect_attempts_);
+                ESP_LOGW(TAG, "Reconnect attempt %d (delay %lums, reason=%d)",
+                         reconnect_attempts_ + 1,
+                         (unsigned long)delay, (int)last_fail_);
+
+                vTaskDelay(pdMS_TO_TICKS(delay));
+                reconnect_attempts_++;
+
+                if (wifi_->isConnected()) {
+                    transition(state::ConnectionState::WS_CONNECTING);
+                } else {
+                    transition(state::ConnectionState::WIFI_CONNECTING);
+                    wifi_->connectWithCredentials(cfg_.wifi_ssid.c_str(), cfg_.wifi_pass.c_str());
+                }
+            } else if (policy.fallback_to_ble) {
+                ESP_LOGW(TAG, "Max retries reached, falling back to BLE");
+                reconnect_attempts_ = 0;
+                transition(state::ConnectionState::BLE_PROVISIONING, last_fail_);
+            } else {
+                ESP_LOGW(TAG, "Max retries reached, going offline");
+                reconnect_attempts_ = 0;
+                transition(state::ConnectionState::OFFLINE);
+                vTaskDelay(pdMS_TO_TICKS(30000));
+            }
+            break;
+        }
+
+        case state::ConnectionState::BLE_PROVISIONING:
+            awaiting_provision_ = true;
+            while (started_ && awaiting_provision_) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            if (wifi_credentials_exist_) {
+                transition(state::ConnectionState::WIFI_CONNECTING);
+                wifi_->connectWithCredentials(cfg_.wifi_ssid.c_str(), cfg_.wifi_pass.c_str());
+            }
+            break;
         }
     }
 
-    // Init BLE
-    self->ble_ = new BluetoothService();
-    if (!self->ble_->init("Luni", networks, &current_cfg)) {
-        ESP_LOGE(TAG, "BLE init failed in config mode");
-        delete self->ble_;
-        self->ble_ = nullptr;
-        self->ble_config_active_ = false;
-        self->mqttPublishResponse("request_ble_config", "error",
-                                  "\"message\":\"BLE init failed\"");
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    static volatile bool config_received = false;
-    static BluetoothService::ConfigData received_cfg;
-    config_received = false;
-
-    self->ble_->onConfigComplete([](const BluetoothService::ConfigData& cfg) {
-        received_cfg = cfg;
-        config_received = true;
-    });
-
-    self->ble_->start();
-    ESP_LOGI(TAG, "BLE advertising started, waiting for config (timeout 120s)...");
-
-    // Wait for config or timeout (120 seconds)
-    constexpr int BLE_CONFIG_TIMEOUT_MS = 120000;
-    for (int ms = 0; !config_received && ms < BLE_CONFIG_TIMEOUT_MS; ms += 100) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-    // Teardown BLE
-    self->ble_->deinit();
-    delete self->ble_;
-    self->ble_ = nullptr;
-    self->ble_config_active_ = false;
-
-    if (!config_received) {
-        ESP_LOGW(TAG, "BLE config timeout, no config received");
-        self->mqttPublishResponse("request_ble_config", "ok",
-                                  "\"message\":\"BLE config timeout, no changes\"");
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    ESP_LOGI(TAG, "BLE config received: ssid='%s'", received_cfg.ssid.c_str());
-
-    // Save to NVS
-    nvs_handle_t h;
-    if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
-        if (!received_cfg.ssid.empty())
-            nvs_set_str(h, "ssid", received_cfg.ssid.c_str());
-        if (!received_cfg.pass.empty())
-            nvs_set_str(h, "pass", received_cfg.pass.c_str());
-        if (!received_cfg.ws_url.empty())
-            nvs_set_str(h, "ws_url", received_cfg.ws_url.c_str());
-        if (!received_cfg.mqtt_url.empty())
-            nvs_set_str(h, "mqtt_url", received_cfg.mqtt_url.c_str());
-        if (!received_cfg.mqtt_user.empty())
-            nvs_set_str(h, "user_id", received_cfg.mqtt_user.c_str());
-        if (!received_cfg.mqtt_pass.empty())
-            nvs_set_str(h, "tx_key", received_cfg.mqtt_pass.c_str());
-        if (!received_cfg.dLunice_name.empty())
-            nvs_set_str(h, "dLunice_name", received_cfg.dLunice_name.c_str());
-        nvs_set_u8(h, "volume", received_cfg.volume);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-
-    self->mqttPublishResponse("request_ble_config", "ok",
-                              "\"message\":\"BLE config saved, rebooting\"");
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    // Reboot to apply new config (WiFi/MQTT/WS URLs may have changed)
-    esp_restart();
+    ESP_LOGW(TAG, "Connection task ended");
+    vTaskDelete(nullptr);
 }

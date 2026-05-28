@@ -1,4 +1,4 @@
-#include "DLuniceProfile.hpp"
+#include "DeviceProfile.hpp"
 #include "AppController.hpp"
 #include "esp_log.h"
 
@@ -32,7 +32,7 @@
 #include "nvs.h"
 #include "esp_log.h"
 
-static const char* TAG = "DLuniceProfile";
+static const char* TAG = "DeviceProfile";
 
 // =============================================================================
 // User settings from NVS
@@ -78,9 +78,9 @@ namespace user_cfg {
 // =============================================================================
 // Setup
 // =============================================================================
-bool DLuniceProfile::setup(AppController& app)
+bool DeviceProfile::setup(AppController& app)
 {
-    ESP_LOGI(TAG, "DLuniceProfile setup begin (ESP32-S3), free heap: %lu",
+    ESP_LOGI(TAG, "DeviceProfile setup begin (ESP32-S3), free heap: %lu",
              (unsigned long)esp_get_free_heap_size());
 
     // Init NVS
@@ -123,24 +123,29 @@ bool DLuniceProfile::setup(AppController& app)
     // =========================================================
     // 2. POWER (Battery ADC)
     // =========================================================
-    auto power_drv = std::make_unique<Power>(
-        ADC1_CHANNEL_0,
-        (gpio_num_t)PinConfig::CHG_STATUS,
-        (gpio_num_t)PinConfig::CHG_FULL,
-        PinConfig::BAT_R1,
-        PinConfig::BAT_R2
-    );
+    std::unique_ptr<PowerManager> power_mgr;
+    if (PinConfig::BATTERY_ADC >= 0) {
+        auto power_drv = std::make_unique<Power>(
+            ADC1_CHANNEL_0,
+            (gpio_num_t)PinConfig::CHG_STATUS,
+            (gpio_num_t)PinConfig::CHG_FULL,
+            PinConfig::BAT_R1,
+            PinConfig::BAT_R2
+        );
 
-    PowerManager::Config pwr_cfg{};
-    pwr_cfg.evaluate_interval_ms = 2000;
-    pwr_cfg.critical_percent = 8.0f;
-    pwr_cfg.enable_smoothing = true;
+        PowerManager::Config pwr_cfg{};
+        pwr_cfg.evaluate_interval_ms = 2000;
+        pwr_cfg.critical_percent = 8.0f;
+        pwr_cfg.enable_smoothing = true;
 
-    auto power_mgr = std::make_unique<PowerManager>(std::move(power_drv), pwr_cfg);
-    if (!power_mgr->init()) {
-        ESP_LOGW(TAG, "PowerManager init failed (non-fatal)");
+        power_mgr = std::make_unique<PowerManager>(std::move(power_drv), pwr_cfg);
+        if (!power_mgr->init()) {
+            ESP_LOGW(TAG, "PowerManager init failed (non-fatal)");
+        }
+        power_mgr->setDisplayManager(display_mgr.get());
+    } else {
+        ESP_LOGI(TAG, "Battery ADC not wired, skipping PowerManager");
     }
-    power_mgr->setDisplayManager(display_mgr.get());
 
     // =========================================================
     // 3. MAX98357 CONTROL PINS
@@ -220,147 +225,129 @@ bool DLuniceProfile::setup(AppController& app)
     // =========================================================
     // 5. SPI BRIDGE (Communication with C5 via SPI3)
     // =========================================================
-    auto spi_bridge = std::make_unique<SpiBridge>();
-    SpiBridge::Config spi_cfg{
-        .pin_mosi      = (gpio_num_t)PinConfig::SPI3_MOSI,
-        .pin_miso      = (gpio_num_t)PinConfig::SPI3_MISO,
-        .pin_sclk      = (gpio_num_t)PinConfig::SPI3_SCLK,
-        .pin_cs        = (gpio_num_t)PinConfig::SPI3_CS,
-        .pin_handshake = (gpio_num_t)PinConfig::SPI3_HANDSHAKE,
-        .clock_speed_hz = 10 * 1000 * 1000  // 10 MHz
-    };
+    std::unique_ptr<SpiBridge> spi_bridge;
+    if (PinConfig::SPI3_MOSI >= 0) {
+        spi_bridge = std::make_unique<SpiBridge>();
+        SpiBridge::Config spi_cfg{
+            .pin_mosi      = (gpio_num_t)PinConfig::SPI3_MOSI,
+            .pin_miso      = (gpio_num_t)PinConfig::SPI3_MISO,
+            .pin_sclk      = (gpio_num_t)PinConfig::SPI3_SCLK,
+            .pin_cs        = (gpio_num_t)PinConfig::SPI3_CS,
+            .pin_handshake = (gpio_num_t)PinConfig::SPI3_HANDSHAKE,
+            .clock_speed_hz = 10 * 1000 * 1000  // 10 MHz
+        };
 
-    if (!spi_bridge->init(spi_cfg)) {
-        ESP_LOGE(TAG, "SpiBridge init failed");
-        return false;
-    }
-
-    // Wire SpiBridge to AudioManager
-    audio_mgr->setSpiBridge(spi_bridge.get());
-
-    // SPI downlink: C5 sends raw audio bytes -> speaker encoded stream buffer.
-    // C5 streams raw bytes (up to MAX_PAYLOAD per SPI transaction, NOT frame-aligned).
-    // The stream buffer accumulates bytes; AudioRecv parses [2B len][opus] from it.
-    // This handles Opus frames of any size (including >250 bytes from server).
-    StreamBufferHandle_t spk_sb = audio_mgr->getSpeakerEncodedBuffer();
-    spi_bridge->onAudioDownlink([spk_sb](const uint8_t* data, size_t len) {
-        if (!data || len == 0) return;
-        auto& sm = StateManager::instance();
-        auto interaction = sm.getInteractionState();
-        if (interaction == state::InteractionState::LISTENING) return;
-
-        // Auto-trigger SPEAKING only from PROCESSING (audio binary arrives before
-        // the SPEAKING text command). Do NOT auto-trigger from IDLE — stale SPI data
-        // arriving during stopSpeaking() drain would regress the state back to SPEAKING.
-        if (interaction == state::InteractionState::PROCESSING) {
-            ESP_LOGI("SpiBridge", "Audio downlink auto-trigger SPEAKING (was PROCESSING)");
-            sm.setInteractionState(state::InteractionState::SPEAKING, state::InputSource::SERVER_COMMAND);
-        } else if (interaction != state::InteractionState::SPEAKING) {
-            return;
+        if (!spi_bridge->init(spi_cfg)) {
+            ESP_LOGE(TAG, "SpiBridge init failed");
+            return false;
         }
 
-        // All-or-nothing write to preserve [2B len][opus] stream alignment.
-        // Partial writes or dropped SPI chunks corrupt frame boundaries and
-        // cause cascading Opus decode errors. Wait for AudioRecv (Core 1)
-        // to drain enough space — SPI poll runs on Core 0, no deadlock risk.
-        size_t space = xStreamBufferSpacesAvailable(spk_sb);
-        if (space >= len) {
-            xStreamBufferSend(spk_sb, data, len, 0);
-        } else {
-            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(80);
-            bool wrote = false;
-            while (!wrote) {
-                TickType_t now = xTaskGetTickCount();
-                if (now >= deadline) break;
-                vTaskDelay(pdMS_TO_TICKS(2));
-                if (xStreamBufferSpacesAvailable(spk_sb) >= len) {
-                    xStreamBufferSend(spk_sb, data, len, 0);
-                    wrote = true;
-                }
+        // Wire SpiBridge to AudioManager
+        audio_mgr->setSpiBridge(spi_bridge.get());
+
+        // SPI downlink: C5 sends frame-aligned opus data.
+        StreamBufferHandle_t spk_sb = audio_mgr->getSpeakerEncodedBuffer();
+        spi_bridge->onAudioDownlink([spk_sb](const uint8_t* data, size_t len) {
+            if (!data || len < 3) return;
+            auto& sm = StateManager::instance();
+            auto interaction = sm.getInteractionState();
+            if (interaction == state::InteractionState::LISTENING) return;
+
+            if (interaction == state::InteractionState::PROCESSING) {
+                sm.setInteractionState(state::InteractionState::SPEAKING, state::InputSource::SERVER_COMMAND);
+            } else if (interaction != state::InteractionState::SPEAKING) {
+                return;
             }
-            if (!wrote) {
+
+            const uint8_t* frames = data + 1;
+            size_t frames_len = len - 1;
+
+            size_t space = xStreamBufferSpacesAvailable(spk_sb);
+            if (space >= frames_len) {
+                xStreamBufferSend(spk_sb, frames, frames_len, 0);
+            } else {
                 static uint32_t dl_drop_count = 0;
                 dl_drop_count++;
                 if (dl_drop_count <= 5 || dl_drop_count % 50 == 0) {
-                    ESP_LOGW("SpiBridge", "DL encoded buffer full after 80ms wait, dropped %zu bytes #%lu",
-                             len, (unsigned long)dl_drop_count);
+                    ESP_LOGW("SpiBridge", "DL buffer full, dropped %zu bytes (complete frames) #%lu",
+                             frames_len, (unsigned long)dl_drop_count);
                 }
             }
-        }
-    });
+        });
+    } else {
+        ESP_LOGI(TAG, "SPI3 bridge not wired, skipping SpiBridge");
+    }
 
     // =========================================================
     // 6. UART BRIDGE (Control/status with C5 via UART1)
     // =========================================================
-    auto uart_bridge = std::make_unique<UartBridge>();
-    UartBridge::Config uart_cfg{
-        .pin_tx = (gpio_num_t)PinConfig::UART_TX,
-        .pin_rx = (gpio_num_t)PinConfig::UART_RX,
-    };
+    std::unique_ptr<UartBridge> uart_bridge;
+    if (PinConfig::UART_TX >= 0) {
+        uart_bridge = std::make_unique<UartBridge>();
+        UartBridge::Config uart_cfg{
+            .pin_tx = (gpio_num_t)PinConfig::UART_TX,
+            .pin_rx = (gpio_num_t)PinConfig::UART_RX,
+        };
 
-    if (!uart_bridge->init(uart_cfg)) {
-        ESP_LOGE(TAG, "UartBridge init failed");
-        return false;
-    }
-
-    // UART status: C5 sends connectivity/emotion state via UART
-    uart_bridge->onStatusUpdate([](uint8_t interaction, uint8_t connectivity,
-                                    uint8_t system_state, uint8_t emotion) {
-        auto& sm = StateManager::instance();
-
-        sm.setConnectivityState(static_cast<state::ConnectivityState>(connectivity));
-        sm.setEmotionState(static_cast<state::EmotionState>(emotion));
-
-        // Forward system state from C5, but never revert S3 to BOOTING
-        // (S3 manages its own boot lifecycle independently)
-        auto new_sys = static_cast<state::SystemState>(system_state);
-        if (new_sys != state::SystemState::BOOTING) {
-            sm.setSystemState(new_sys);
+        if (!uart_bridge->init(uart_cfg)) {
+            ESP_LOGE(TAG, "UartBridge init failed");
+            return false;
         }
 
-        // Let C5 drive the interaction state, but don't regress SPEAKING→PROCESSING.
-        // UART status carries C5's interaction state at the moment of the emotion change,
-        // which can be stale (e.g. emotion fires before SPEAKING command is processed).
-        auto new_inter = static_cast<state::InteractionState>(interaction);
-        auto cur_inter = sm.getInteractionState();
-        if (new_inter == state::InteractionState::SPEAKING) {
-            if (cur_inter == state::InteractionState::PROCESSING ||
-                cur_inter == state::InteractionState::LISTENING ||
-                cur_inter == state::InteractionState::TRIGGERED) {
+        uart_bridge->onStatusUpdate([](uint8_t interaction, uint8_t connectivity,
+                                        uint8_t system_state, uint8_t emotion) {
+            auto& sm = StateManager::instance();
+
+            sm.setConnectionState(static_cast<state::ConnectionState>(connectivity));
+            sm.setEmotionState(static_cast<state::EmotionState>(emotion));
+
+            auto new_sys = static_cast<state::SystemState>(system_state);
+            if (new_sys != state::SystemState::BOOTING) {
+                sm.setSystemState(new_sys);
+            }
+
+            auto new_inter = static_cast<state::InteractionState>(interaction);
+            auto cur_inter = sm.getInteractionState();
+            if (new_inter == state::InteractionState::SPEAKING) {
+                if (cur_inter == state::InteractionState::PROCESSING ||
+                    cur_inter == state::InteractionState::LISTENING ||
+                    cur_inter == state::InteractionState::TRIGGERED) {
+                    sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
+                }
+            } else if (new_inter == state::InteractionState::PROCESSING &&
+                       cur_inter != state::InteractionState::SPEAKING) {
                 sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
+            } else if (new_inter == state::InteractionState::IDLE &&
+                       cur_inter == state::InteractionState::SPEAKING) {
+                sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::UNKNOWN);
             }
-        } else if (new_inter == state::InteractionState::PROCESSING &&
-                   cur_inter != state::InteractionState::SPEAKING) {
-            sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
-        } else if (new_inter == state::InteractionState::IDLE &&
-                   cur_inter == state::InteractionState::SPEAKING) {
-            sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::UNKNOWN);
-        }
-    });
+        });
 
-    // UART control commands: C5 forwards MQTT commands (volume, brightness) to S3
-    DisplayManager* disp_raw = display_mgr.get();
-    AudioManager* audio_raw = audio_mgr.get();
-    uart_bridge->onControlCmd([disp_raw, audio_raw](uart_proto::ControlCmd cmd,
-                                                      const uint8_t* data, size_t len) {
-        switch (cmd) {
-        case uart_proto::ControlCmd::SET_VOLUME:
-            if (len >= 1 && audio_raw) {
-                audio_raw->setVolume(data[0]);
-                ESP_LOGI("UartCtrl", "SET_VOLUME %d from C5", data[0]);
+        DisplayManager* disp_raw = display_mgr.get();
+        AudioManager* audio_raw = audio_mgr.get();
+        uart_bridge->onControlCmd([disp_raw, audio_raw](uart_proto::ControlCmd cmd,
+                                                          const uint8_t* data, size_t len) {
+            switch (cmd) {
+            case uart_proto::ControlCmd::SET_VOLUME:
+                if (len >= 1 && audio_raw) {
+                    audio_raw->setVolume(data[0]);
+                    ESP_LOGI("UartCtrl", "SET_VOLUME %d from C5", data[0]);
+                }
+                break;
+            case uart_proto::ControlCmd::SET_BRIGHTNESS:
+                if (len >= 1 && disp_raw) {
+                    disp_raw->setBrightness(data[0]);
+                    ESP_LOGI("UartCtrl", "SET_BRIGHTNESS %d from C5", data[0]);
+                }
+                break;
+            default:
+                ESP_LOGW("UartCtrl", "Unknown control cmd 0x%02X from C5", (int)cmd);
+                break;
             }
-            break;
-        case uart_proto::ControlCmd::SET_BRIGHTNESS:
-            if (len >= 1 && disp_raw) {
-                disp_raw->setBrightness(data[0]);
-                ESP_LOGI("UartCtrl", "SET_BRIGHTNESS %d from C5", data[0]);
-            }
-            break;
-        default:
-            ESP_LOGW("UartCtrl", "Unknown control cmd 0x%02X from C5", (int)cmd);
-            break;
-        }
-    });
+        });
+    } else {
+        ESP_LOGI(TAG, "UART bridge not wired, skipping UartBridge");
+    }
 
     // =========================================================
     // 7. TOUCH INPUT (Button)
@@ -393,6 +380,6 @@ bool DLuniceProfile::setup(AppController& app)
         std::move(uart_bridge),
         std::move(touch_input));
 
-    ESP_LOGI(TAG, "DLuniceProfile setup OK (ESP32-S3)");
+    ESP_LOGI(TAG, "DeviceProfile setup OK (ESP32-S3)");
     return true;
 }

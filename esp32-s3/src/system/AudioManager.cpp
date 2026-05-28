@@ -102,7 +102,6 @@ void AudioManager::handleInteractionState(state::InteractionState s, state::Inpu
     case state::InteractionState::SPEAKING:    startSpeaking(); break;
     case state::InteractionState::CANCELLING:
     case state::InteractionState::IDLE:        stopAll(); break;
-    case state::InteractionState::SLEEPING:    stopAll(); break;
     default: break;
     }
 }
