@@ -60,7 +60,7 @@ bool DisplayManager::init(std::unique_ptr<DisplayDriver> driver, int width, int 
         ESP_LOGE(TAG, "GfxEngine init failed (PSRAM?)");
         return false;
     }
-    scene_mgr_.showEmotion("normal", "normal-steady");
+    scene_mgr_.showScene("boot", "boot-poweron");
     ESP_LOGI(TAG, "GfxEngine initialized — procedural rendering active");
 
     ESP_LOGI(TAG, "DisplayManager init OK (%dx%d)", width_, height_);
@@ -269,25 +269,38 @@ void DisplayManager::update(uint32_t dt_ms)
     // Render current variant
     scene_mgr_.update(*gfx_, (float)dt_ms);
 
-    // Status bar (top 20px, always cyan)
+    // Status bar (top 20px, always cyan, always visible)
+    const uint16_t cyanColor = TONE_LUT[TONE_CYAN];
     gfx_->fillRect(0, 0, width_, geom::STATUS_H, COLOR_BG);
     gfx_->drawLine(0, geom::STATUS_H, width_, geom::STATUS_H,
-                   TONE_LUT[TONE_CYAN], 1, 64); // 25% opacity separator
+                   cyanColor, 1, 64);
 
+    // Time (left) — show "--:--" when server hasn't synced yet
     auto& sd = scene_mgr_.getSceneData();
     if (sd.time_valid) {
         char timeBuf[6];
         snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", sd.hours, sd.minutes);
-        gfx_->drawText(timeBuf, 8, 4, TONE_LUT[TONE_CYAN], 1,
+        gfx_->drawText(timeBuf, 8, 4, cyanColor, 1,
                        GfxEngine::TextAlign::LEFT, 217);
+    } else {
+        gfx_->drawText("--:--", 8, 4, cyanColor, 1,
+                       GfxEngine::TextAlign::LEFT, 140);
     }
 
-    // Battery overlay
-    if (battery_percent < 255) {
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d%%", battery_percent);
-        gfx_->drawText(buf, width_ - 40, 4, TONE_LUT[TONE_CYAN], 1,
-                       GfxEngine::TextAlign::LEFT, 217);
+    // Center dot
+    gfx_->fillCircle(width_ / 2, 10, 2, cyanColor, 178);
+
+    // Battery (right) — icon outline + fill level
+    int16_t bx = width_ - 28;
+    int16_t by = 5;
+    gfx_->strokeRoundedRect(bx, by, 20, 10, 1, cyanColor, 1);
+    gfx_->fillRect(bx + 20, by + 3, 2, 4, cyanColor, 217);
+    if (battery_percent <= 100) {
+        int16_t fw = (int16_t)((16 * battery_percent) / 100);
+        if (fw > 0)
+            gfx_->fillRect(bx + 2, by + 2, fw, 6, cyanColor, 217);
+    } else {
+        gfx_->fillRect(bx + 2, by + 2, 13, 6, cyanColor, 217);
     }
 
     // Flush to display
@@ -331,48 +344,48 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
         playEmotion("thinking");
         break;
     case state::InteractionState::SPEAKING:
-        // playEmotion("speaking");
         break;
     case state::InteractionState::CANCELLING:
         break;
     case state::InteractionState::IDLE:
     default:
-        playEmotion("idle");
+        playEmotion("normal");
         break;
     }
 }
 
 void DisplayManager::handleConnectivity(state::ConnectionState s)
 {
+    text_active_ = false;
     switch (s)
     {
     case state::ConnectionState::OFFLINE:
-        playText("Offline", -1, -1, 0xFFFF, 1.5);
+        scene_mgr_.showScene("network", "network-offline");
         break;
 
     case state::ConnectionState::WIFI_CONNECTING:
-        playText("Connecting WiFi...", -1, -1, 0xFFFF, 1.8);
+        scene_mgr_.showScene("network", "network-wifi-connect");
         break;
 
     case state::ConnectionState::WIFI_CONNECTED:
-        playText("WiFi Connected", -1, -1, 0xFFFF, 1.8);
+        scene_mgr_.showScene("network", "network-wifi-connect");
         break;
 
     case state::ConnectionState::WS_CONNECTING:
     case state::ConnectionState::WS_AUTHENTICATING:
-        playEmotion("stun");
+        scene_mgr_.showScene("network", "network-wifi-connect");
         break;
 
     case state::ConnectionState::ONLINE:
-        playEmotion("idle");
+        scene_mgr_.showEmotion("normal");
         break;
 
     case state::ConnectionState::RECONNECTING:
-        playText("Reconnecting...", -1, -1, 0xFFFF, 1.5);
+        scene_mgr_.showScene("network", "network-wifi-retry");
         break;
 
     case state::ConnectionState::BLE_PROVISIONING:
-        playText("BLE Setup", -1, -1, 0xFFFF, 1.8);
+        scene_mgr_.showScene("network", "network-ble-pair");
         break;
     }
 }
@@ -382,8 +395,6 @@ void DisplayManager::handleSystem(state::SystemState s)
     switch (s)
     {
     case state::SystemState::BOOTING:
-        // ESP_LOGI(TAG, "Displaying Booting message");
-        playText("Luni", 40, 0, 0xF800, 2); // red
         break;
 
     case state::SystemState::RUNNING:
@@ -395,7 +406,7 @@ void DisplayManager::handleSystem(state::SystemState s)
         break;
 
     case state::SystemState::MAINTENANCE:
-        playEmotion("maintenance");
+        playEmotion("loading");
         break;
     }
 }
@@ -427,7 +438,6 @@ void DisplayManager::handlePower(state::PowerState s)
 
 void DisplayManager::handleEmotion(state::EmotionState s)
 {
-    // Map emotion state to an available emotion asset
     switch (s)
     {
     case state::EmotionState::HAPPY:
@@ -436,20 +446,46 @@ void DisplayManager::handleEmotion(state::EmotionState s)
     case state::EmotionState::SAD:
         playEmotion("sad");
         break;
+    case state::EmotionState::ANGRY:
+        playEmotion("angry");
+        break;
     case state::EmotionState::THINKING:
         playEmotion("thinking");
         break;
     case state::EmotionState::CONFUSED:
-        playEmotion("stun");
+        playEmotion("confused");
+        break;
+    case state::EmotionState::EXCITED:
+        playEmotion("excited");
+        break;
+    case state::EmotionState::DISGUSTED:
+        playEmotion("disgusted");
+        break;
+    case state::EmotionState::NERVOUS:
+        playEmotion("nervous");
+        break;
+    case state::EmotionState::EMBARRASSED:
+        playEmotion("embarrassed");
+        break;
+    case state::EmotionState::CURIOUS:
+        playEmotion("curious");
+        break;
+    case state::EmotionState::ANNOYED:
+        playEmotion("annoyed");
+        break;
+    case state::EmotionState::COOL:
+        playEmotion("cool");
+        break;
+    case state::EmotionState::SUSPICIOUS:
+        playEmotion("suspicious");
+        break;
+    case state::EmotionState::DETERMINED:
+        playEmotion("determined");
         break;
     case state::EmotionState::NEUTRAL:
-        playEmotion("neutral");
-        break;
     case state::EmotionState::CALM:
-    case state::EmotionState::EXCITED:
-    case state::EmotionState::ANGRY:
     default:
-        playEmotion("idle");
+        playEmotion("normal");
         break;
     }
 }
@@ -523,6 +559,30 @@ void DisplayManager::clearText()
     text_active_ = false;
     text_mode_cleared_ = false; // Reset clear flag
     text_msg_.clear();
+}
+
+// ----------------------------------------------------------------------------
+// Boot sequence (blocking)
+// ----------------------------------------------------------------------------
+void DisplayManager::playBootSequence()
+{
+    ESP_LOGI(TAG, "Boot sequence starting");
+    text_active_ = false;
+
+    scene_mgr_.showScene("boot", "boot-poweron");
+    vTaskDelay(pdMS_TO_TICKS(2400));
+
+    scene_mgr_.showScene("boot", "boot-credits");
+    vTaskDelay(pdMS_TO_TICKS(4500));
+
+    scene_mgr_.showScene("boot", "boot-checks-personal");
+    vTaskDelay(pdMS_TO_TICKS(4200));
+
+    scene_mgr_.showScene("boot", "boot-ready-personal");
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    ESP_LOGI(TAG, "Boot sequence complete");
+    scene_mgr_.showEmotion("normal");
 }
 
 // ----------------------------------------------------------------------------

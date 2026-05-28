@@ -19,7 +19,7 @@ enum ToneId : uint8_t {
 //
 // Conversion: R5=(R8>>3), G6=(G8>>2), B5=(B8>>3), rgb565=(R5<<11)|(G6<<5)|B5
 constexpr uint16_t TONE_LUT[TONE_COUNT] = {
-    0x5F9F,  // cyan   #5be9ff  R=11 G=60 B=31
+    0x5F5F,  // cyan   #5be9ff  R=11 G=58 B=31
     0xFE8C,  // warm   #ffd166  R=31 G=52 B=12
     0xFB53,  // rose   #ff6b9d  R=31 G=26 B=19 (adjusted: 0xFB54)
     0xFACE,  // red    #ff5b6e  R=31 G=22 B=14

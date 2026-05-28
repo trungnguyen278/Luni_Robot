@@ -128,8 +128,13 @@ void AppController::start()
     xTaskCreatePinnedToCore(&AppController::controllerTask, "AppCtrl", 4096, this, 4, &app_task, 0);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Start modules
-    if (display) display->start();
+    // Start display first and play full boot sequence before other modules
+    if (display) {
+        display->start();
+        display->playBootSequence();
+    }
+
+    // Start remaining modules only after boot animation completes
     if (power) power->start();
     if (spi) spi->start();
     if (uart) uart->start();

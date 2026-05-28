@@ -46,8 +46,12 @@ void GfxEngine::clear(uint16_t color) {
 
 void GfxEngine::flush(DisplayDriver* drv) {
     if (!fb_ || !drv) return;
+    size_t count = width_ * height_;
+    for (size_t i = 0; i < count; i++) {
+        fb_[i] = (fb_[i] >> 8) | (fb_[i] << 8);
+    }
     drv->setWindow(0, 0, width_ - 1, height_ - 1);
-    drv->writePixels(fb_, width_ * height_ * 2);
+    drv->writePixels(fb_, count * 2);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -539,7 +543,7 @@ void GfxEngine::drawChar(int16_t x, int16_t y, char c, uint16_t color,
     for (int row = 0; row < 8; row++) {
         uint8_t bits = glyph[row];
         for (int col = 0; col < 8; col++) {
-            if (bits & (1 << col)) {
+            if (bits & (0x80 >> col)) {
                 if (scale == 1) {
                     setPixel(x + col, y + row, color, alpha);
                 } else {
@@ -582,12 +586,17 @@ void GfxEngine::drawEye(int16_t cx, int16_t cy, int16_t w, int16_t h,
     if (h < 1) h = 1;
     int16_t clampedRx = std::min<int16_t>(rx, std::min<int16_t>(w / 2, h / 2));
 
+    int16_t x0 = cx - w / 2;
+    int16_t y0 = cy - h / 2;
+
     if (fabsf(rotDeg) > 0.5f) {
         pushTransform();
-        rotate(rotDeg, cx, cy);
+        float rcx = x0 + (w - 1) / 2.0f;
+        float rcy = y0 + (h - 1) / 2.0f;
+        rotate(rotDeg, rcx, rcy);
     }
 
-    fillRoundedRect(cx - w / 2, cy - h / 2, w, h, clampedRx, color, alpha);
+    fillRoundedRect(x0, y0, w, h, clampedRx, color, alpha);
 
     if (fabsf(rotDeg) > 0.5f) {
         popTransform();

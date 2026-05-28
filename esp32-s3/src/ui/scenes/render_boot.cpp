@@ -3,6 +3,7 @@
 #include "display/MathHelpers.hpp"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 using namespace geom;
 using namespace math;
@@ -10,31 +11,25 @@ using namespace math;
 // boot-poweron: dot → slit → split → two eyes
 static void render_boot_poweron(GfxEngine& gfx, float t, const ColorContext& colors) {
     if (t < 0.2f) {
-        // Tiny dot grows to a small rect
         float p = ease::out(t / 0.2f);
         int16_t r = (int16_t)lerp(1.0f, 8.0f, p);
         gfx.fillRoundedRect(SCX - r, CY - r, r * 2, r * 2, r, colors.eye);
     } else if (t < 0.5f) {
-        // Horizontal bar stretches
         float p = ease::inOut((t - 0.2f) / 0.3f);
         int16_t bw = (int16_t)lerp(16.0f, (float)(GAP + EYE_W), p);
         int16_t bh = (int16_t)lerp(16.0f, 14.0f, p);
         int16_t rx = (int16_t)fminf((float)EYE_RX, bh / 2.0f);
         gfx.fillRoundedRect(SCX - bw / 2, CY - bh / 2, bw, bh, rx, colors.eye);
     } else if (t < 0.8f) {
-        // Bar splits into two eye blocks
         float p = ease::inOut((t - 0.5f) / 0.3f);
         int16_t bh = (int16_t)lerp(14.0f, (float)EYE_H * 0.6f, p);
         int16_t rx = (int16_t)fminf((float)EYE_RX, bh / 2.0f);
-
         int16_t lcx = (int16_t)lerp((float)SCX, (float)LX, p);
         int16_t rcx = (int16_t)lerp((float)SCX, (float)RX, p);
         int16_t hw = (int16_t)lerp((float)(GAP + EYE_W) / 2.0f, (float)EYE_W / 2.0f, p);
-
         gfx.fillRoundedRect(lcx - hw, CY - bh / 2, hw * 2, bh, rx, colors.eye);
         gfx.fillRoundedRect(rcx - hw, CY - bh / 2, hw * 2, bh, rx, colors.eye);
     } else {
-        // Settle to default eye proportions
         float p = ease::inOut((t - 0.8f) / 0.2f);
         int16_t bh = (int16_t)lerp((float)EYE_H * 0.6f, (float)EYE_H, p);
         gfx.drawEye(LX, CY, EYE_W, bh, EYE_RX, 0, colors.eye);
@@ -42,39 +37,70 @@ static void render_boot_poweron(GfxEngine& gfx, float t, const ColorContext& col
     }
 }
 
-// boot-logo: "Luni" text with sweeping ring
-static void render_boot_logo(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float enter = clamp(t / 0.4f, 0.0f, 1.0f);
-    float scale = lerp(0.5f, 1.0f, ease::out(enter));
-    uint8_t op = (uint8_t)(ease::out(enter) * 255.0f);
+// boot-credits: NTT monogram + name typewriter + role line
+static void render_boot_credits(GfxEngine& gfx, float t, const ColorContext& colors) {
+    // Timeline:
+    //   0.00–0.30  monogram scales in
+    //   0.20–0.50  sweep arc
+    //   0.30–0.65  name typewriter
+    //   0.55–0.85  role line fades in
+    //   0.65–1.00  tagline
 
-    // Sweeping ring
-    float sweepAngle = t * TAU;
-    gfx.strokeCircle(SCX, SCY - 6, 64, colors.accent, 1);
-    gfx.drawArc(SCX, SCY - 6, 64, sweepAngle - 1.4f, sweepAngle,
-                colors.accent, 3, op);
+    float monoIn   = clamp(t / 0.30f, 0.0f, 1.0f);
+    float sweep    = clamp((t - 0.20f) / 0.30f, 0.0f, 1.0f);
+    float nameP    = clamp((t - 0.30f) / 0.35f, 0.0f, 1.0f);
+    float roleP    = clamp((t - 0.55f) / 0.30f, 0.0f, 1.0f);
+    float taglineP = clamp((t - 0.65f) / 0.30f, 0.0f, 1.0f);
 
-    // Luni text centered (scale 2 = 16px height)
-    uint8_t sc = (uint8_t)(2.0f * scale);
-    if (sc < 1) sc = 1;
-    gfx.drawText("Luni", SCX, SCY - 10, colors.eye, sc,
-                 GfxEngine::TextAlign::CENTER, op);
+    int16_t mY = STATUS_H + 56;
 
-    // Subtitle
-    if (t > 0.5f) {
-        float subOp = clamp((t - 0.5f) * 3.0f, 0.0f, 0.7f);
-        gfx.drawText("Luni v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
-                     GfxEngine::TextAlign::CENTER, (uint8_t)(subOp * 255.0f));
+    // NTT monogram: rounded square frame + "NTT" text
+    if (monoIn > 0.01f) {
+        uint8_t monoOp = (uint8_t)(ease::out(monoIn) * 255.0f);
+        gfx.strokeRoundedRect(SCX - 28, mY - 28, 56, 56, 12, colors.eye, 2);
+        gfx.drawText("NTT", SCX, mY - 5, colors.eye, 2,
+                     GfxEngine::TextAlign::CENTER, monoOp);
+    }
+
+    // Sweep arc around monogram
+    if (sweep > 0.02f) {
+        float sweepAngle = sweep * TAU;
+        int16_t sr = 36;
+        float startA = -PI / 2.0f;
+        gfx.drawArc(SCX, mY, sr, startA, startA + sweepAngle,
+                     colors.accent, 2, (uint8_t)(sweep * 200));
+    }
+
+    // Name typewriter: "NGUYEN THANH TRUNG"
+    if (nameP > 0.0f) {
+        static const char NAME[] = "NGUYEN THANH TRUNG";
+        int len = (int)(nameP * strlen(NAME) + 0.0001f);
+        char buf[20];
+        strncpy(buf, NAME, len);
+        buf[len] = '\0';
+        gfx.drawText(buf, SCX, mY + 52, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER, 255);
+    }
+
+    // Role line
+    if (roleP > 0.0f) {
+        uint8_t rOp = (uint8_t)(ease::out(roleP) * 230.0f);
+        gfx.drawText("design.firmware.hw", SCX, mY + 68, colors.accent, 1,
+                     GfxEngine::TextAlign::CENTER, rOp);
+    }
+
+    // Bottom tagline
+    if (taglineP > 0.0f) {
+        uint8_t tOp = (uint8_t)(ease::out(taglineP) * 153.0f);
+        gfx.drawText("one-person build", SCX, SCREEN_H - 12, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER, tOp);
     }
 }
 
-// boot-checks: system self-test checklist
-static void render_boot_checks(GfxEngine& gfx, float t, const ColorContext& colors) {
-    // Title
+// boot-checks-personal: system self-test checklist
+static void render_boot_checks_personal(GfxEngine& gfx, float t, const ColorContext& colors) {
     gfx.drawText("SYSTEM CHECK", SCX, STATUS_H + 18, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER, 217);
-
-    // Divider
     gfx.drawLine(48, STATUS_H + 28, SCREEN_W - 48, STATUS_H + 28,
                  colors.eye, 1, 89);
 
@@ -88,13 +114,10 @@ static void render_boot_checks(GfxEngine& gfx, float t, const ColorContext& colo
         int16_t y = STATUS_H + 46 + i * 24;
         uint8_t rowOp = (uint8_t)(ease::out(showT) * 255.0f);
 
-        // Item label
         gfx.drawText(ITEMS[i], 48, y, colors.eye, 1,
                      GfxEngine::TextAlign::LEFT, rowOp);
 
-        // Status: spinner or OK
         if (okT < 1.0f) {
-            // Spinning arc
             float ang = t * TAU * 4.0f;
             gfx.drawArc(SCREEN_W - 60, y + 2, 8, ang, ang + 2.0f,
                         colors.accent, 2, rowOp);
@@ -104,18 +127,19 @@ static void render_boot_checks(GfxEngine& gfx, float t, const ColorContext& colo
         }
     }
 
-    // Footer
-    gfx.drawText("Luni v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
+    gfx.drawText("v2.0", SCX, SCREEN_H - 12, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER, 140);
 }
 
-// boot-ready: progress bar fills, READY stamps in
-static void render_boot_ready(GfxEngine& gfx, float t, const ColorContext& colors) {
+// boot-ready-personal: NTT mark + progress bar + READY stamp
+static void render_boot_ready_personal(GfxEngine& gfx, float t, const ColorContext& colors) {
     float fill = clamp(t / 0.7f, 0.0f, 1.0f);
     float stampT = clamp((t - 0.75f) / 0.15f, 0.0f, 1.0f);
 
-    // Small Luni text at top
-    gfx.drawText("Luni", SCX, STATUS_H + 34, colors.eye, 1,
+    // Small NTT monogram at top
+    int16_t markY = STATUS_H + 38;
+    gfx.strokeRoundedRect(SCX - 12, markY - 12, 24, 24, 5, colors.eye, 1);
+    gfx.drawText("NTT", SCX, markY - 1, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER, 242);
 
     // Progress bar
@@ -129,7 +153,7 @@ static void render_boot_ready(GfxEngine& gfx, float t, const ColorContext& color
         gfx.fillRoundedRect(barX + 2, barY + 2, fw, 6, 2, colors.accent);
     }
 
-    // Percentage text
+    // Percentage
     char pctBuf[8];
     snprintf(pctBuf, sizeof(pctBuf), "%03d%%", (int)(fill * 100.0f));
     gfx.drawText(pctBuf, SCX, barY + 24, colors.eye, 1,
@@ -138,22 +162,23 @@ static void render_boot_ready(GfxEngine& gfx, float t, const ColorContext& color
     // READY stamp
     if (stampT > 0.02f) {
         uint8_t sop = (uint8_t)(stampT * 255.0f);
-        gfx.strokeRoundedRect(SCX - 44, SCREEN_H - 36, 88, 22, 3,
+        int16_t frameY = SCREEN_H - 36;
+        gfx.strokeRoundedRect(SCX - 44, frameY, 88, 22, 3,
                               colors.accent, 2);
-        gfx.drawText("READY", SCX, SCREEN_H - 22, colors.accent, 2,
+        gfx.drawText("READY", SCX, frameY + 3, colors.accent, 2,
                      GfxEngine::TextAlign::CENTER, sop);
     }
 }
 
 // --- Category registration ---
 const VariantDef BOOT_VARIANTS[] = {
-    {"boot-poweron", "Power on",  2400, TONE_RED, render_boot_poweron},
-    {"boot-logo",    "Logo",      3000, TONE_RED, render_boot_logo},
-    {"boot-checks",  "Self-test", 4200, TONE_RED, render_boot_checks},
-    {"boot-ready",   "Ready",     3000, TONE_RED, render_boot_ready},
+    {"boot-poweron",          "Power on",  2400, TONE_NONE, render_boot_poweron},
+    {"boot-credits",          "Credits",   4500, TONE_NONE, render_boot_credits},
+    {"boot-checks-personal",  "Self-test", 4200, TONE_NONE, render_boot_checks_personal},
+    {"boot-ready-personal",   "Ready",     3000, TONE_NONE, render_boot_ready_personal},
 };
 
 extern const CategoryDef CAT_BOOT = {
-    "boot", "Boot", ContentKind::SCENE, TONE_RED,
+    "boot", "Boot", ContentKind::SCENE, TONE_CYAN,
     BOOT_VARIANTS, sizeof(BOOT_VARIANTS) / sizeof(BOOT_VARIANTS[0])
 };

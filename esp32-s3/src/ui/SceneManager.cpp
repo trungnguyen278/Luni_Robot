@@ -1,6 +1,9 @@
 #include "SceneManager.hpp"
 #include <cstring>
 #include <cstdlib>
+#include "esp_log.h"
+
+static const char* TAG = "SceneManager";
 
 static SceneManager s_instance;
 
@@ -27,6 +30,8 @@ void SceneManager::showScene(const char* categoryKey, const char* variantId) {
     elapsed_ms_ = 0;
     scene_active_ = (cat->kind == ContentKind::SCENE);
     idle_active_ = false;
+    ESP_LOGI(TAG, "Show %s/%s (%ums)",
+             cat->key, variant->id, variant->duration_ms);
 }
 
 void SceneManager::showEmotion(const char* categoryKey, const char* variantId) {

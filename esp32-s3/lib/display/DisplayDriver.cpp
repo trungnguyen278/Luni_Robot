@@ -220,15 +220,12 @@ bool DisplayDriver::init(const Config &cfg)
 
     uint8_t madctl =
         ST7789_MADCTL_MX |
-        ST7789_MADCTL_MY |
-        ST7789_MADCTL_BGR;
+        ST7789_MADCTL_MY;
 
     sendCommand(ST7789_CMD_MADCTL);
     sendData(&madctl, 1);
 
-    // Optional: invert colors for bring-up diagnostics
-    // 0x21 = INVON (invert), 0x20 = INVOFF (normal)
-    sendCommand(0x21);
+    sendCommand(0x21); // INVON — required for IPS panel (cancels native inversion)
 
     sendCommand(ST7789_CMD_DISPON);
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -531,8 +528,6 @@ void DisplayDriver::setRotation(uint8_t rotation)
         madctl = ST7789_MADCTL_MY | ST7789_MADCTL_MV;
         break;
     }
-
-    madctl |= ST7789_MADCTL_BGR;
 
     sendCommand(ST7789_CMD_MADCTL);
     sendData(&madctl, 1);
