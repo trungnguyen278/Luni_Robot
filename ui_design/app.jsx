@@ -24,9 +24,13 @@ const MULTI_TONE_VARS = (() => {
 })();
 
 // Resolve the CSS-var palette for a screen.
-//   Emotions: --eye is ALWAYS cyan (eyes + mouth + brows are part of the
-//   robot's face). The category tone only colors accessories via --accent.
-//   Scenes: full takeover — --eye becomes the tone (no face to preserve).
+//   Emotions: --eye is ALWAYS cyan — the robot's face stays one color
+//   so transitioning between emotions doesn't cause a jarring color
+//   flash. The emotion's tone only colors accessories via --accent.
+//   Scenes: --eye becomes the scene's tone, so scene PROPS (bell,
+//   cake, etc.) read in that tone. The robot's eye-shape during the
+//   open/close transitions is drawn separately in cyan (see LuniFace).
+//   Status (boot, network): --eye stays cyan — robot brand identity.
 //   'multi' is a marker tone for variants like confetti/firework: defaults
 //   to cyan but the variant should reference --tone-warm/--tone-rose/….
 function toneVars(tone, kind) {
@@ -36,8 +40,6 @@ function toneVars(tone, kind) {
   const base = isScene
     ? { '--eye': td.eye,   '--accent': td.eye, '--eye-glow': td.glow }
     : { '--eye': CYAN_EYE, '--accent': td.eye, '--eye-glow': CYAN_GLOW };
-  // Scenes get the full palette so multi-color variants can reference any
-  // tone directly (`fill="var(--tone-rose)"` etc).
   return isScene ? { ...base, ...MULTI_TONE_VARS } : base;
 }
 
@@ -178,7 +180,7 @@ function Bezel({ children, tone = 'cyan', kind = 'emotion' }) {
       </div>
       <div className="bezel-screen">{children}</div>
       <div className="bezel-bottom">
-        <div className="model">v0.3 · 320×240 · IPS · mono cyan</div>
+        <div className="model">LUNI · 320×240 · IPS · v2.1</div>
       </div>
     </div>
   );
@@ -203,8 +205,9 @@ function App() {
   const variant = cat.variants[variantIdx];
   const recentRef = useRef([]); // track recent variant ids globally
 
-  const emotionKeys = useMemo(() => CAT_KEYS.filter((k) => CATS[k].kind !== 'scene'), []);
+  const emotionKeys = useMemo(() => CAT_KEYS.filter((k) => !CATS[k].kind || CATS[k].kind === 'emotion'), []);
   const sceneKeys   = useMemo(() => CAT_KEYS.filter((k) => CATS[k].kind === 'scene'), []);
+  const statusKeys  = useMemo(() => CAT_KEYS.filter((k) => CATS[k].kind === 'status'), []);
 
   const pickVariant = useCallback((nextCatKey) => {
     const c = CATS[nextCatKey];
@@ -277,17 +280,19 @@ function App() {
   );
 
   return (
-    <div className="app" data-screen-label="PTalk Emotion Sheet">
+    <div className="app" data-screen-label="Luni Emotion Sheet">
       <header className="hdr">
         <div className="hdr-name">
           <span className="logo">◉</span>
-          <span>PTalk · Emotion Library</span>
-          <span className="hdr-version">v2.0</span>
+          <span>Luni · Emotion Library</span>
+          <span className="hdr-version">v2.1</span>
         </div>
         <div className="hdr-meta">
           <span>{emotionKeys.length} emotions</span>
           <span>·</span>
           <span>{sceneKeys.length} scenes</span>
+          <span>·</span>
+          <span>{statusKeys.length} status</span>
           <span>·</span>
           <span>{totalVariants} variants</span>
           <span>·</span>
@@ -416,6 +421,20 @@ function App() {
             ))}
           </div>
 
+          <div className="cat-section-label">Status <span className="sec-count">{statusKeys.length}</span></div>
+          <div className="cat-rail">
+            {statusKeys.map((k) => (
+              <CategoryPill
+                key={k}
+                cat={CATS[k]}
+                catKey={k}
+                active={k === catKey}
+                onClick={() => onSelectCat(k)}
+                showTone={colorMode}
+              />
+            ))}
+          </div>
+
           <div className="cat-header">
             <div>
               <div className="cat-header-name">{cat.label}</div>
@@ -472,6 +491,22 @@ function App() {
             </div>
           ))}
         </div>
+        {statusKeys.length > 0 && (
+          <>
+            <div className="cat-section-label" style={{ marginTop: 20 }}>Status</div>
+            <div className="strip">
+              {statusKeys.map((k) => (
+                <div key={k} className="strip-cell">
+                  <div className="strip-cell-cat">{CATS[k].label}</div>
+                  <TinyScreen variant={CATS[k].variants[0]}
+                              fps={fps}
+                              tone={colorMode ? resolveTone(CATS[k].variants[0], CATS[k]) : 'cyan'}
+                              kind="scene" />
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </footer>
     </div>
   );

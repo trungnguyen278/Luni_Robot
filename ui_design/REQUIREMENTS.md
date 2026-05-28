@@ -4,8 +4,7 @@ Canonical spec for the PTalk screen-eye robot emotion library. Keep this
 in sync with the code. When porting to another project, **read this file
 first**.
 
-Product: **PTalk v2.0** — a desktop companion robot built at PTIT
-(Posts and Telecommunications Institute of Technology).
+Product: **PTalk v2.0** — a desktop companion robot.
 
 ### What's new in v2.0
 
@@ -13,7 +12,7 @@ Product: **PTalk v2.0** — a desktop companion robot built at PTIT
 | ------------------ | ------ |
 | Color              | TFT 9-tone curated palette (was mono cyan). Two-layer rule: face stays cyan, accessories take the category tone. See §4. |
 | Multi-color        | New `tone: 'multi'` for variants that need several colors at once (confetti, fireworks). |
-| Boot scene         | New `boot` scene category with **two fully-separated flows** (PTIT for school, NTT personal). Every stage has a brand-clean twin so the NTT flow never shows PTIT/PTalk text. See §6.5.1. |
+| Boot scene         | New `boot` scene category — a single brand-clean power-on flow (4 stages). See §6.5.1. |
 | Connectivity       | New `network` scene category with 6 variants covering the full wifi/BLE/server lifecycle. See §6.5.2. |
 | Emotion categories | 29 → 37 (added disgusted, nervous, embarrassed, curious, annoyed, cool, suspicious, determined). |
 | Total variants     | 117 → 227. |
@@ -31,10 +30,9 @@ expressive eyes — and, when context calls for it, **full-screen scenes**
 Implementation must be independently designed — do not copy proprietary
 frames, transitions, or distinctive marks from those products.
 
-**No brand text appears inside the eye/scene SVG** (except the dedicated
-`boot` scene, which intentionally shows PTIT branding during power-on).
-The viewer chrome (HTML header, version badge) is allowed to identify
-the product as PTalk v2.0 — it's not part of the rendered display.
+**No brand text appears inside the eye/scene SVG.** The viewer chrome
+(HTML header, version badge) is allowed to identify the product as
+PTalk v2.0 — it's not part of the rendered display.
 
 Personality: friendly, slightly mischievous, expressive.
 
@@ -205,83 +203,41 @@ the entire startup-to-conversation pipeline. Both **block** the normal
 emotion loop while playing; the host should suspend autoplay until the
 flow exits.
 
-### 6.5.1 Cold boot sequence (two flows)
+### 6.5.1 Cold boot sequence
 
-Firmware picks ONE of two boot flows at startup. Both share the bookend
-stages (poweron → checks → ready); they differ only in the middle
-"brand splash" stage. Tone of every stage is `red` except the personal
-splash which is `cyan` to mark it as non-brand.
-
-#### Flow A — **PTIT** (default, shipping firmware, school demos)
+A single brand-clean flow — every stage is cyan, no school/company
+branding appears on screen.
 
 ```
   POWER ON
      ↓
-  boot-poweron       (2.4 s, red)   — dot expands, splits into two eyes
+  boot-poweron           (2.4 s, cyan) — dot expands, splits into two eyes
      ↓
-  boot-logo          (3.0 s, red)   — PTIT mark + sweep ring + subtitle
-                                       "POSTS · TELECOMMUNICATIONS"
+  boot-credits           (4.5 s, cyan) — NTT monogram + name typewriter +
+                                          role line
      ↓
-  boot-checks        (4.2 s, red)   — DISPLAY / AUDIO / MIC / NETWORK /
-                                       AI CORE self-test, footer
-                                       "PTIT · PTalk v2.0"
-     ↓
-  → [ connectivity sub-flow §6.5.2 ] →
-     ↓
-  boot-ready         (3.0 s, red)   — progress 0→100% + PTIT mark + "READY" stamp
-     ↓
-  HAND OFF to `normal` idle pool
-```
-
-Total happy-path: ~12.6 s + connectivity time.
-
-#### Flow B — **NTT** (personal, dev-mode flag)
-
-```
-  POWER ON
-     ↓
-  boot-poweron           (2.4 s, red)   — same as Flow A (shared neutral stage)
-     ↓
-  boot-credits           (4.5 s, cyan)  — NTT monogram + name typewriter +
-                                           role line. NO PTIT/PTalk text.
-     ↓
-  boot-checks-personal   (4.2 s, cyan)  — same self-test, footer "v2.0"
-                                           (no PTIT/PTalk brand text)
+  boot-checks-personal   (4.2 s, cyan) — DISPLAY / AUDIO / MIC / NETWORK /
+                                          AI CORE self-test, footer "v2.0"
      ↓
   → [ connectivity sub-flow §6.5.2 ] →
      ↓
-  boot-ready-personal    (3.0 s, cyan)  — progress 0→100% + NTT monogram
-                                           + "READY" stamp
+  boot-ready-personal    (3.0 s, cyan) — progress 0→100% + NTT monogram
+                                          + "READY" stamp
      ↓
   HAND OFF to `normal` idle pool
 ```
 
 Total happy-path: ~14.1 s + connectivity time.
 
-Every stage in Flow B is brand-clean — no PTIT or PTalk text appears
-on screen at any point. `boot-poweron` is intentionally neutral
-(abstract eye-wake animation) so it works for both flows.
-
-**Picking the flow** — the firmware reads `PTALK_BOOT_FLOW` from NVS at
-startup:
-
 ```c
-bool is_ntt = strcmp(nvs_get_str("PTALK_BOOT_FLOW"), "ntt") == 0;
-
-play_boot(BOOT_POWERON);                     // shared
-play_boot(is_ntt ? BOOT_CREDITS
-                 : BOOT_LOGO);               // brand splash
-play_boot(is_ntt ? BOOT_CHECKS_PERSONAL
-                 : BOOT_CHECKS);             // self-test
+play_boot(BOOT_POWERON);
+play_boot(BOOT_CREDITS);
+play_boot(BOOT_CHECKS_PERSONAL);
 run_connectivity();
-play_boot(is_ntt ? BOOT_READY_PERSONAL
-                 : BOOT_READY);              // ready
+play_boot(BOOT_READY_PERSONAL);
 ```
 
-A long-press on the boot button (or a dev-mode menu in the PTalk app)
-toggles the flag.
-
-#### Failure handling (both flows)
+#### Failure handling
 
 If a check **fails** during `boot-checks`, leave the failed row showing
 the spinner instead of OK for 1 s, then jump straight to the matching
@@ -291,7 +247,7 @@ status scene:
 | ----------- | --------------------- |
 | DISPLAY     | (panic — firmware halts; no UI possible) |
 | AUDIO / MIC | continue boot, raise `error-warning` later (non-fatal) |
-| NETWORK     | enter §6.5.2 immediately, skip `boot-ready` |
+| NETWORK     | enter §6.5.2 immediately, skip `boot-ready-personal` |
 | AI CORE     | `error-bang` then halt (model load failed) |
 
 ### 6.5.2 Connectivity sub-flow (FSM)
@@ -323,7 +279,7 @@ status scene:
            ↓                            ↓
       reachable                    unreachable
            ↓                            ↓
-     EXIT to boot-ready          network-server-error (red, ERROR 503)
+     EXIT to boot-ready-personal network-server-error (red, ERROR 503)
                                        ↓
                                        → backoff: 2 s, 5 s, 10 s, 30 s
                                        → success → EXIT
@@ -348,7 +304,7 @@ While a conversation is running:
 
 ### 6.5.4 Tone choices (recap)
 
-- `boot-*` — **red** across the sequence (PTIT brand identity layer)
+- `boot-*` — **cyan** across the sequence (brand-clean)
 - `wifi-scan` / `wifi-connect` — **cyan** (neutral, in-progress)
 - `wifi-retry` — **orange** (caution; user should be aware but isn't fatal)
 - `offline` / `server-error` — **red** (failure)
@@ -410,7 +366,7 @@ not an emotional reaction. Eyes are not drawn. Per-variant tones in `()`.
 
 | Category      | Variants | Purpose                                       |
 | ------------- | -------- | --------------------------------------------- |
-| `boot`        | 7        | **Two complete boot flows** — PTIT (school) and NTT (personal). Each stage has its own brand-clean twin. |
+| `boot`        | 4        | Single brand-clean power-on flow: poweron → credits → self-test → ready |
 | `network`     | 6        | **Connectivity status**: wifi-scan / wifi-connect / wifi-retry (orange) / offline (red) / ble-pair (purple) / server-error (red) |
 | `weather`     | 5        | Sunny (warm) / rainy (blue) / cloudy (cyan) / snow (white) / storm (purple) |
 | `clock`       | 3        | Digital (cyan), analog (cyan), alarm (red)    |
@@ -592,30 +548,13 @@ Use these `id`s when calling from firmware. Listed in display order.
 
 ## 8b. Scene inventory
 
-### boot (7) — power-on flows
+### boot (4) — power-on flow
 
-Two complete flows; pick one at firmware startup. Every stage exists in
-two variants — PTIT-branded and NTT-personal — except `boot-poweron`
-which is shared (deliberately neutral).
-
-**Flow A · PTIT** (default, shipping):
-`boot-poweron` → `boot-logo` → `boot-checks` → `boot-ready` (all red)
-
-**Flow B · NTT** (personal, dev-mode — brand-clean):
-`boot-poweron` (red) → `boot-credits` → `boot-checks-personal` →
+A single brand-clean flow:
+`boot-poweron` → `boot-credits` → `boot-checks-personal` →
 `boot-ready-personal` (all cyan)
 
-All 7 individual stage variants:
-`boot-poweron` (shared) ·
-`boot-logo` (PTIT splash) · `boot-credits` (NTT splash) ·
-`boot-checks` (PTIT self-test, "PTIT · PTalk v2.0" footer) ·
-`boot-checks-personal` (NTT self-test, "v2.0" footer) ·
-`boot-ready` (PTIT mark on top) ·
-`boot-ready-personal` (NTT monogram on top)
-
-The PTIT mark is an original geometric construction inspired by PTIT
-iconography — not a copy of the official school seal. NTT splash and
-brand-clean stages contain no PTIT/PTalk text anywhere.
+No school/company branding appears on screen at any stage.
 
 ### network (6) — connectivity status
 `network-wifi-scan` (cyan) · `network-wifi-connect` (cyan) ·
@@ -711,7 +650,7 @@ MOCHI-P Emotion Sheet.html   ← entry point (CSS, React loader)
 emotion-core.jsx             ← primitives, constants, EYE_TONES palette
 emotion-list.jsx             ← base emotion variants (29 cats from v1 spec)
 emotion-extras.jsx           ← additional variants + new categories
-scenes-boot.jsx              ← PTIT boot sequence (1 scene cat, 4 variants)
+scenes-boot.jsx              ← brand-clean boot sequence (1 scene cat, 4 variants)
 scenes-network.jsx           ← Connectivity status (wifi/ble/server, 6 variants)
 emotion-balance.jsx          ← balance pass: brings every cat to ≥4 variants
 emotion-more.jsx             ← 8 brand-new emotion categories (disgusted,
@@ -733,7 +672,7 @@ REQUIREMENTS.md              ← this file
 4. scenes.jsx              ← tags emotion cats with kind:'emotion',
                               adds scene cats with kind:'scene'
 5. scenes-extras.jsx       ← adds 11 more scene categories
-6. scenes-boot.jsx         ← adds the PTIT boot scene
+6. scenes-boot.jsx         ← adds the boot scene
 7. scenes-network.jsx      ← adds the connectivity-status scene
 8. emotion-balance.jsx     ← pushes balance variants onto existing cats
 9. emotion-more.jsx        ← adds 8 new emotion cats; inserts into KEYS

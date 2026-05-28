@@ -100,7 +100,7 @@ function TypingDots({ cx, cy, t, color = 'var(--accent)', size = 4, gap = 12 }) 
 cats.network = {
   label: 'Network',
   desc: 'Connectivity status displays.',
-  kind: 'scene',
+  kind: 'status',
   variants: [
 
     // 1. WIFI SCAN — arcs cycle from inner → outer like a radar sweep
@@ -188,33 +188,70 @@ cats.network = {
         );
       } },
 
-    // 5. BLE PAIR — BT icon pulsing with pairing-mode label
-    { id: 'network-ble-pair', label: 'BLE pairing', duration: 2200,
+    // 5. BT SCAN — pulsing BT icon with radar sweep, "searching for devices"
+    { id: 'network-bt-scan', label: 'BT searching', duration: 2200,
       render: (t) => {
-        const pulse1 = (t * 1) % 1;
-        const pulse2 = ((t * 1) + 0.5) % 1;
+        const breathe = 0.85 + Math.sin(t * TAU * 2) * 0.15;
         const wave = (p) => {
           const r = lerp(18, 56, p);
-          const op = 1 - p;
           return (
-            <circle cx={SCX} cy={STATUS_H + 60} r={r}
+            <circle cx={SCX} cy={SCY - 14} r={r}
                     fill="none" stroke="var(--accent)" strokeWidth={2}
-                    opacity={op * 0.7} />
+                    opacity={(1 - p) * 0.7} />
           );
         };
-        const breathe = 0.85 + Math.sin(t * TAU * 2) * 0.15;
+        const found = Math.floor(t * 3); // 0, 1, 2
         return (
           <g>
-            {wave(pulse1)}
-            {wave(pulse2)}
-            <BTIcon cx={SCX} cy={STATUS_H + 60} scale={1.5 * breathe}
+            {wave((t) % 1)}
+            {wave(((t) + 0.5) % 1)}
+            <BTIcon cx={SCX} cy={SCY - 14} scale={1.5 * breathe}
                     color="var(--accent)" />
-            <MonoLabel x={SCX} y={STATUS_H + 130} text="PAIRING MODE" size={11}
+            <MonoLabel x={SCX} y={SCY + 38} text="SEARCHING DEVICES"
+                       size={11} ls={2.5} weight={700} />
+            <MonoLabel x={SCX} y={SCY + 56} text={`${found} FOUND`}
+                       size={10} ls={2} fill="var(--accent)" op={0.9} />
+            <TypingDots cx={SCX} cy={H - 18} t={t} />
+          </g>
+        );
+      } },
+
+    // 6. BT CONNECTED — merged from the old Bluetooth scene. Robot
+    //    shows a paired device with a confirm check. (Pairing-mode
+    //    variant was removed; pair from a phone, then this confirms.)
+    { id: 'network-bt-paired', label: 'Bluetooth on', duration: 2600,
+      render: (t) => {
+        const pop = t < 0.25 ? ease.out(t / 0.25) : 1;
+        const wave = Math.sin(t * TAU) * 0.5 + 0.5;
+        return (
+          <g>
+            {/* BT glyph on left */}
+            <BTIcon cx={SCX - 60} cy={SCY - 10} scale={1.5}
+                    color="var(--accent)" opacity={0.85 + wave * 0.15} />
+            {/* phone shape on right */}
+            <g transform={`translate(${SCX + 60} ${SCY - 10})`}>
+              <rect x={-16} y={-26} width={32} height={52} rx={4}
+                    fill="var(--accent)" />
+              <rect x={-12} y={-22} width={24} height={40} rx={2}
+                    fill="var(--bg)" opacity={0.4} />
+              <circle cx={0} cy={20} r={2.5} fill="var(--bg)" />
+            </g>
+            {/* dashed link line */}
+            <line x1={SCX - 38} y1={SCY - 10}
+                  x2={SCX + 40} y2={SCY - 10}
+                  stroke="var(--accent)" strokeWidth={2}
+                  strokeDasharray="4 4" opacity={0.6} />
+            {/* center check pops in */}
+            <g transform={`translate(${SCX} ${SCY - 10}) scale(${pop})`}>
+              <circle cx={0} cy={0} r={14} fill="var(--accent)" />
+              <path d="M -6 0 L -1 5 L 7 -5"
+                    fill="none" stroke="var(--bg)" strokeWidth={3.5}
+                    strokeLinecap="round" strokeLinejoin="round" />
+            </g>
+            <MonoLabel x={SCX} y={SCY + 50} text="BLUETOOTH ON" size={11}
                        ls={3} weight={700} />
-            <MonoLabel x={SCX} y={H - 24} text="OPEN PTALK APP" size={9} ls={2}
-                       fill="var(--accent)" op={0.85} />
-            <MonoLabel x={SCX} y={H - 10} text="TO CONNECT" size={9} ls={2}
-                       fill="var(--accent)" op={0.55} />
+            <MonoLabel x={SCX} y={H - 14} text="iPhone · Quan"
+                       size={10} ls={1.5} fill="var(--accent)" op={0.85} />
           </g>
         );
       } },

@@ -1,21 +1,13 @@
 /* PTalk emotion library — BOOT scenes
-   Power-on sequences. There are TWO flows the firmware can play; both
-   share the bookend stages (poweron → checks → ready) and differ only
-   in the brand splash in the middle.
+   Power-on sequence. A single brand-clean flow:
 
-     PTIT flow  (default — for school demos / shipping firmware):
-        boot-poweron  →  boot-logo     →  boot-checks  →  boot-ready
-        (2.4 s)          (3.0 s)           (4.2 s)          (3.0 s)
-        red              red               red              red
+        boot-poweron  →  boot-credits  →  boot-checks-personal  →  boot-ready-personal
+        (2.4 s)          (4.5 s)           (4.2 s)                  (3.0 s)
+        cyan             cyan              cyan                     cyan
 
-     NTT flow   (personal — when dev-mode flag is set):
-        boot-poweron  →  boot-credits  →  boot-checks  →  boot-ready
-        (2.4 s)          (4.5 s)           (4.2 s)          (3.0 s)
-        red              cyan              red              red
-
-   Firmware just picks which middle variant to play; the rest of the
-   pipeline is identical. The viewer exposes both stages as ordinary
-   variants so users can preview either flow end-to-end.
+   No school/company branding appears anywhere on screen. The viewer
+   exposes every stage as an ordinary variant so the flow can be
+   previewed end-to-end.
 */
 
 const {
@@ -29,58 +21,10 @@ const keys = window.EMOTION_CATEGORY_KEYS;
 const SCX = W / 2;
 const SCY = STATUS_H + (H - STATUS_H) / 2;
 
-// ---- PTIT mark ---------------------------------------------------
-// Hand-drawn glyph mark inspired by school iconography (laurel-style
-// frame around the letters PTIT). NOT a copy of the official seal —
-// this is an original geometric construction.
-function PTITMark({ cx = SCX, cy = SCY - 6, scale = 1, opacity = 1, color = 'currentColor' }) {
-  const s = scale;
-  return (
-    <g transform={`translate(${cx} ${cy}) scale(${s})`} opacity={opacity}>
-      {/* outer laurel-style frame: two curving arcs left/right */}
-      <g stroke={color} strokeWidth={2.2} fill="none" strokeLinecap="round">
-        <path d="M -52 0
-                 C -52 -28, -38 -44, -16 -50" />
-        <path d="M -52 0
-                 C -52 28, -38 44, -16 50" />
-        <path d="M 52 0
-                 C 52 -28, 38 -44, 16 -50" />
-        <path d="M 52 0
-                 C 52 28, 38 44, 16 50" />
-        {/* leaf ticks on the laurel */}
-        <path d="M -46 -18 q -4 -3 -8 -1" />
-        <path d="M -42 -28 q -4 -3 -8 -1" />
-        <path d="M -36 -36 q -3 -4 -7 -3" />
-        <path d="M -46 18 q -4 3 -8 1" />
-        <path d="M -42 28 q -4 3 -8 1" />
-        <path d="M -36 36 q -3 4 -7 3" />
-        <path d="M 46 -18 q 4 -3 8 -1" />
-        <path d="M 42 -28 q 4 -3 8 -1" />
-        <path d="M 36 -36 q 3 -4 7 -3" />
-        <path d="M 46 18 q 4 3 8 1" />
-        <path d="M 42 28 q 4 3 8 1" />
-        <path d="M 36 36 q 3 4 7 3" />
-        {/* top + bottom centre flourishes (open ring with star) */}
-        <circle cx={0} cy={-50} r={4} />
-        <circle cx={0} cy={50} r={4} />
-      </g>
-      {/* central PTIT mono text */}
-      <text x={0} y={6} textAnchor="middle"
-            fontFamily="ui-monospace, Menlo, monospace"
-            fontWeight="700" fontSize="22" letterSpacing="2"
-            fill={color}>PTIT</text>
-      <text x={0} y={20} textAnchor="middle"
-            fontFamily="ui-monospace, Menlo, monospace"
-            fontWeight="400" fontSize="6" letterSpacing="1.5"
-            fill={color} opacity={0.7}>ACADEMY OF TECH</text>
-    </g>
-  );
-}
-
-// ---- NTT monogram (personal flow brand-free mark) -----------------
-// A small rounded-square containing the initials NTT. Used in the NTT
-// flow's `boot-ready-personal` variant so it has visual continuity with
-// `boot-credits` but contains no PTIT/PTalk text.
+// ---- NTT monogram (personal-flow brand-free mark) -----------------
+// A small rounded-square containing the initials NTT. Used in the
+// `boot-ready-personal` variant for visual continuity with
+// `boot-credits`. Contains no school/company text.
 function NTTMark({ cx = SCX, cy = SCY - 6, scale = 1, opacity = 1, color = 'currentColor' }) {
   return (
     <g transform={`translate(${cx} ${cy}) scale(${scale})`} opacity={opacity}>
@@ -96,7 +40,7 @@ function NTTMark({ cx = SCX, cy = SCY - 6, scale = 1, opacity = 1, color = 'curr
 
 // ---- shared render bodies -----------------------------------------
 // Self-test checklist. `footer` is drawn at the bottom — pass any string
-// (use empty string for a brand-free render).
+// (use empty string for a fully brand-clean render).
 function renderSelfTest(t, footer) {
   const ITEMS = [
     { label: 'DISPLAY',      w: 64 },
@@ -202,8 +146,8 @@ function renderReady(t, Mark) {
 // ---- variants ---------------------------------------------------
 cats.boot = {
   label: 'Boot',
-  desc: 'PTIT power-on sequence.',
-  kind: 'scene',
+  desc: 'Brand-clean power-on sequence.',
+  kind: 'status',
   variants: [
 
     // 1. POWER-ON — single bright dot expands into two open eyes
@@ -267,55 +211,8 @@ cats.boot = {
         );
       } },
 
-    // 2. LOGO — PTIT mark fades in with a circular sweep underneath
-    //    (the brand splash for the PTIT boot flow)
-    { id: 'boot-logo', label: 'Logo (PTIT)', duration: 3000,
-      render: (t) => {
-        // 0–0.4: scale-up + fade
-        // 0.4–1.0: hold, with a slow sweep ring
-        const enter = clamp(t / 0.4, 0, 1);
-        const scale = lerp(0.5, 1, ease.out(enter));
-        const op = ease.out(enter);
-        const sweepAngle = ((t * 360) % 360) * (Math.PI / 180);
-        return (
-          <g>
-            {/* sweeping ring under the mark */}
-            <circle cx={SCX} cy={SCY - 6} r={64}
-                    fill="none" stroke="var(--accent)" strokeWidth={1.5}
-                    opacity={op * 0.25} />
-            <path
-              d={`M ${SCX + Math.cos(sweepAngle - 1.4) * 64}
-                    ${SCY - 6 + Math.sin(sweepAngle - 1.4) * 64}
-                  A 64 64 0 0 1
-                    ${SCX + Math.cos(sweepAngle) * 64}
-                    ${SCY - 6 + Math.sin(sweepAngle) * 64}`}
-              fill="none" stroke="var(--accent)" strokeWidth={3}
-              strokeLinecap="round" opacity={op} />
-            {/* the mark itself */}
-            <PTITMark cx={SCX} cy={SCY - 6}
-                      scale={scale} opacity={op} color="var(--eye)" />
-            {/* mini tagline at the bottom (fades in last) */}
-            <text x={SCX} y={H - 8} textAnchor="middle"
-                  fontFamily="ui-monospace, Menlo, monospace"
-                  fontSize={9} letterSpacing={3}
-                  fill="var(--eye)" opacity={clamp((t - 0.5) * 3, 0, 0.7)}>
-              POSTS · TELECOMMUNICATIONS
-            </text>
-          </g>
-        );
-      } },
-
-    // 3. CHECKS (PTIT flow) — self-test with "PTIT · PTalk v2.0" footer
-    { id: 'boot-checks', label: 'Self-test (PTIT)', duration: 4200,
-      render: (t) => renderSelfTest(t, 'PTIT · PTalk v2.0') },
-
-    // 3b. CHECKS (NTT flow) — same self-test, no brand footer
-    { id: 'boot-checks-personal', label: 'Self-test (NTT)', duration: 4200,
-      render: (t) => renderSelfTest(t, 'v2.0') },
-
-    // 5. CREDITS — purely personal splash, no brand marks
-    //    (the brand splash for the NTT/personal boot flow)
-    { id: 'boot-credits', label: 'Credits (NTT)', duration: 4500,
+    // 2. CREDITS — purely personal splash, no brand marks
+    { id: 'boot-credits', label: 'Credits', duration: 4500,
       render: (t) => {
         // Timeline:
         //   0.00–0.30  monogram (NTT initials) scales in
@@ -416,12 +313,12 @@ cats.boot = {
         );
       } },
 
-    // 6. READY (PTIT flow) — progress + READY stamp, PTIT mark at top
-    { id: 'boot-ready', label: 'Ready (PTIT)', duration: 3000,
-      render: (t) => renderReady(t, PTITMark) },
+    // 3. CHECKS — self-test (brand-clean footer)
+    { id: 'boot-checks-personal', label: 'Self-test', duration: 4200,
+      render: (t) => renderSelfTest(t, 'v2.0') },
 
-    // 6b. READY (NTT flow) — progress + READY stamp, NTT monogram at top
-    { id: 'boot-ready-personal', label: 'Ready (NTT)', duration: 3000,
+    // 4. READY — progress + READY stamp, NTT monogram at top
+    { id: 'boot-ready-personal', label: 'Ready', duration: 3000,
       render: (t) => renderReady(t, NTTMark) },
   ],
 };

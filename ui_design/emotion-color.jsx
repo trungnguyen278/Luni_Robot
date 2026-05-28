@@ -107,15 +107,10 @@ const SCENE_VARIANT_TONE = {
   'weather-snow':         'white',
   'weather-storm':        'purple',
 
-  // boot: PTIT brand red for the PTIT flow; NTT (personal) splash + ready
-  // are cyan to visually mark them as non-brand. Self-test stays red for
-  // both because it's the same underlying scene.
-  'boot-poweron':            'red',
-  'boot-logo':               'red',
-  'boot-checks':             'red',
+  // boot: single brand-clean flow, all cyan
+  'boot-poweron':            'cyan',
   'boot-checks-personal':    'cyan',
   'boot-credits':            'cyan',
-  'boot-ready':              'red',
   'boot-ready-personal':     'cyan',
 
   // network: cyan for in-progress, red for failures, purple for BLE
@@ -123,7 +118,8 @@ const SCENE_VARIANT_TONE = {
   'network-wifi-connect':    'cyan',
   'network-wifi-retry':      'orange',
   'network-offline':         'red',
-  'network-ble-pair':        'purple',
+  'network-bt-scan':         'purple',
+  'network-bt-paired':       'purple',
   'network-server-error':    'red',
 
   // clock: alarm screams red, others stay cyan
