@@ -218,7 +218,7 @@ void AppController::onConnectionStateChanged(state::ConnectionState s)
 
     if (s == state::ConnectionState::BLE_PROVISIONING) {
         startBleProvisioning();
-    } else if (ble_active_) {
+    } else if (ble_active_ && s != state::ConnectionState::BLE_CONNECTED) {
         stopBleProvisioning();
     }
 
@@ -239,6 +239,14 @@ void AppController::startBleProvisioning()
         ESP_LOGE(TAG, "BLE init failed");
         return;
     }
+
+    ble_.onConnectionChange([this](bool connected) {
+        if (connected) {
+            StateManager::instance().setConnectionState(state::ConnectionState::BLE_CONNECTED);
+        } else if (ble_active_) {
+            StateManager::instance().setConnectionState(state::ConnectionState::BLE_PROVISIONING);
+        }
+    });
 
     ble_.onConfigComplete([this](const BluetoothService::ConfigData& cfg) {
         ESP_LOGI(TAG, "BLE config received: ssid='%s'", cfg.ssid.c_str());
