@@ -36,7 +36,8 @@ bool NetworkManager::init(const Config& cfg)
 
     wifi_->init();
     ws_->init();
-    ws_->setDeviceInfo(getDLuniceEfuseID(), app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
+    ws_->setDeviceInfo(getDLuniceEfuseID(), cfg_.device_token.c_str(),
+                       app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
     ota_->init(StateManager::instance());
     sync_->init();
 

@@ -29,6 +29,7 @@ enum ChrIdx {
     IDX_WS_URL,
     IDX_COMMIT,
     IDX_USER_ID,
+    IDX_DEV_TOKEN,
     IDX_DEVICE_INFO,
     IDX_DIAG_INFO,
     IDX_AUTH_UNLOCK,
@@ -50,6 +51,7 @@ static ble_uuid16_t chr_uuid_pass  = BLE_UUID16_INIT(0x0002);
 static ble_uuid16_t chr_uuid_ws    = BLE_UUID16_INIT(0x0003);
 static ble_uuid16_t chr_uuid_commit = BLE_UUID16_INIT(0x0004);
 static ble_uuid16_t chr_uuid_uid   = BLE_UUID16_INIT(0x0005);
+static ble_uuid16_t chr_uuid_token = BLE_UUID16_INIT(0x0008);
 static ble_uuid16_t chr_uuid_info  = BLE_UUID16_INIT(0x0006);
 static ble_uuid16_t chr_uuid_diag  = BLE_UUID16_INIT(0x0007);
 static ble_uuid16_t chr_uuid_auth  = BLE_UUID16_INIT(0x0010);
@@ -70,6 +72,7 @@ static const struct ble_gatt_chr_def gatt_chars[] = {
     { .uuid = &chr_uuid_ws.u,    .access_cb = gatt_chr_access, .arg = (void*)IDX_WS_URL,        .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_WS_URL] },
     { .uuid = &chr_uuid_commit.u,.access_cb = gatt_chr_access, .arg = (void*)IDX_COMMIT,         .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_COMMIT] },
     { .uuid = &chr_uuid_uid.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_USER_ID,       .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_USER_ID] },
+    { .uuid = &chr_uuid_token.u,.access_cb = gatt_chr_access, .arg = (void*)IDX_DEV_TOKEN,     .flags = W_FLAGS,  .val_handle = &chr_val_handles[IDX_DEV_TOKEN] },
     { .uuid = &chr_uuid_info.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DEVICE_INFO,   .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_DEVICE_INFO] },
     { .uuid = &chr_uuid_diag.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DIAG_INFO,     .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_DIAG_INFO] },
     { .uuid = &chr_uuid_auth.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_AUTH_UNLOCK,   .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_AUTH_UNLOCK] },
@@ -238,6 +241,12 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             if (level < BluetoothService::AccessLevel::LEVEL_1)
                 return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
             self->temp_cfg_.user_id.assign((char*)buf, len);
+            break;
+
+        case IDX_DEV_TOKEN:
+            if (level < BluetoothService::AccessLevel::LEVEL_1)
+                return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+            self->temp_cfg_.device_token.assign((char*)buf, len);
             break;
 
         case IDX_ADMIN_SECRET:
@@ -507,6 +516,7 @@ void BluetoothService::factoryReset()
     if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
         nvs_erase_key(h, "wifi_ssid");
         nvs_erase_key(h, "wifi_password");
+        nvs_erase_key(h, "device_token");
         nvs_erase_key(h, "admin_secret");
         nvs_commit(h);
         nvs_close(h);

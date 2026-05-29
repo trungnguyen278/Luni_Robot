@@ -166,8 +166,10 @@ restart               Restart device
 ## Tai Lieu
 
 - [BLE_APP_DEV.md](docs/BLE_APP_DEV.md) — Mobile app BLE provisioning guide
-- [PLAN_ROBOT.md](../docs/plan/PLAN_ROBOT.md) — System refactoring plan
-- [SYSTEM_ARCHITECTURE.md](../docs/plan/SYSTEM_ARCHITECTURE.md) — Server + device architecture
+- [docs/architecture.md](../docs/architecture.md) — Dual-MCU architecture
+- [docs/modules/network.md](../docs/modules/network.md) — WiFi / WebSocket / OTA
+- [docs/modules/state-machine.md](../docs/modules/state-machine.md) — Connection / interaction / OTA states
+- [docs/modules/inter-mcu.md](../docs/modules/inter-mcu.md) — SPI + UART protocols
 
 ## License
 

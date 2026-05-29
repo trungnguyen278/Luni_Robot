@@ -53,6 +53,7 @@ namespace user_cfg {
         std::string wifi_pass;
         std::string ws_url;
         std::string user_id;
+        std::string device_token;
     };
 
     static std::string get_string(nvs_handle_t h, const char* key) {
@@ -81,9 +82,10 @@ namespace user_cfg {
         if (cfg.device_name.empty()) cfg.device_name = "Luni";
         cfg.wifi_ssid    = get_string(h, "ssid");
         cfg.wifi_pass    = get_string(h, "pass");
-        cfg.ws_url       = get_string(h, "ws_url");
-        cfg.user_id      = get_string(h, "user_id");
-        cfg.volume       = get_u8(h, "volume", cfg.volume);
+        cfg.ws_url        = get_string(h, "ws_url");
+        cfg.user_id       = get_string(h, "user_id");
+        cfg.device_token  = get_string(h, "device_token");
+        cfg.volume        = get_u8(h, "volume", cfg.volume);
         nvs_close(h);
         return cfg;
     }
@@ -193,6 +195,8 @@ bool DeviceProfile::setup(AppController& app)
                 nvs_set_str(h, "ws_url", received_cfg.ws_url.c_str());
             if (!received_cfg.user_id.empty())
                 nvs_set_str(h, "user_id", received_cfg.user_id.c_str());
+            if (!received_cfg.device_token.empty())
+                nvs_set_str(h, "device_token", received_cfg.device_token.c_str());
             if (!received_cfg.admin_secret.empty())
                 nvs_set_str(h, "admin_secret", received_cfg.admin_secret.c_str());
             if (!received_cfg.device_name.empty())
@@ -206,6 +210,7 @@ bool DeviceProfile::setup(AppController& app)
         user.wifi_pass    = received_cfg.pass;
         if (!received_cfg.ws_url.empty()) user.ws_url = received_cfg.ws_url;
         if (!received_cfg.user_id.empty()) user.user_id = received_cfg.user_id;
+        if (!received_cfg.device_token.empty()) user.device_token = received_cfg.device_token;
         user.device_name  = received_cfg.device_name;
         user.volume       = received_cfg.volume;
 
@@ -224,6 +229,7 @@ bool DeviceProfile::setup(AppController& app)
     net_cfg.wifi_pass    = user.wifi_pass;
     net_cfg.ws_url       = normalize_ws_url(user.ws_url.empty() ? default_ws : user.ws_url);
     net_cfg.device_name  = user.device_name;
+    net_cfg.device_token = user.device_token;
 
     if (!network_mgr->init(net_cfg)) {
         ESP_LOGE(TAG, "NetworkManager init failed");

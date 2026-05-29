@@ -103,9 +103,11 @@ void WebSocketClient::disconnect()
     if (state_cb_) state_cb_(false);
 }
 
-void WebSocketClient::setDeviceInfo(const char* mac, const char* fw_version, const char* model)
+void WebSocketClient::setDeviceInfo(const char* mac, const char* device_token,
+                                    const char* fw_version, const char* model)
 {
     if (mac) mac_ = mac;
+    if (device_token) device_token_ = device_token;
     if (fw_version) fw_version_ = fw_version;
     if (model) model_ = model;
 }
@@ -117,7 +119,7 @@ esp_err_t WebSocketClient::authenticate()
     if (!connected_ || !client_) return ESP_FAIL;
 
     cJSON* auth_msg = ws::createAuthMessage(
-        mac_.c_str(), fw_version_.c_str(), model_.c_str());
+        mac_.c_str(), device_token_.c_str(), fw_version_.c_str(), model_.c_str());
     if (!auth_msg) return ESP_ERR_NO_MEM;
 
     char* json = cJSON_PrintUnformatted(auth_msg);

@@ -23,8 +23,12 @@ Luni_Robot/
 
 ## Documentation
 
-- [System Architecture](docs/plan/SYSTEM_ARCHITECTURE.md) — tổng quan toàn hệ thống
-- [Robot Plan](docs/plan/PLAN_ROBOT.md) — chi tiết firmware refactoring, state machine, protocols
+📖 **[docs/](docs/README.md)** — index đầy đủ.
+
+- [Architecture](docs/architecture.md) — dual-MCU, vai trò S3/C5, kênh giao tiếp
+- Modules: [state-machine](docs/modules/state-machine.md) · [network](docs/modules/network.md) · [inter-mcu](docs/modules/inter-mcu.md) · [ble-provisioning](docs/modules/ble-provisioning.md)
+- UI/rendering: [RENDERING_ARCHITECTURE](docs/RENDERING_ARCHITECTURE.md) · [SCENE_DATA_SPEC](docs/SCENE_DATA_SPEC.md) · [UI_DESIGN_PIPELINE](docs/UI_DESIGN_PIPELINE.md)
+- Per-MCU: [esp32-c5/README.md](esp32-c5/README.md)
 
 ## Previous Versions
 

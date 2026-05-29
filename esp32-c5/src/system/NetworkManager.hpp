@@ -27,6 +27,7 @@ public:
         std::string wifi_pass;
         std::string ws_url;
         std::string device_name;
+        std::string device_token;
     };
 
     NetworkManager();

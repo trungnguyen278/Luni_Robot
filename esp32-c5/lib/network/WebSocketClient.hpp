@@ -47,7 +47,8 @@ public:
     void onAuthResult(AuthCallback cb) { auth_cb_ = std::move(cb); }
 
     // Device info for auth
-    void setDeviceInfo(const char* mac, const char* fw_version, const char* model);
+    void setDeviceInfo(const char* mac, const char* device_token,
+                       const char* fw_version, const char* model);
 
 private:
     static void eventHandlerStatic(void* handler_args, esp_event_base_t base,
@@ -63,6 +64,7 @@ private:
     esp_websocket_client_handle_t client_ = nullptr;
     std::string url_;
     std::string mac_;
+    std::string device_token_;
     std::string fw_version_;
     std::string model_;
 

@@ -70,7 +70,7 @@ cJSON* createMessage(MsgType type, const char* id)
     return root;
 }
 
-cJSON* createAuthMessage(const char* mac,
+cJSON* createAuthMessage(const char* mac, const char* device_token,
                          const char* fw_version, const char* model)
 {
     cJSON* root = createMessage(MsgType::AUTH);
@@ -78,6 +78,7 @@ cJSON* createAuthMessage(const char* mac,
 
     cJSON* payload = cJSON_AddObjectToObject(root, "payload");
     if (payload) {
+        cJSON_AddStringToObject(payload, "device_token", device_token);
         cJSON_AddStringToObject(payload, "mac", mac);
         cJSON_AddStringToObject(payload, "fw_version", fw_version);
         cJSON_AddStringToObject(payload, "model", model);
