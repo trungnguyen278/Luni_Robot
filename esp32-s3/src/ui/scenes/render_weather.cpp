@@ -1,140 +1,136 @@
 #include "ui/VariantRegistry.hpp"
 #include "display/GfxEngine.hpp"
 #include "display/MathHelpers.hpp"
+#include "display/SceneArcHelpers.hpp"
 #include <cmath>
 
 using namespace geom;
 using namespace math;
 
-static void drawCloud(GfxEngine& gfx, int16_t cx, int16_t cy,
-                      uint16_t color, uint8_t alpha = 255) {
-    gfx.fillEllipse(cx - 14, cy, 20, 16, color, alpha);
-    gfx.fillEllipse(cx + 14, cy, 22, 18, color, alpha);
-    gfx.fillEllipse(cx, cy - 10, 18, 14, color, alpha);
-    gfx.fillRoundedRect(cx - 30, cy + 4, 62, 14, 7, color, alpha);
-}
+// Weather-window arc: curtains open → time-lapse sky → curtains close (12s)
+static const PhaseEntry WEATHER_PHASES[] = {
+    {"curious",      0.10f},
+    {"curtainOpen",  0.10f},
+    {"shrink",       0.06f},
+    {"watch",        0.48f},
+    {"curtainClose", 0.10f},
+    {"grow",         0.06f},
+    {"done",         0.10f},
+};
+static constexpr uint8_t WP_COUNT = sizeof(WEATHER_PHASES) / sizeof(WEATHER_PHASES[0]);
 
-static void render_weather_sunny(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = SCX - 60, cy = CY - 10;
+static void render_weather_window(GfxEngine& gfx, float t, const ColorContext& colors) {
+    PhaseResult ph = phases(t, WEATHER_PHASES, WP_COUNT);
 
-    gfx.pushTransform();
-    gfx.translate((float)cx, (float)cy);
-    gfx.rotate(t * 180.0f, 0, 0);
-    for (int i = 0; i < 8; i++) {
-        float a = (float)i / 8.0f * TAU;
-        gfx.drawLine((int16_t)(cosf(a) * 36), (int16_t)(sinf(a) * 36),
-                     (int16_t)(cosf(a) * 52), (int16_t)(sinf(a) * 52),
-                     colors.eye, 4);
+    float eyeCx = (float)SCX, eyeCy = (float)CY, eyeScale = 1.0f;
+    const char* eyeEmo = "curious";
+
+    if (phaseIs(ph.name, "curious")) { eyeEmo = "curious"; }
+    else if (phaseIs(ph.name, "curtainOpen")) { eyeEmo = "eager"; }
+    else if (phaseIs(ph.name, "shrink")) {
+        eyeCx = lerp((float)SCX, (float)(SCREEN_W - 42), ease::inOut(ph.p));
+        eyeCy = lerp((float)CY, (float)(STATUS_H + 24), ease::inOut(ph.p));
+        eyeScale = lerp(1.0f, 0.32f, ease::inOut(ph.p));
+        eyeEmo = "happy";
     }
-    gfx.popTransform();
-
-    gfx.fillCircle(cx, cy, 28, colors.eye);
-    gfx.fillCircle(cx, cy, 20, colors.bg);
-
-    gfx.drawText("28\xB0", SCX + 52, cy, colors.eye, 4, GfxEngine::TextAlign::CENTER);
-    gfx.drawText("SUNNY", SCX + 52, cy + 30, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER, 178);
-}
-
-static void render_weather_rainy(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = SCX - 60, cy = CY - 14;
-    drawCloud(gfx, cx, cy, colors.eye);
-
-    for (int i = 0; i < 7; i++) {
-        float p = fmodf(t * 2.0f + i * 0.14f, 1.0f);
-        int16_t x = cx - 24 + i * 8;
-        int16_t y = (int16_t)(cy + 22.0f + p * 50.0f);
-        gfx.drawLine(x, y, (int16_t)(x - 4), (int16_t)(y + 10),
-                     colors.eye, 3, (uint8_t)((1.0f - p) * 255));
+    else if (phaseIs(ph.name, "watch")) {
+        eyeCx = (float)(SCREEN_W - 42); eyeCy = (float)(STATUS_H + 24);
+        eyeScale = 0.32f; eyeEmo = "happy";
     }
-
-    gfx.drawText("18\xB0", SCX + 52, cy + 4, colors.eye, 4, GfxEngine::TextAlign::CENTER);
-    gfx.drawText("RAINY", SCX + 52, cy + 34, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER, 178);
-}
-
-static void render_weather_cloudy(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = SCX - 60, cy = CY - 8;
-    float drift = sinf(t * TAU) * 4.0f;
-
-    gfx.pushTransform();
-    gfx.translate(drift, 0);
-    gfx.fillEllipse(cx - 16, cy + 2, 16, 12, colors.eye);
-    gfx.fillEllipse(cx + 16, cy + 2, 18, 14, colors.eye);
-    gfx.fillEllipse(cx, cy - 6, 14, 10, colors.eye);
-    gfx.fillRoundedRect(cx - 28, cy + 6, 56, 10, 5, colors.eye);
-    gfx.popTransform();
-
-    gfx.pushTransform();
-    gfx.translate(-drift, -22.0f);
-    gfx.fillEllipse(cx - 24, cy + 2, 12, 9, colors.eye, 128);
-    gfx.fillEllipse(cx, cy + 2, 14, 11, colors.eye, 128);
-    gfx.fillEllipse(cx - 12, cy - 4, 10, 8, colors.eye, 128);
-    gfx.popTransform();
-
-    gfx.drawText("22", SCX + 52, cy + 4, colors.eye, 4, GfxEngine::TextAlign::CENTER);
-    gfx.drawText("CLOUDY", SCX + 52, cy + 34, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER, 178);
-}
-
-static void render_weather_snow(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = SCX - 60, cy = CY - 14;
-
-    gfx.fillEllipse(cx - 14, cy, 20, 16, colors.eye);
-    gfx.fillEllipse(cx + 14, cy, 22, 18, colors.eye);
-    gfx.fillRoundedRect(cx - 30, cy + 4, 62, 14, 7, colors.eye);
-
-    for (int i = 0; i < 9; i++) {
-        float p = fmodf(t * 0.8f + i * 0.11f, 1.0f);
-        float x = (float)(cx - 30 + i * 8) + sinf(p * TAU * 2.0f + (float)i) * 4.0f;
-        float y = (float)(cy + 22) + p * 56.0f;
-        gfx.fillCircle((int16_t)x, (int16_t)y, 3, colors.eye,
-                       (uint8_t)((1.0f - p * 0.4f) * 255));
+    else if (phaseIs(ph.name, "curtainClose")) {
+        eyeCx = (float)(SCREEN_W - 42); eyeCy = (float)(STATUS_H + 24);
+        eyeScale = 0.32f; eyeEmo = "satisfied";
     }
+    else if (phaseIs(ph.name, "grow")) {
+        eyeCx = lerp((float)(SCREEN_W - 42), (float)SCX, ease::inOut(ph.p));
+        eyeCy = lerp((float)(STATUS_H + 24), (float)CY, ease::inOut(ph.p));
+        eyeScale = lerp(0.32f, 1.0f, ease::inOut(ph.p));
+        eyeEmo = "satisfied";
+    }
+    else { eyeEmo = "satisfied"; }
 
-    gfx.drawText("-2\xB0", SCX + 52, cy + 4, colors.eye, 4, GfxEngine::TextAlign::CENTER);
-    gfx.drawText("SNOW", SCX + 52, cy + 34, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER, 178);
-}
+    // Window frame
+    int16_t winX = SCX - 90, winY = STATUS_H + 18;
+    int16_t winW = 180, winH = SCREEN_H - STATUS_H - 50;
 
-static void render_weather_storm(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = SCX - 60, cy = CY - 14;
+    // Curtain open factor
+    float curt = 0.0f;
+    if (phaseIs(ph.name, "curtainOpen")) curt = ease::out(ph.p);
+    else if (phaseIs(ph.name, "curious")) curt = 0.0f;
+    else if (phaseIs(ph.name, "curtainClose")) curt = 1.0f - ease::in(ph.p);
+    else if (!phaseIs(ph.name, "done") && !phaseIs(ph.name, "grow")) curt = 1.0f;
+    else curt = 0.0f;
 
-    gfx.fillEllipse(cx - 14, cy, 20, 16, colors.eye);
-    gfx.fillEllipse(cx + 14, cy, 22, 18, colors.eye);
-    gfx.fillRoundedRect(cx - 30, cy + 4, 62, 14, 7, colors.eye);
+    // Window frame lines
+    gfx.strokeRect(winX, winY, winW, winH, colors.eye, 3);
+    gfx.drawLine(winX, (int16_t)(winY + winH / 2),
+                 (int16_t)(winX + winW), (int16_t)(winY + winH / 2),
+                 colors.eye, 2, 178);
+    gfx.drawLine((int16_t)(winX + winW / 2), winY,
+                 (int16_t)(winX + winW / 2), (int16_t)(winY + winH),
+                 colors.eye, 2, 178);
 
-    bool flash = (t > 0.4f && t < 0.5f) || (t > 0.7f && t < 0.74f);
-    uint8_t boltOp = flash ? 255 : 128;
-    gfx.fillTriangle(cx - 6, cy + 22, cx + 4, cy + 38, cx - 2, cy + 38,
-                     colors.eye, boltOp);
-    gfx.fillTriangle(cx - 2, cy + 38, cx + 8, cy + 60, cx + 2, cy + 44,
-                     colors.eye, boltOp);
-    gfx.fillTriangle(cx - 4, cy + 44, cx + 2, cy + 44, cx - 2, cy + 38,
-                     colors.eye, boltOp);
+    // Sky inside window (when curtains open)
+    if (curt > 0.05f) {
+        float skyT = phaseIs(ph.name, "watch") ? ph.p : 0.0f;
+        float sunX = (float)winX + 10.0f + skyT * (float)(winW - 20);
+        float sunY = (float)winY + (float)winH * 0.6f
+                     - sinf(skyT * PI) * (float)winH * 0.45f;
 
-    for (int i = 0; i < 5; i++) {
-        float p = fmodf(t * 2.5f + i * 0.2f, 1.0f);
-        int16_t x = cx - 24 + i * 12;
-        int16_t y = (int16_t)(cy + 24.0f + p * 50.0f);
-        gfx.drawLine(x, y, (int16_t)(x - 4), (int16_t)(y + 10),
-                     colors.eye, 3, (uint8_t)((1.0f - p) * 255));
+        // Sun
+        if (phaseIs(ph.name, "watch") || phaseIs(ph.name, "curtainClose")) {
+            gfx.fillCircle((int16_t)sunX, (int16_t)sunY, 14, colors.accent);
+            for (int i = 0; i < 6; i++) {
+                float a = (float)i / 6.0f * TAU + t * 0.5f;
+                gfx.drawLine((int16_t)(sunX + cosf(a) * 16),
+                             (int16_t)(sunY + sinf(a) * 16),
+                             (int16_t)(sunX + cosf(a) * 22),
+                             (int16_t)(sunY + sinf(a) * 22),
+                             colors.accent, 2, 178);
+            }
+        }
+
+        // Clouds drifting
+        for (int i = 0; i < 3; i++) {
+            float seed = i * 0.33f;
+            float p = fmodf(skyT * 0.6f + seed, 1.0f);
+            float cx = (float)winX - 20.0f + p * (float)(winW + 40);
+            float cy = (float)winY + 30.0f + (i % 2) * 10.0f;
+            gfx.fillEllipse((int16_t)cx, (int16_t)cy, 12, 6, colors.eye, 140);
+            gfx.fillEllipse((int16_t)(cx + 8), (int16_t)(cy - 4), 9, 5, colors.eye, 140);
+            gfx.fillEllipse((int16_t)(cx - 8), (int16_t)(cy - 3), 8, 4, colors.eye, 140);
+        }
     }
 
-    gfx.drawText("15\xB0", SCX + 52, cy + 4, colors.eye, 4, GfxEngine::TextAlign::CENTER);
-    gfx.drawText("STORM", SCX + 52, cy + 34, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER, 178);
+    // Curtains (solid rects that slide apart)
+    int16_t curtW = (int16_t)((float)(winW / 2 + 2) * (1.0f - curt));
+    if (curtW > 0) {
+        gfx.fillRect(winX - 2, winY - 4, curtW, winH + 8, colors.eye);
+        gfx.fillRect((int16_t)(winX + winW / 2 + (float)(winW / 2) * curt),
+                     winY - 4, curtW, winH + 8, colors.eye);
+    }
+    // Curtain rod
+    gfx.drawLine((int16_t)(winX - 8), (int16_t)(winY - 6),
+                 (int16_t)(winX + winW + 8), (int16_t)(winY - 6),
+                 colors.accent, 3);
+
+    drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t, colors.eye, colors.bg);
+
+    const char* label =
+        phaseIs(ph.name, "curious")      ? "WHAT'S OUT THERE?" :
+        phaseIs(ph.name, "curtainOpen")   ? "OPENING..." :
+        phaseIs(ph.name, "shrink")        ? "LOOK OUTSIDE" :
+        phaseIs(ph.name, "watch")         ? "SUNNY ALL DAY" :
+        phaseIs(ph.name, "curtainClose")  ? "NIGHT FALLS" :
+                                            "NICE DAY";
+    drawActLabel(gfx, label, colors.eye);
 }
 
 const VariantDef WEATHER_VARIANTS[] = {
-    {"weather-sunny",  "Sunny",  4000, TONE_WARM,   render_weather_sunny},
-    {"weather-rainy",  "Rainy",  1800, TONE_BLUE,   render_weather_rainy},
-    {"weather-cloudy", "Cloudy", 5000, TONE_CYAN,   render_weather_cloudy},
-    {"weather-snow",   "Snow",   4500, TONE_WHITE,  render_weather_snow},
-    {"weather-storm",  "Storm",  2400, TONE_PURPLE, render_weather_storm},
+    {"weather-window", "Look outside", 12000, TONE_NONE, render_weather_window},
 };
 
 extern const CategoryDef CAT_WEATHER = {
     "weather", "Weather", ContentKind::SCENE, TONE_CYAN,
-    WEATHER_VARIANTS, sizeof(WEATHER_VARIANTS) / sizeof(WEATHER_VARIANTS[0])
+    WEATHER_VARIANTS, sizeof(WEATHER_VARIANTS) / sizeof(WEATHER_VARIANTS[0]), false
 };

@@ -101,12 +101,55 @@ static void render_sad_quiver(GfxEngine& gfx, float t, const ColorContext& color
                        colors.eye, 4);
 }
 
+// sad-sigh: drooped eyes + breath puff cloud floating out at bottom
+static void render_sad_sigh(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float droop = 5.0f + sinf(t * TAU * 0.4f) * 2.0f;
+    int16_t y = (int16_t)(CY + droop);
+    int16_t h = (int16_t)(EYE_H * 0.7f);
+    gfx.drawEye(LX, y, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, y, EYE_W, h, EYE_RX, 0, colors.eye);
+    drawSadLid(gfx, LX, y, 26, false, colors.bg);
+    drawSadLid(gfx, RX, y, 26, true, colors.bg);
+
+    // Breath puff cloud
+    float puff = fmodf(t * 0.8f, 1.0f);
+    if (puff < 0.6f) {
+        float p = puff / 0.6f;
+        int16_t px = (int16_t)(SCX + p * 40.0f);
+        int16_t py = (int16_t)(SCREEN_H - 28 - p * 10.0f);
+        uint8_t op = (uint8_t)((1.0f - p) * 180.0f);
+        gfx.fillCircle(px, py, (int16_t)(4 + p * 3), colors.accent, op);
+        gfx.fillCircle((int16_t)(px + 6), (int16_t)(py - 3), (int16_t)(3 + p * 2), colors.accent, op);
+    }
+}
+
+// sad-rain: sad droopy eyes + falling rain lines
+static void render_sad_rain(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t y = CY + 6;
+    int16_t h = (int16_t)(EYE_H * 0.7f);
+    gfx.drawEye(LX, y, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, y, EYE_W, h, EYE_RX, 0, colors.eye);
+    drawSadLid(gfx, LX, y, 22, false, colors.bg);
+    drawSadLid(gfx, RX, y, 22, true, colors.bg);
+
+    // Falling rain lines
+    for (int i = 0; i < 8; i++) {
+        float p = fmodf(t * 2.0f + i * 0.125f, 1.0f);
+        int16_t rx = (int16_t)(30 + i * 36);
+        int16_t ry = (int16_t)(STATUS_H + p * (SCREEN_H - STATUS_H));
+        uint8_t op = (uint8_t)((1.0f - p * 0.4f) * 140.0f);
+        gfx.drawLine(rx, ry, rx, ry + 12, colors.accent, 2, op);
+    }
+}
+
 // --- Category registration ---
 const VariantDef SAD_VARIANTS[] = {
     {"sad-droop",      "Droop",        3200, TONE_NONE, render_sad_droop},
     {"sad-look-down",  "Looking down", 3400, TONE_NONE, render_sad_look_down},
     {"sad-big-droopy", "Big droopy",   4000, TONE_NONE, render_sad_big_droopy},
     {"sad-quiver",     "Quiver",       1600, TONE_NONE, render_sad_quiver},
+    {"sad-sigh",       "Sigh",         4000, TONE_NONE, render_sad_sigh},
+    {"sad-rain",       "Rain",         1800, TONE_NONE, render_sad_rain},
 };
 
 extern const CategoryDef CAT_SAD = {

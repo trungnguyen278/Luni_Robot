@@ -1,24 +1,27 @@
-# PTalk Robot Emotion Library v2.0 — Requirements
+# Luni Robot Emotion Library v3.0 — Requirements
 
-Canonical spec for the PTalk screen-eye robot emotion library. Keep this
+Canonical spec for the Luni screen-eye robot emotion library. Keep this
 in sync with the code. When porting to another project, **read this file
 first**.
 
-Product: **PTalk v2.0** — a desktop companion robot.
+Product: **Luni v3.0** — a desktop companion robot.
 
-### What's new in v2.0
+> Lineage: this library started life as "PTalk / MOCHI-P v2.0" (mono → 9-tone
+> color, emotions + simple scenes). **v3.0 is the Luni rebrand.** The entry
+> point is now `Luni Emotion Sheet.html`; the old `MOCHI-P Emotion Sheet.html`
+> has been removed.
+
+### What's new in v3.0
 
 | Area               | Change |
 | ------------------ | ------ |
-| Color              | TFT 9-tone curated palette (was mono cyan). Two-layer rule: face stays cyan, accessories take the category tone. See §4. |
-| Multi-color        | New `tone: 'multi'` for variants that need several colors at once (confetti, fireworks). |
-| Boot scene         | New `boot` scene category — a single brand-clean power-on flow (4 stages). See §6.5.1. |
-| Connectivity       | New `network` scene category with 6 variants covering the full wifi/BLE/server lifecycle. See §6.5.2. |
-| Emotion categories | 29 → 37 (added disgusted, nervous, embarrassed, curious, annoyed, cool, suspicious, determined). |
-| Total variants     | 117 → 227. |
-| Status bar         | Always rendered in fixed cyan (never tinted), regardless of active category. |
-
----
+| Brand              | Renamed MOCHI-P → **Luni**. Single entry point `Luni Emotion Sheet.html`. |
+| Third content kind | Added `kind: 'status'` (system chrome flows). `boot` and `network` moved from `scene` to `status` and get their own UI section. |
+| Cinematic scenes   | Scenes are no longer multi-variant grids — each scene is **one continuous "scene-arc" mini-video** (eyes shrink to a corner, watch a prop, grow back). New shared engine `scene-arc.jsx`. See §6.6. |
+| New emotions       | +10 categories: sick, cold, calm, playful, hot, lonely, grateful, brave, dreamy, awe. Now **47 emotion categories**. |
+| New scenes         | +13 scene categories: alarm, notification, birthday, reminder, video, reading, smarthome, shopping, lock, delivery, flashlight, podcast, stopwatch. Now **32 scene categories**. |
+| Connectivity       | `network` reworked to 7 variants incl. Bluetooth scan/paired (was a single BLE-pair). |
+| Totals             | 81 categories · 238 variants (was 58 · 230). |
 
 ---
 
@@ -26,25 +29,27 @@ Product: **PTalk v2.0** — a desktop companion robot.
 
 An **original** robot character built around a 2-inch screen that shows
 expressive eyes — and, when context calls for it, **full-screen scenes**
-(weather, clock, music, timers, etc.) like Dasai-Mochi-style videos.
-Implementation must be independently designed — do not copy proprietary
-frames, transitions, or distinctive marks from those products.
+(weather, clock, music, timers, etc.). Implementation must be
+independently designed — do not copy proprietary frames, transitions, or
+distinctive marks from other products.
 
 **No brand text appears inside the eye/scene SVG.** The viewer chrome
-(HTML header, version badge) is allowed to identify the product as
-PTalk v2.0 — it's not part of the rendered display.
+(HTML header, version badge) may identify the product as Luni v3.0 — it's
+not part of the rendered display.
 
 Personality: friendly, slightly mischievous, expressive.
 
-The library has **two kinds** of content:
+The library has **three kinds** of content:
 
-| Kind        | Purpose                                                       |
-| ----------- | ------------------------------------------------------------- |
-| `emotion`   | Eyes-based expressions. Tied to dialog / mood.                |
-| `scene`     | Full-screen contextual displays (weather/clock/music/timer…). |
+| Kind        | Purpose                                                            |
+| ----------- | ------------------------------------------------------------------ |
+| `emotion`   | Eyes-based expressions. Tied to dialog / mood.                     |
+| `scene`     | Full-screen contextual mini-videos (weather/clock/music/timer…).   |
+| `status`    | System chrome flows: power-on `boot` and connectivity `network`.   |
 
-Every category has a `kind` field. The host can filter or pick from one
-pool independently of the other.
+Every category has a `kind` field. The host can filter or pick from each
+pool independently. The viewer (`app.jsx`) renders Emotions, Scenes, and
+Status as three separate sections.
 
 ---
 
@@ -56,11 +61,10 @@ pool independently of the other.
 | Reserved top strip  | 20 px (status bar: clock left, dot centre, wifi+battery right) |
 | Active emotion area | 320 × 220 (y = 20 … 240)                                |
 | Color mode          | RGB565 — 9-tone curated palette on near-black background |
-| Frame rate          | **30 fps default** (range 12 – 60 acceptable; 30 recommended for liveliness) |
+| Frame rate          | **30 fps default** (range 12 – 60 acceptable)           |
 
-The display can show color, but to keep the "real robot display" feel we
-restrict every pixel to one of a small **curated palette** of 9 emotional
-tones. See § 4 for the color system.
+Every pixel is restricted to one of a small **curated palette** of 9
+emotional tones. See § 4.
 
 ---
 
@@ -71,15 +75,12 @@ tones. See § 4 for the color system.
 | `EYE_W` | 88    | Each eye width                                       |
 | `EYE_H` | 96    | Each eye height                                      |
 | `EYE_RX`| 22    | Default corner radius                                |
-| `GAP`   | **150** | Centre-to-centre between the two eyes              |
+| `GAP`   | 150   | Centre-to-centre between the two eyes                |
 | `LX`    | 85    | Left eye centre X                                    |
 | `RX`    | 235   | Right eye centre X                                   |
 | `CY`    | 130   | Eye centre Y (mid of active area)                    |
 
-The wider 150 px gap pushes the eyes near the screen edges so the display
-reads as showing "both ends of the face" — while leaving ~41 px of outer
-margin for accessory overlays (sparkles, tears, Zs, hearts, audio waves,
-status icons).
+All tokens live in `emotion-core.jsx` (`window.EmotionCore`).
 
 ---
 
@@ -94,43 +95,42 @@ and a matching glow rgba. All values are RGB565-safe.
 | -------- | --------- | ------------------------------------------------- |
 | `cyan`   | `#5be9ff` | Default / neutral / robotic states. **Eyes always.** |
 | `warm`   | `#ffd166` | Happy, smug, proud, excited, gold                 |
-| `rose`   | `#ff6b9d` | Love, shy, embarrassed, music                     |
-| `red`    | `#ff5b6e` | Angry, error, dead, focused, determined, urgent   |
-| `blue`   | `#76b8ff` | Sad, crying, rain, water                          |
-| `green`  | `#7be88e` | Charging, disgusted, plant, fresh                 |
-| `purple` | `#b48cff` | Sleepy, sleeping, mischievous, dizzy, suspicious  |
+| `rose`   | `#ff6b9d` | Love, shy, embarrassed, playful, grateful, music  |
+| `red`    | `#ff5b6e` | Angry, hot, brave, focused, determined, error, urgent |
+| `blue`   | `#76b8ff` | Sad, crying, cold, lonely, rain, water            |
+| `green`  | `#7be88e` | Charging, disgusted, sick, plant, fresh           |
+| `purple` | `#b48cff` | Sleepy, sleeping, mischievous, suspicious, dreamy, dizzy |
 | `orange` | `#ff9d5b` | Hungry, curious, confused, annoyed, nervous, fire |
-| `white`  | `#f0f4ff` | Surprised, scared, camera flash, snow             |
+| `white`  | `#f0f4ff` | Surprised, scared, awe, camera flash, snow        |
 
 Background is always `--bg = #06090d` (near-black).
 
 ### 4.2 Color rules
 
-The robot has a **face**. The face must stay readable across every emotion.
-So we draw two layers:
+The robot has a **face** that must stay readable across every emotion, so
+we draw two layers:
 
 | Layer       | CSS var       | Used for                                              | Color                                    |
 | ----------- | ------------- | ----------------------------------------------------- | ---------------------------------------- |
 | Face        | `--eye`       | Eye rectangles, closed-eye arcs, brows, mouth          | **Always cyan** for every emotion variant |
 | Accessory   | `--accent`    | Tears, hearts, sparkles, audio bars, mic, Zs, fire…    | The category's tone                       |
 | Glow        | `--eye-glow`  | SVG drop-shadow filter on the screen                   | Cyan glow (emotions) / tone glow (scenes) |
-| Background  | `--bg`        | Anywhere the screen needs to "punch through" the eye   | Always `#06090d`                          |
+| Background  | `--bg`        | Anywhere the screen "punches through" the eye          | Always `#06090d`                          |
 
-For **scenes**, there is no face — the variant is a full-screen overlay.
-So both `--eye` and `--accent` are set to the variant's tone.
+For **scenes**, the eyes stay cyan (the robot's identity — see §6.6) while
+the **prop** visuals take the scene's tone via `--eye`/`--accent`.
 
 The **status bar** is system chrome — it ignores tones entirely and always
-draws in fixed cyan (`#5be9ff`). This holds whether the active category is
-an emotion or a scene.
+draws in fixed cyan (`#5be9ff`), for emotions, scenes, and status flows
+alike.
 
 ### 4.3 Multi-color variants (`tone: 'multi'`)
 
 A handful of variants need more than one color in the same frame (e.g.
-`celebrate-confetti` showers six colors, `celebrate-firework` has three
-differently-colored bursts). They set `tone: 'multi'`. The Screen treats
-this as cyan for the base palette but **also exposes every tone as a CSS
-variable** (`--tone-cyan`, `--tone-warm`, `--tone-rose`, …) so the render
-function can paint specific colors:
+`celebrate-grand` showers several colors). They set `tone: 'multi'`. The
+Screen treats this as cyan for the base palette but **also exposes every
+tone as a CSS variable** (`--tone-cyan`, `--tone-warm`, `--tone-rose`, …)
+so the render function can paint specific colors:
 
 ```jsx
 <rect fill="var(--tone-warm)" />
@@ -139,261 +139,307 @@ function can paint specific colors:
 
 These extra CSS vars are only exposed when `kind === 'scene'`.
 
-### 4.4 Per-variant tone
+### 4.4 Per-variant / per-category tone
 
-Variants may set their own `tone` field to override the category's
-default. Used heavily by scenes (e.g. `weather-sunny` is warm,
-`weather-rainy` is blue, `weather-storm` is purple — same category, three
-different tones). Resolution:
+Resolution order:
 
 ```
 variant.tone || category.tone || 'cyan'
 ```
 
-The full per-variant tone table lives in `emotion-color.jsx`
-(`SCENE_VARIANT_TONE`).
+Scenes set their tone at the category level (each scene now has a single
+variant). The viewer resolves tone with `resolveTone(variant, cat)`.
 
 ### 4.5 Mono fallback
 
 The viewer's **◐ Color / ◯ Mono** button forces every screen to render in
-cyan, ignoring tones — useful for firmware ports targeting mono displays
-and for verifying that nothing relies on color to be legible.
+cyan, ignoring tones — useful for mono-display firmware ports and for
+verifying nothing relies on color to be legible.
 
 ### 4.6 Misc
 
-- Subtle CRT scanlines + glow applied as CSS overlay.
+- Subtle CRT scanlines + glow applied as a CSS overlay.
 - Smooth vector shapes (`rx` corners, arcs, `<path>`) — not pixel-art.
-- Status bar font: monospace, ~11 pt at 1×.
-- Status bar centre is intentionally empty — render a small dot or leave blank.
+- Status bar font: monospace, ~11 pt at 1×. Centre slot is intentionally
+  empty (a small dot or blank). Never tinted by category tone.
 
 ---
 
 ## 5. Animation rules
 
 - Time `t ∈ [0, 1)` cycles every `duration` ms per variant.
-- `t` is **quantized** to the chosen fps before being passed into render —
-  produces the chunky "real robot display" feel without sacrificing resolution.
+- `t` is **quantized** to the chosen fps before render — produces the
+  chunky "real robot display" feel.
 - Default fps **30**. Renderer supports 12 – 60 fps with no code changes.
-- Each variant declares its own `duration` (typical 0.6 – 5 s).
+- Each variant declares its own `duration` (typical 0.6 – 5 s; scene arcs
+  run longer, ~8 – 14 s).
 - Each variant is a pure function `t ⇒ SVG JSX` — no internal state.
 
 ---
 
 ## 6. Conceptual model — "normal" vs "idle"
 
-The category called **`normal`** is the *default look* of the robot — a set
-of variants the host can pick from when nothing else is happening.
+The category called **`normal`** is the *default look* of the robot — a
+set of variants the host picks from when nothing else is happening.
 
 **Idle is a behaviour, not a category.** Firmware "idle" should:
 
 1. Stay on category `normal`.
 2. Every N seconds (recommend 3 – 6 s), call `pickVariant('normal',
    recentIds)` and play the result.
-3. Keep a 4 – 6-entry ring buffer of recent ids so the same variant doesn't
-   repeat back-to-back.
+3. Keep a 4 – 6-entry ring buffer of recent ids so the same variant
+   doesn't repeat back-to-back.
 
 The viewer (`app.jsx`) implements this in the **"◉ Idle mode"** button.
 
----
+## 6.5 Boot & connectivity flow (`kind: 'status'`)
 
-## 6.5 Boot & connectivity flow
-
-Firmware uses two `scene` categories — `boot` and `network` — to drive
+Firmware uses two `status` categories — `boot` and `network` — to drive
 the entire startup-to-conversation pipeline. Both **block** the normal
-emotion loop while playing; the host should suspend autoplay until the
-flow exits.
+emotion loop while playing; the host suspends autoplay until the flow
+exits.
 
-### 6.5.1 Cold boot sequence
-
-A single brand-clean flow — every stage is cyan, no school/company
-branding appears on screen.
+### 6.5.1 Cold boot sequence (4 stages, brand-clean cyan)
 
 ```
   POWER ON
      ↓
-  boot-poweron           (2.4 s, cyan) — dot expands, splits into two eyes
+  boot-poweron           — dot expands, splits into two eyes
      ↓
-  boot-credits           (4.5 s, cyan) — NTT monogram + name typewriter +
-                                          role line
+  boot-credits           — monogram + name typewriter + role line
      ↓
-  boot-checks-personal   (4.2 s, cyan) — DISPLAY / AUDIO / MIC / NETWORK /
-                                          AI CORE self-test, footer "v2.0"
+  boot-checks-personal   — DISPLAY / AUDIO / MIC / NETWORK / AI CORE self-test
      ↓
   → [ connectivity sub-flow §6.5.2 ] →
      ↓
-  boot-ready-personal    (3.0 s, cyan) — progress 0→100% + NTT monogram
-                                          + "READY" stamp
+  boot-ready-personal    — progress 0→100% + "READY" stamp
      ↓
   HAND OFF to `normal` idle pool
 ```
 
-Total happy-path: ~14.1 s + connectivity time.
+No school/company branding appears on screen at any stage.
 
-```c
-play_boot(BOOT_POWERON);
-play_boot(BOOT_CREDITS);
-play_boot(BOOT_CHECKS_PERSONAL);
-run_connectivity();
-play_boot(BOOT_READY_PERSONAL);
-```
+### 6.5.2 Connectivity sub-flow (`network`, 7 variants)
 
-#### Failure handling
-
-If a check **fails** during `boot-checks`, leave the failed row showing
-the spinner instead of OK for 1 s, then jump straight to the matching
-status scene:
-
-| Failed step | Jump to               |
-| ----------- | --------------------- |
-| DISPLAY     | (panic — firmware halts; no UI possible) |
-| AUDIO / MIC | continue boot, raise `error-warning` later (non-fatal) |
-| NETWORK     | enter §6.5.2 immediately, skip `boot-ready-personal` |
-| AI CORE     | `error-bang` then halt (model load failed) |
-
-### 6.5.2 Connectivity sub-flow (FSM)
+`network-wifi-scan` (cyan) · `network-wifi-connect` (cyan) ·
+`network-wifi-retry` (orange) · `network-offline` (red) ·
+`network-bt-scan` (purple) · `network-bt-paired` (purple) ·
+`network-server-error` (red)
 
 ```
-           ┌── [ user holds the pair button ≥3 s ] ──┐
-           ↓                                          ↓
-     network-wifi-scan                          network-ble-pair
-      (search APs)                              (host serves BLE GATT;
-           ↓                                     waits for PTalk app to
-           ↓ stored SSID found                   push credentials → then
-           ↓                                     loop back to wifi-connect)
-     network-wifi-connect
-      (associate + DHCP)
-           ↓
-     ┌────┼───────┐
-  success   fail (1–3)
-     ↓        ↓
-     ↓   network-wifi-retry
-     ↓    (attempt N/3, orange)
-     ↓        ↓
-     ↓        → fail again → attempts < 3 → loop back to wifi-connect
-     ↓        → fail × 3       → network-offline (red)
-     ↓                                  ↓
-     ↓                                  → user can hold pair button → ble-pair
-     ↓                                  → or wait → retry every 60 s
+  poweron complete
      ↓
-  ping ${PTALK_CLOUD}/health (3 s timeout)
-           ↓                            ↓
-      reachable                    unreachable
-           ↓                            ↓
-     EXIT to boot-ready-personal network-server-error (red, ERROR 503)
-                                       ↓
-                                       → backoff: 2 s, 5 s, 10 s, 30 s
-                                       → success → EXIT
-                                       → still failing → stay on this scene
+  network-wifi-scan  (no stored SSID)  →  network-bt-scan / network-bt-paired
+     ↓ SSID known                          (user holds pair button; phone app
+  network-wifi-connect                      pushes credentials → wifi-connect)
+     ↓ fail (up to 3 attempts)
+  network-wifi-retry  →  network-offline (red; retry every 60 s)
+     ↓ wifi up
+  (ping cloud /health)
+     ↓ reachable                  ↓ unreachable
+  hand off to boot-ready        network-server-error (backoff 2/5/10/30 s)
 ```
+
+While any `network-*` scene plays, the host suppresses user-facing
+emotions — these are blocking status displays.
 
 ### 6.5.3 Mid-session network loss
 
-While a conversation is running:
+1. **TCP/WebSocket drop while talking**: freeze the current emotion frame
+   (not idle pool), show `network-server-error` for up to 5 s of fast
+   retries; on reconnect fade back, else drop to `network-offline`.
+2. **Wi-Fi link drop**: skip server-error; go straight to
+   `network-offline` until link returns, then `network-wifi-connect`.
+3. **Long offline (≥30 s)**: optionally play the `error-noconn` emotion
+   once to acknowledge.
 
-1. **TCP / WebSocket drops** while talking to the cloud: pause the active
-   emotion (freeze on current frame, NOT idle pool), show
-   `network-server-error` for up to 5 s of fast retries (200 ms / 500 ms /
-   1 s / 2 s / 5 s exponential). On any successful reconnect, fade back
-   to the prior emotion. On 5 s timeout, drop into `network-offline`.
-2. **Wi-Fi link itself drops**: skip the server-error layer; go straight
-   to `network-offline`. Host stays on that scene until link returns,
-   then jumps to `network-wifi-connect` for the reassociation handshake.
-3. **Long offline (≥30 s)**: optionally play `error-noconn` emotion
-   variant once to acknowledge to the user (friendlier than holding the
-   `offline` status scene forever).
+## 6.6 Scene-arc model (`kind: 'scene'`)
 
-### 6.5.4 Tone choices (recap)
+In v3 every scene is a **continuous mini-video** rather than a static
+display. Luni's eyes stay visible the WHOLE time — they shrink and move to
+a corner to "watch" the prop, then grow back when the prop leaves. The
+shared engine is `scene-arc.jsx` (`window.SceneArc`):
 
-- `boot-*` — **cyan** across the sequence (brand-clean)
-- `wifi-scan` / `wifi-connect` — **cyan** (neutral, in-progress)
-- `wifi-retry` — **orange** (caution; user should be aware but isn't fatal)
-- `offline` / `server-error` — **red** (failure)
-- `ble-pair` — **purple** (special mode; visually distinct from any normal
-  connect state so users don't confuse it with a hung wifi-connect)
+```
+  OPEN          TRANS-IN       ACT            TRANS-OUT      CLOSE
+  big eyes,     eyes shrink    prop owns      prop leaves /  big eyes,
+  centered,     to corner,     screen; eyes   eyes grow      centered,
+  opening emo   prop enters    watch          back           closing emo
+```
+
+`sceneArc(t, opts?)` returns `{ phase, p, eyeScale, eyeCx, eyeCy, sceneOp,
+emotion }`. `LuniFace` / `TransformedFace` render the eyes (always cyan —
+switching shape, not color, avoids a distracting mid-scene flash). The
+scene's tone colors the **prop** visuals only.
+
+Each scene category therefore has exactly **one** variant — the arc.
+(Exception: multi-case scenes, §6.7.)
+
+## 6.7 Multi-case scenes (state that varies with the real world)
+
+Some scenes don't depict a one-off event — they depict a **state of the
+world that can be different each time**. `weather` is the canonical
+example: the host must show the *actual* sky, not always "sunny". So a
+handful of scene categories carry **more than one variant**, one per
+state. Each case is authored as its own self-contained mini-story —
+distinct props, motion, tone, eye-emotion arc and caption — so no two
+cases of the same scene look or read alike.
+
+| Scene     | Cases | Variants                                                                                     |
+| --------- | ----- | -------------------------------------------------------------------------------------------- |
+| `weather` | 7     | sunny (`weather-window`) · cloudy · rainy · storm · snow · fog · windy                          |
+| `call`    | 3     | incoming · outgoing · missed                                                                  |
+| `message` | 3     | chat · incoming · sent                                                                        |
+
+**Tone is per-variant here** (`variant.tone` overrides `category.tone`):
+rainy is blue, storm purple, snow white, a missed call red, etc. The
+viewer already resolves this via `resolveTone(variant, cat)`.
+
+**Host picks the case explicitly.** These do NOT enter the random idle
+pool. The firmware chooses the variant matching the live condition, e.g.:
+
+```js
+function showWeather(condition) {            // condition: 'rain' | 'snow' | ...
+  const map = {
+    clear: 'weather-window', sunny: 'weather-window',
+    cloudy: 'weather-cloudy', rain: 'weather-rainy',
+    storm: 'weather-storm', thunder: 'weather-storm',
+    snow: 'weather-snow', fog: 'weather-fog', wind: 'weather-windy',
+  };
+  const id = map[condition] || 'weather-window';
+  const v = EMOTION_CATEGORIES.weather.variants.find(x => x.id === id);
+  play(v);
+}
+```
+
+Falls back to the first variant (sunny / incoming / chat) for an unknown
+state. Adding a new case = push another variant onto the category's
+`variants` array; nothing else changes (no new category, so the
+authoritative KEYS order in `scenes-arc-pack-3b.jsx` is untouched).
 
 ---
 
 ## 7. Categories at a glance
 
-### Emotions (kind: 'emotion')
+**Totals: 81 categories · 248 variants** — 47 emotion (195) · 32 scene (42)
+· 2 status (11).
 
-| Category       | Variants | Tone     | Purpose                                       |
-| -------------- | -------- | -------- | --------------------------------------------- |
-| `normal`       | **16**   | cyan     | Default state — random-played in idle         |
-| `greet`        | 4        | cyan     | Hello / wake-up handshake                     |
-| `happy`        | 8        | warm     | Positive acknowledgement                      |
-| `wink`         | 4        | warm     | Playful acknowledgement                       |
-| `sad`          | 6        | blue     | Negative outcome / empathy                    |
-| `crying`       | 4        | blue     | Strong sad                                    |
-| `angry`        | 5        | red      | Frustration / boundary                        |
-| `annoyed`      | 3        | orange   | Mild irritation (less than angry)             |
-| `disgusted`    | 3        | green    | Yuck / rejection                              |
-| `surprised`    | 4        | white    | Sudden new info                               |
-| `scared`       | 4        | white    | Frightened response                           |
-| `nervous`      | 3        | orange   | Anxious / jittery                             |
-| `love`         | 5        | rose     | Affection / praise                            |
-| `shy`          | 4        | rose     | Bashful / hiding                              |
-| `embarrassed`  | 3        | rose     | Flushed / mortified                           |
-| `smug`         | 4        | warm     | Confident / self-satisfied                    |
-| `proud`        | 4        | warm     | Accomplished / chest-out                      |
-| `cool`         | 3        | cyan     | Chill / smooth confidence                     |
-| `mischievous`  | 4        | purple   | Sneaky / playful                              |
-| `suspicious`   | 3        | purple   | Skeptical / squinting                         |
-| `curious`      | 3        | orange   | Leaning in / wondering                        |
-| `confused`     | 4        | orange   | Didn't understand request                     |
-| `sleepy`       | 4        | purple   | Low-power / late-hour mood                    |
-| `sleeping`     | 4        | purple   | Deep idle / standby                           |
-| `excited`      | 5        | warm     | High-positive event                           |
-| `bored`        | 4        | cyan     | No interaction for a while                    |
-| `hungry`       | 4        | orange   | Wants food / craving                          |
-| `listening`    | **7** ✦  | cyan     | While receiving voice input                   |
-| `thinking`     | **7** ✦  | cyan     | While generating response / processing        |
-| `focused`      | 4        | red      | Locked-on task attention                      |
-| `determined`   | 3        | red      | Resolute / locked-in                          |
-| `loading`      | 5        | cyan     | Background task                               |
-| `charging`     | 4        | green    | Battery charging / power up                   |
-| `dizzy`        | 4        | purple   | Error / overload                              |
-| `dead`         | 4        | red      | Critical failure                              |
-| `error`        | 4        | red      | System / connection issue                     |
-| `mute`         | 4        | cyan     | Mic off / silenced                            |
+### Emotions (kind: 'emotion') — 47 categories · 195 variants
 
-**Emotion subtotal: 37 categories · 168 variants.**
-
-### Scenes (kind: 'scene')
-
-Full-screen contextual displays — used when the host wants to show data,
-not an emotional reaction. Eyes are not drawn. Per-variant tones in `()`.
-
-| Category      | Variants | Purpose                                       |
-| ------------- | -------- | --------------------------------------------- |
-| `boot`        | 4        | Single brand-clean power-on flow: poweron → credits → self-test → ready |
-| `network`     | 6        | **Connectivity status**: wifi-scan / wifi-connect / wifi-retry (orange) / offline (red) / ble-pair (purple) / server-error (red) |
-| `weather`     | 5        | Sunny (warm) / rainy (blue) / cloudy (cyan) / snow (white) / storm (purple) |
-| `clock`       | 3        | Digital (cyan), analog (cyan), alarm (red)    |
-| `music`       | 3        | Notes (rose), bars (cyan), wave (purple)      |
-| `timer`       | 3        | Countdown (orange), progress (cyan), hourglass (warm) |
-| `cooking`     | 2        | Pan / fire (red), pot / water (blue)          |
-| `walking`     | 2        | Footprints (green), runner (red)              |
-| `celebrate`   | 3        | Trophy (warm), confetti (**multi**), firework (**multi**) |
-| `night`       | 2        | Moon (purple), starfield (white)              |
-| `fitness`     | 3        | Heart-rate (red), steps (green), dumbbell (warm) |
-| `call`        | 3        | Incoming (green), active (cyan), missed (red) |
-| `message`     | 3        | Typing (cyan), envelope (white), bubbles (warm) |
-| `camera`      | 2        | Shutter / flash (white), focus (cyan)         |
-| `navigation`  | 3        | Compass (cyan), pin (red), arrow (green)      |
-| `gift`        | 2        | Wrapped (rose), opened (warm)                 |
-| `coffee`      | 2        | Pour (warm), cup (warm)                       |
-| `plant`       | 2        | Growing (green), watering (blue)              |
-| `morning`     | 2        | Sunrise (warm), alarm-rays (red)              |
-| `gaming`      | 2        | Pad (purple), powerup (warm)                  |
-| `calendar`    | 2        | Date page (cyan), reminder (red)              |
-
-**Scene subtotal: 21 categories · 62 variants.**
-
-**Grand total: 58 categories · 230 variants.**
+| Category       | Variants | Tone     | Purpose                                  |
+| -------------- | -------- | -------- | ---------------------------------------- |
+| `normal`       | **16**   | cyan     | Default state — random-played in idle    |
+| `greet`        | 4        | cyan     | Hello / wake-up handshake                |
+| `happy`        | 8        | warm     | Positive acknowledgement                 |
+| `wink`         | 4        | warm     | Playful acknowledgement                  |
+| `sad`          | 6        | blue     | Negative outcome / empathy               |
+| `crying`       | 4        | blue     | Strong sad                               |
+| `angry`        | 5        | red      | Frustration / boundary                   |
+| `annoyed`      | 3        | orange   | Mild irritation                          |
+| `disgusted`    | 3        | green    | Yuck / rejection                         |
+| `surprised`    | 4        | white    | Sudden new info                          |
+| `scared`       | 4        | white    | Frightened response                      |
+| `nervous`      | 3        | orange   | Anxious / jittery                        |
+| `love`         | 5        | rose     | Affection / praise                       |
+| `shy`          | 4        | rose     | Bashful / hiding                         |
+| `embarrassed`  | 3        | rose     | Flushed / mortified                      |
+| `smug`         | 4        | warm     | Confident / self-satisfied               |
+| `proud`        | 4        | warm     | Accomplished / chest-out                 |
+| `cool`         | 3        | cyan     | Chill / smooth confidence                |
+| `mischievous`  | 4        | purple   | Sneaky / playful                         |
+| `suspicious`   | 3        | purple   | Skeptical / squinting                    |
+| `sleepy`       | 4        | purple   | Low-power / late-hour mood               |
+| `sleeping`     | 4        | purple   | Deep idle / standby                      |
+| `excited`      | 5        | warm     | High-positive event                      |
+| `confused`     | 4        | orange   | Didn't understand request                |
+| `curious`      | 3        | orange   | Leaning in / wondering                   |
+| `bored`        | 4        | cyan     | No interaction for a while               |
+| `hungry`       | 4        | orange   | Wants food / craving                     |
+| `listening`    | **7** ✦  | cyan     | While receiving voice input              |
+| `thinking`     | **7** ✦  | cyan     | While generating response / processing   |
+| `focused`      | 4        | red      | Locked-on task attention                 |
+| `determined`   | 3        | red      | Resolute / locked-in                     |
+| `loading`      | 5        | cyan     | Background task                          |
+| `charging`     | 4        | green    | Battery charging / power up              |
+| `dizzy`        | 4        | purple   | Error / overload                         |
+| `dead`         | 4        | red      | Critical failure                         |
+| `error`        | 4        | red      | System / connection issue                |
+| `mute`         | 4        | cyan     | Mic off / silenced                       |
+| `sick`         | 3        | green    | Feverish / unwell                        |
+| `cold`         | 2        | blue     | Shivering / freezing                     |
+| `calm`         | 3        | cyan     | Meditation / serene                      |
+| `playful`      | 3        | rose     | Silly / cheeky                           |
+| `hot`          | 3        | red      | Sweltering / overheated                  |
+| `lonely`       | 3        | blue     | Alone / wanting company                  |
+| `grateful`     | 2        | rose     | Thankful / heartfelt                     |
+| `brave`        | 3        | red      | Fierce / steady courage                  |
+| `dreamy`       | 3        | purple   | Daydreaming / head in clouds             |
+| `awe`          | 2        | white    | Wonder / quiet amazement                 |
 
 ✦ `listening` and `thinking` are **mandatory** — this is a conversational
 robot. Every dialog turn enters one of these two states.
+
+### Scenes (kind: 'scene') — 32 categories · 42 variants
+
+Most scenes are a single continuous arc (§6.6). A few represent a
+**real-world state that varies**, so they carry one distinct case per
+state (see §6.7) — the host passes which case to play. Tone in `()`.
+
+**Multi-case scenes** (each case is its own mini-story, no two alike):
+
+| Category   | Cases | Variant ids (tone)                                                                                                                  |
+| ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `weather`  | **7** | `weather-window` sunny (warm) · `weather-cloudy` (cyan) · `weather-rainy` (blue) · `weather-storm` (purple) · `weather-snow` (white) · `weather-fog` (blue) · `weather-windy` (cyan) |
+| `call`     | **3** | `call-incoming` (green) · `call-outgoing` (green) · `call-missed` (red)                                                              |
+| `message`  | **3** | `message-chat` (cyan) · `message-incoming` (cyan) · `message-sent` (rose)                                                            |
+
+All remaining scenes have a single arc variant:
+
+| Category      | Variant id          | Tone    | Arc summary                                |
+| ------------- | ------------------- | ------- | ------------------------------------------ |
+| `clock`       | `clock-tower`       | cyan    | Face builds, hands sweep, bell chimes       |
+| `music`       | `music-jam`         | rose    | Speakers in → bars dance → fade out         |
+| `timer`       | `timer-countdown`   | orange  | Digits assemble, count down, ding, scatter  |
+| `cooking`     | `cooking-pot`       | warm    | Pot → toss ingredients → stir → plate        |
+| `walking`     | `walking-scroll`    | green   | Walk in place, scenery scrolls, reach goal  |
+| `celebrate`   | `celebrate-grand`   | **multi** | Drumroll → trophy → confetti/fireworks → bow |
+| `night`       | `night-fall`        | purple  | Sun sets → moon rises → starry sky          |
+| `fitness`     | `fitness-run`       | red     | Suit up → run → HR climbs → cooldown         |
+| `camera`      | `camera-snap`       | white   | Pose → countdown → flash → print → save      |
+| `navigation`  | `nav-turn`          | cyan    | Turn-by-turn directions → arrive            |
+| `gift`        | `gift-unwrap`       | rose    | Wrap → untie ribbon → lift lid → reveal      |
+| `coffee`      | `coffee-pour`       | warm    | Cup arrives, pot pours, drink, exit         |
+| `plant`       | `plant-grow`        | green   | Pot → seed → water → sprout → bloom          |
+| `morning`     | `morning-rise`      | warm    | Asleep → alarm → sunrise → stretch → coffee  |
+| `gaming`      | `gaming-play`       | purple  | Bored → find gamepad → play → rest          |
+| `calendar`    | `calendar-mark`     | cyan    | Pages flip → date highlights → reminder      |
+| `alarm`       | `alarm-bell`        | red     | Sleep → bell rings violently → wake          |
+| `notification`| `notif-cards`       | warm    | Cards stack in, get dismissed one by one    |
+| `birthday`    | `birthday-cake`     | rose    | Cake / candle / wish                        |
+| `reminder`    | `reminder-triple`   | red     | Water → meds → stretch (three vignettes)     |
+| `video`       | `video-watch`       | rose    | Player loads → play → buffer → resume → end  |
+| `reading`     | `reading-book`      | warm    | Curious → find book → read → close          |
+| `smarthome`   | `home-lights`       | warm    | Rooms light up one by one → all on → off     |
+| `shopping`    | `shopping-bag`      | green   | Empty bag → items fly in → checkout         |
+| `lock`        | `lock-bio`          | green   | Padlock drops → scan → fail → retry → unlock |
+| `delivery`    | `delivery-route`    | orange  | Map → truck travels → arrives → box drops    |
+| `flashlight`  | `flashlight-sweep`  | warm    | Dark → click on → beam reveals 3 finds → off |
+| `podcast`     | `podcast-onair`     | purple  | Mic drops → ON AIR → waveform → off-air      |
+| `stopwatch`   | `stopwatch-lap`     | orange  | Drop in → start → tick → lap → stop          |
+
+### Status (kind: 'status') — 2 categories · 11 variants
+
+| Category   | Variants | Purpose                                                  |
+| ---------- | -------- | -------------------------------------------------------- |
+| `boot`     | 4        | Brand-clean power-on: poweron → credits → checks → ready  |
+| `network`  | 7        | Connectivity: wifi-scan / wifi-connect / wifi-retry (orange) / offline (red) / bt-scan (purple) / bt-paired (purple) / server-error (red) |
+
+`boot`: `boot-poweron` · `boot-credits` · `boot-checks-personal` ·
+`boot-ready-personal`
+
+`network`: `network-wifi-scan` · `network-wifi-connect` ·
+`network-wifi-retry` · `network-offline` · `network-bt-scan` ·
+`network-bt-paired` · `network-server-error`
 
 ### Variant contract
 
@@ -403,290 +449,99 @@ robot. Every dialog turn enters one of these two states.
   label: 'Look around',     // human label
   duration: 4000,           // ms per loop
   tone: 'warm',             // (optional) overrides category.tone; 'multi' for
-                            //   variants that want every tone available as
-                            //   --tone-warm/--tone-rose/... CSS vars
+                            //   variants wanting every tone as --tone-* vars
   render: (t) => /* JSX */, // pure function of t ∈ [0, 1)
 }
 ```
 
-Variants in the same category must be **visually distinct** — different
-motion, posture, or accessory — so back-to-back picks don't read as the
-same animation.
+Variants in the same category must be **visually distinct**.
 
 ---
 
-## 8. Full variant inventory
-
-Use these `id`s when calling from firmware. Listed in display order.
-
-### normal (16) — idle pool
-`normal-steady` · `normal-breathe` · `normal-look` · `normal-hum` ·
-`normal-twitch` · `normal-tilt` · `normal-double-blink` · `normal-drift` ·
-`normal-search` · `normal-look-up` · `normal-tired-blink` · `normal-stare` ·
-`normal-peek` · `normal-pendulum` · `normal-puff` · `normal-rem`
-
-### greet (4)
-`greet-bow` · `greet-wave` · `greet-nod-twice` · `greet-sparkle-hi`
-
-### happy (8)
-`happy-arc` · `happy-bouncy` · `happy-closed` · `happy-cheek` ·
-`happy-laugh` · `happy-giggle` · `happy-shimmer` · `happy-skip`
-
-### wink (4)
-`wink-right` · `wink-left` · `wink-double` · `wink-slow`
-
-### sad (6)
-`sad-droop` · `sad-look-down` · `sad-big-droopy` · `sad-quiver` ·
-`sad-sigh` · `sad-rain`
-
-### crying (4)
-`crying-tears` · `crying-waterfall` · `crying-sob` · `crying-trickle`
-
-### angry (5)
-`angry-glare` · `angry-steam` · `angry-shake` · `angry-narrow` ·
-`angry-pouty`
-
-### annoyed (3)
-`annoyed-flat` · `annoyed-twitch` · `annoyed-sigh-side`
-
-### disgusted (3)
-`disgusted-yuck` · `disgusted-gag` · `disgusted-sour`
-
-### surprised (4)
-`surprised-pop` · `surprised-exclaim` · `surprised-flash` ·
-`surprised-mild`
-
-### scared (4)
-`scared-tremble` · `scared-shrink` · `scared-flinch` · `scared-darting`
-
-### nervous (3)
-`nervous-sweat` · `nervous-fidget` · `nervous-gulp`
-
-### love (5)
-`love-hearts` · `love-floating` · `love-wink` · `love-blush` ·
-`love-shower`
-
-### shy (4)
-`shy-away` · `shy-down` · `shy-peek` · `shy-blush`
-
-### embarrassed (3)
-`embarrassed-blush` · `embarrassed-hide` · `embarrassed-cringe`
-
-### smug (4)
-`smug-smirk` · `smug-side` · `smug-brow` · `smug-blink`
-
-### proud (4)
-`proud-puffed` · `proud-glow` · `proud-medal` · `proud-rise`
-
-### cool (3)
-`cool-shades` · `cool-smirk` · `cool-swag`
-
-### mischievous (4)
-`mischievous-grin` · `mischievous-laugh` · `mischievous-side` ·
-`mischievous-twinkle`
-
-### suspicious (3)
-`suspicious-squint` · `suspicious-side` · `suspicious-scan`
-
-### curious (3)
-`curious-lean` · `curious-sparkle` · `curious-scan`
-
-### confused (4)
-`confused-qmark` · `confused-tilt` · `confused-mismatch` · `confused-spin-q`
-
-### sleepy (4)
-`sleepy-heavy` · `sleepy-yawn` · `sleepy-nod` · `sleepy-blink-slow`
-
-### sleeping (4)
-`sleeping-zzz` · `sleeping-calm` · `sleeping-deep` · `sleeping-bubble`
-
-### excited (5)
-`excited-stars` · `excited-bounce` · `excited-grin` · `excited-giddy` ·
-`excited-shockwave`
-
-### bored (4)
-`bored-half` · `bored-sideways` · `bored-eye-roll` · `bored-yawn-small`
-
-### hungry (4)
-`hungry-eye-food` · `hungry-drool` · `hungry-lick` · `hungry-stomach`
-
-### listening (7) ✦
-`listening-attentive` · `listening-waves` · `listening-eq` ·
-`listening-cup` · `listening-focused` · `listening-mic` ·
-`listening-bars`
-
-### thinking (7) ✦
-`thinking-look-up` · `thinking-spinner` · `thinking-scanning` ·
-`thinking-dots` · `thinking-hmm` · `thinking-aha` · `thinking-cog`
-
-### focused (4)
-`focused-laser` · `focused-scan` · `focused-target` · `focused-pinpoint`
-
-### determined (3)
-`determined-stare` · `determined-fire` · `determined-lock`
-
-### loading (5)
-`loading-dots` · `loading-bar` · `loading-spinner-big` · `loading-rings` ·
-`loading-bricks`
-
-### charging (4)
-`charging-bolt` · `charging-fill` · `charging-spark` · `charging-glow`
-
-### dizzy (4)
-`dizzy-spirals` · `dizzy-wobble` · `dizzy-stars` · `dizzy-figure8`
-
-### dead (4)
-`dead-x` · `dead-fade` · `dead-glitch` · `dead-droop`
-
-### error (4)
-`error-bang` · `error-noconn` · `error-pixels` · `error-warning`
-
-### mute (4)
-`mute-x` · `mute-zip` · `mute-hush` · `mute-line`
-
----
-
-## 8b. Scene inventory
-
-### boot (4) — power-on flow
-
-A single brand-clean flow:
-`boot-poweron` → `boot-credits` → `boot-checks-personal` →
-`boot-ready-personal` (all cyan)
-
-No school/company branding appears on screen at any stage.
-
-### network (6) — connectivity status
-`network-wifi-scan` (cyan) · `network-wifi-connect` (cyan) ·
-`network-wifi-retry` (orange) · `network-offline` (red) ·
-`network-ble-pair` (purple) · `network-server-error` (red)
-
-Firmware connectivity FSM (suggested):
-```
-  poweron complete
-     ↓
-  network-wifi-scan  (no stored SSID)  →  network-ble-pair  (user holds button)
-     ↓ SSID known
-  network-wifi-connect
-     ↓ fail (3 attempts)         ↑ success
-  network-wifi-retry  →  network-offline
-     ↓ wifi up
-  (ping cloud)
-     ↓ reachable                  ↑ unreachable
-  hand off to emotions          network-server-error  (poll + retry)
-```
-While any `network-*` scene is playing the host should suppress
-user-facing emotions — these are blocking status displays.
-
-
-### weather (5)
-`weather-sunny` (warm) · `weather-rainy` (blue) · `weather-cloudy` (cyan) ·
-`weather-snow` (white) · `weather-storm` (purple)
-
-### clock (3)
-`clock-digital` (cyan) · `clock-analog` (cyan) · `clock-alarm` (red)
-
-### music (3)
-`music-notes` (rose) · `music-bars` (cyan) · `music-wave` (purple)
-
-### timer (3)
-`timer-countdown` (orange) · `timer-progress` (cyan) ·
-`timer-hourglass` (warm)
-
-### cooking (2)
-`cooking-pan` (red) · `cooking-pot` (blue)
-
-### walking (2)
-`walking-footprints` (green) · `walking-runner` (red)
-
-### celebrate (3)
-`celebrate-trophy` (warm) · `celebrate-confetti` (**multi**) ·
-`celebrate-firework` (**multi**)
-
-### night (2)
-`night-moon` (purple) · `night-stars` (white)
-
-### fitness (3)
-`fitness-hr` (red) · `fitness-steps` (green) · `fitness-dumbbell` (warm)
-
-### call (3)
-`call-incoming` (green) · `call-active` (cyan) · `call-missed` (red)
-
-### message (3)
-`message-typing` (cyan) · `message-envelope` (white) ·
-`message-bubbles` (warm)
-
-### camera (2)
-`camera-shutter` (white) · `camera-focus` (cyan)
-
-### navigation (3)
-`navigation-compass` (cyan) · `navigation-pin` (red) ·
-`navigation-arrow` (green)
-
-### gift (2)
-`gift-wrapped` (rose) · `gift-open` (warm)
-
-### coffee (2)
-`coffee-pour` (warm) · `coffee-cup` (warm)
-
-### plant (2)
-`plant-grow` (green) · `plant-water` (blue)
-
-### morning (2)
-`morning-sunrise` (warm) · `morning-alarm-rays` (red)
-
-### gaming (2)
-`gaming-pad` (purple) · `gaming-powerup` (warm)
-
-### calendar (2)
-`calendar-date` (cyan) · `calendar-reminder` (red)
-
----
-
-## 9. File layout
+## 8. File layout
 
 ```
-MOCHI-P Emotion Sheet.html   ← entry point (CSS, React loader)
+Luni Emotion Sheet.html      ← entry point (CSS, React loader)
 emotion-core.jsx             ← primitives, constants, EYE_TONES palette
-emotion-list.jsx             ← base emotion variants (29 cats from v1 spec)
-emotion-extras.jsx           ← additional variants + new categories
-scenes-boot.jsx              ← brand-clean boot sequence (1 scene cat, 4 variants)
-scenes-network.jsx           ← Connectivity status (wifi/ble/server, 6 variants)
-emotion-balance.jsx          ← balance pass: brings every cat to ≥4 variants
-emotion-more.jsx             ← 8 brand-new emotion categories (disgusted,
-                              nervous, embarrassed, curious, annoyed, cool,
-                              suspicious, determined) + KEYS reorder
-scenes.jsx                   ← base scene categories (8 cats)
-scenes-extras.jsx            ← +11 more scene categories
-emotion-color.jsx            ← assigns category + per-variant `tone` fields
-app.jsx                      ← viewer UI (also implements the Color/Mono toggle)
+scene-arc.jsx                ← scene-arc engine (window.SceneArc): sceneArc(),
+                               LuniFace, TransformedFace, EMOTION_COLOR
+emotion-list.jsx             ← base emotion variants; publishes CATEGORIES + KEYS
+emotion-extras.jsx           ← additional emotion variants + categories
+scenes.jsx                   ← (tiny) tags every existing category kind:'emotion'
+scenes-boot.jsx              ← boot status flow (kind:'status', 4 variants)
+scenes-network.jsx           ← network status flow (kind:'status', 7 variants)
+emotion-balance.jsx          ← balance pass: tops up under-filled emotion cats
+emotion-more.jsx             ← 8 emotion cats (disgusted, nervous, embarrassed,
+                               curious, annoyed, cool, suspicious, determined)
+emotion-color.jsx            ← tones for emotions + boot/network status
+emotion-pack-luni.jsx        ← Luni pack 1: emotions sick/cold/calm/playful
+emotion-pack-luni2.jsx       ← Luni pack 2: emotions hot/lonely/grateful
+emotion-pack-luni3.jsx       ← Luni pack 3: emotions brave/dreamy/awe
+scenes-arc-pack-1.jsx        ← scene-arc videos: 15 scenes (weather/timer/call/…)
+scenes-arc-pack-2.jsx        ← scene-arc videos: cooking/plant/night/walking/…
+scenes-arc-pack-3.jsx        ← scene-arc videos: clock/celebrate/fitness/morning/…
+scenes-arc-pack-3b.jsx       ← scene-arc videos: reminder/video/lock/flashlight/…
+                               + authoritative EMOTION_CATEGORY_KEYS order block
+scenes-weather.jsx           ← multi-case WEATHER: append cloudy/rainy/storm/snow/
+                               fog/windy onto cats.weather (per-variant tones)
+scenes-comms.jsx             ← multi-case CALL (outgoing/missed) + MESSAGE
+                               (incoming/sent) appended onto their categories
+app.jsx                      ← viewer UI (Color/Mono + Idle toggles, 3 sections)
+README.md                    ← onboarding / quick start (read alongside this)
 REQUIREMENTS.md              ← this file
 ```
 
-### Load order
+### Load order (as in `Luni Emotion Sheet.html`)
 
 ```
-1. emotion-core.jsx        ← publishes window.EmotionCore (+ EYE_TONES)
-2. emotion-list.jsx        ← publishes window.EMOTION_CATEGORIES + KEYS
-3. emotion-extras.jsx      ← adds more emotion variants + categories
-4. scenes.jsx              ← tags emotion cats with kind:'emotion',
-                              adds scene cats with kind:'scene'
-5. scenes-extras.jsx       ← adds 11 more scene categories
-6. scenes-boot.jsx         ← adds the boot scene
-7. scenes-network.jsx      ← adds the connectivity-status scene
-8. emotion-balance.jsx     ← pushes balance variants onto existing cats
-9. emotion-more.jsx        ← adds 8 new emotion cats; inserts into KEYS
-10. emotion-color.jsx      ← assigns cat.tone + variant.tone
-11. app.jsx (or your host) ← consumes
+ 1. emotion-core.jsx        ← window.EmotionCore (+ EYE_TONES)
+ 2. scene-arc.jsx           ← window.SceneArc
+ 3. emotion-list.jsx        ← window.EMOTION_CATEGORIES + KEYS
+ 4. emotion-extras.jsx      ← more emotion variants + categories
+ 5. scenes.jsx              ← tag every existing category kind:'emotion'
+ 6. scenes-boot.jsx         ← boot status cat + key
+ 7. scenes-network.jsx      ← network status cat + key
+ 8. emotion-balance.jsx     ← top up emotion variant counts
+ 9. emotion-more.jsx        ← +8 emotion cats
+10. emotion-color.jsx       ← tones for emotions + boot/network
+11. emotion-pack-luni.jsx   ← Luni pack 1: +4 emotions
+12. emotion-pack-luni2.jsx  ← Luni pack 2: +3 emotions
+13. emotion-pack-luni3.jsx  ← Luni pack 3: +3 emotions
+14. scenes-arc-pack-1.jsx   ← define 15 scene-arc videos (cat + inline tone)
+15. scenes-arc-pack-2.jsx   ← define 6 scene-arc videos
+16. scenes-arc-pack-3.jsx   ← define 5 scene-arc videos
+17. scenes-arc-pack-3b.jsx  ← define 6 scene-arc videos + authoritative KEYS order
+18. scenes-weather.jsx      ← append weather cases: cloudy/rainy/storm/snow/fog/windy
+19. scenes-comms.jsx        ← append call (outgoing/missed) + message (incoming/sent)
+20. app.jsx                 ← consumes
 ```
 
-All loaders mutate `window.EMOTION_CATEGORIES` and update
-`window.EMOTION_CATEGORY_KEYS`. The final `KEYS` ordering keeps emotion
-categories grouped together followed by scene categories.
+### Architecture note — who owns what
+
+Each category lives in exactly one place now:
+
+- **Emotions** — `emotion-list` / `emotion-extras` / `emotion-balance` /
+  `emotion-more` / the three `emotion-pack-luni*` files. Tones come from
+  `emotion-color.jsx` (or inline on the Luni-pack cats).
+- **Status** (`boot`, `network`) — `scenes-boot.jsx` / `scenes-network.jsx`;
+  tones from `emotion-color.jsx`.
+- **Scenes** — authored *only* by the four `scenes-arc-pack-*` files, each
+  as a single cinematic arc with its tone set inline. No scene render code
+  is duplicated anywhere else.
+
+`scenes.jsx` is now just the one-line side-effect that tags pre-existing
+categories as `kind:'emotion'` (the scene/status packs set their own kind).
+
+**Key order is centralised.** Intermediate files still splice their keys
+into `EMOTION_CATEGORY_KEYS`, but the **authoritative order** is the final
+block at the end of `scenes-arc-pack-3b.jsx` — one explicit list of every
+category, filtered to those that exist (orphans appended at the end). To
+reorder or add a category, edit that list. Final grouping: emotions, then
+status (`boot`, `network`), then scenes.
 
 ---
 
-## 10. Random-picker reference (firmware side)
+## 9. Random-picker reference (firmware side)
 
 ```js
 function pickVariant(categoryKey, recentIds) {
@@ -697,10 +552,10 @@ function pickVariant(categoryKey, recentIds) {
 }
 
 // Filter by kind:
-const emotionKeys = Object.keys(EMOTION_CATEGORIES)
-  .filter(k => EMOTION_CATEGORIES[k].kind !== 'scene');
-const sceneKeys = Object.keys(EMOTION_CATEGORIES)
-  .filter(k => EMOTION_CATEGORIES[k].kind === 'scene');
+const emotionKeys = EMOTION_CATEGORY_KEYS
+  .filter(k => !EMOTION_CATEGORIES[k].kind || EMOTION_CATEGORIES[k].kind === 'emotion');
+const sceneKeys  = EMOTION_CATEGORY_KEYS.filter(k => EMOTION_CATEGORIES[k].kind === 'scene');
+const statusKeys = EMOTION_CATEGORY_KEYS.filter(k => EMOTION_CATEGORIES[k].kind === 'status');
 
 // Idle loop (firmware default behaviour):
 function tickIdle(state) {
@@ -716,39 +571,45 @@ function toneFor(cat, variant) {
 }
 ```
 
-**Scenes are picked explicitly** by the host — they should not enter the
-random idle pool. Use scenes when there is data to display
-(`showScene('weather', 'sunny')`), then return to emotions when done.
+**Scenes and status flows are picked explicitly** by the host — they don't
+enter the random idle pool. Use scenes when there is something to show
+(`showScene('weather')`); use status flows for boot / connectivity.
 
 ---
 
-## 11. Porting checklist
+## 10. Porting checklist
 
-1. Copy every `*.jsx` file under § 9 + `REQUIREMENTS.md`. Mind the load
-   order — color assignment depends on every category being registered first.
+1. Copy every `*.jsx` file under § 8 + `REQUIREMENTS.md`. Mind the load
+   order — color assignment and arc overrides depend on every category
+   being registered first.
 2. Replace the SVG primitives in `emotion-core.jsx` (`Eye`, `Eyes`,
-   `heartPath`, `starPath`, `arcPath`, `lidPath`) with your renderer's
-   native draw calls. Renderer is called once per frame with quantized `t`.
-3. Build a color LUT keyed by tone name (`EYE_TONES` in `emotion-core.jsx`
-   is the source of truth). At draw time, resolve the active tone with
-   `variant.tone || cat.tone || 'cyan'`.
-4. **Honor the two-layer color rule (§ 4.2):**
-   * Emotion variants: use cyan for face shapes (eyes, mouth, brows) and
-     the resolved tone for accessories. The split is already encoded in
-     the JSX as `var(--eye)` vs `var(--accent)` — keep two color slots in
-     your renderer.
-   * Scene variants: paint everything in the resolved tone.
-   * Status bar: always cyan, regardless of category.
-5. For `tone: 'multi'` variants, expose every tone in the palette as a
-   named slot — the variant renders by referencing specific colors
-   (`--tone-warm`, `--tone-rose`, etc.).
-6. Implement `pickVariant` (§ 10) with your RNG and a per-category recent
-   ring buffer. Keep ring length 4 – 6.
-7. Wire an idle scheduler that picks from `normal` every 3 – 6 s when no
-   other category is active.
-8. Implement `showScene(catKey, variantId?)` for explicit data displays.
-9. Honour the geometry: `W=320`, `H=240`, `STATUS_H=20`, `LX=85`, `RX=235`,
-   `EYE_W=88`, `EYE_H=96`, `GAP=150`. Variants assume these.
+   `heartPath`, `starPath`, `arcPath`) and the `scene-arc.jsx` engine with
+   your renderer's native draw calls. Renderer is called once per frame
+   with quantized `t`.
+3. Build a color LUT keyed by tone name (`EYE_TONES`). At draw time resolve
+   the active tone with `variant.tone || cat.tone || 'cyan'`.
+4. **Honor the two-layer color rule (§ 4.2):** cyan for face shapes, the
+   resolved tone for accessories / scene props. Status bar always cyan.
+5. For `tone: 'multi'` variants, expose every tone as a named slot.
+6. Implement `pickVariant` (§ 9) with a per-category recent ring buffer
+   (length 4 – 6) and an idle scheduler that picks `normal` every 3 – 6 s.
+7. Implement `showScene(catKey)` and the boot/network status FSMs (§ 6.5).
+8. Honour the geometry: `W=320`, `H=240`, `STATUS_H=20`, `LX=85`, `RX=235`,
+   `EYE_W=88`, `EYE_H=96`, `GAP=150`.
+
+---
+
+## 11. Design constraints worth keeping
+
+- Eyes fill the screen generously — outer margin only ~41 px each side.
+- One visual language across all variants: same eye-shape vocabulary,
+  stroke weights, and accessory style (dots, arcs, stars, hearts, Zs).
+- In scenes, eyes never disappear — they shrink to a corner and watch.
+- Status bar always visible during playback; always fixed cyan.
+- Face shapes (eyes, mouth, brows) are fixed cyan across every emotion —
+  the category's tone only colors accessories / props.
+- No emoji. No raster images. SVG only.
+- One bright accent color per frame (except `tone: 'multi'`).
 
 ---
 
@@ -757,24 +618,4 @@ random idle pool. Use scenes when there is data to display
 - Sprite-sheet PNG / GIF export per variant.
 - Inter-emotion transitions (e.g. `listening → thinking` smooth blend).
 - Tweaks panel for eye color / shape / personality preset.
-- User-customizable tone per category (currently fixed by `EMOTION_TONE`).
 - 16-color palette per scene (currently 9 tones).
-
----
-
-## 13. Design constraints worth keeping
-
-- Eyes fill the screen generously — outer margin only ~41 px each side.
-- One visual language across all variants. Same eye-shape vocabulary, same
-  stroke weights, same accessory style (dots, arcs, stars, hearts, Zs).
-- Status bar always visible during emotion playback. Emotions render in the
-  active area only (y = 20 … 240). Overlays **may** drift into the status
-  band briefly — that's fine.
-- Status bar centre slot is intentionally empty (no brand text).
-- Status bar is fixed cyan — never tinted by category tone.
-- Face shapes (eyes, mouth, brows) are fixed cyan across every emotion —
-  the category's tone only colors accessories.
-- No emoji. No raster images. SVG only.
-- One bright accent color per frame (except `tone: 'multi'` variants).
-
----

@@ -31,10 +31,39 @@ static void render_sleepy_yawn(GfxEngine& gfx, float t, const ColorContext& colo
     }
 }
 
+// sleepy-nod: drowsy nodding, eyes drift down and back up slowly
+static void render_sleepy_nod(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float nod = sinf(t * TAU * 0.5f);
+    float dy = nod * 14.0f;
+    float lidClose = clamp((nod + 1.0f) / 2.0f, 0.0f, 1.0f);
+    int16_t h = (int16_t)lerp(8.0f, (float)EYE_H * 0.6f, 1.0f - lidClose);
+    gfx.drawEye(LX, (int16_t)(CY + 20 + dy), EYE_W, h, 12, 0, colors.eye);
+    gfx.drawEye(RX, (int16_t)(CY + 20 + dy), EYE_W, h, 12, 0, colors.eye);
+}
+
+// sleepy-blink-slow: very slow heavy blinks with long close duration
+static void render_sleepy_blink_slow(GfxEngine& gfx, float t, const ColorContext& colors) {
+    // Slow blink: eyes close for a long portion of the cycle
+    float phase = fmodf(t, 1.0f);
+    float openness;
+    if (phase < 0.3f) {
+        openness = 1.0f - ease::inOut(phase / 0.3f);
+    } else if (phase < 0.6f) {
+        openness = 0.0f;
+    } else {
+        openness = ease::inOut((phase - 0.6f) / 0.4f);
+    }
+    int16_t h = (int16_t)lerp(6.0f, (float)EYE_H * 0.65f, openness);
+    gfx.drawEye(LX, CY + 24, EYE_W, h, 12, 0, colors.eye);
+    gfx.drawEye(RX, CY + 24, EYE_W, h, 12, 0, colors.eye);
+}
+
 // --- Category registration ---
 const VariantDef SLEEPY_VARIANTS[] = {
-    {"sleepy-heavy", "Heavy lids", 4000, TONE_NONE, render_sleepy_heavy},
-    {"sleepy-yawn",  "Yawn",       2800, TONE_NONE, render_sleepy_yawn},
+    {"sleepy-heavy",      "Heavy lids",  4000, TONE_NONE, render_sleepy_heavy},
+    {"sleepy-yawn",       "Yawn",        2800, TONE_NONE, render_sleepy_yawn},
+    {"sleepy-nod",        "Nod off",     3200, TONE_NONE, render_sleepy_nod},
+    {"sleepy-blink-slow", "Slow blink",  4400, TONE_NONE, render_sleepy_blink_slow},
 };
 
 extern const CategoryDef CAT_SLEEPY = {

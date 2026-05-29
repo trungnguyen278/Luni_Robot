@@ -1,7 +1,7 @@
 #include "VariantRegistry.hpp"
 #include <cstring>
 
-// Emotion categories
+// Emotions (37 base + 10 Luni packs = 47 categories)
 extern const CategoryDef CAT_NORMAL;
 extern const CategoryDef CAT_GREET;
 extern const CategoryDef CAT_HAPPY;
@@ -39,10 +39,23 @@ extern const CategoryDef CAT_DIZZY;
 extern const CategoryDef CAT_DEAD;
 extern const CategoryDef CAT_ERROR;
 extern const CategoryDef CAT_MUTE;
+// Luni emotion packs
+extern const CategoryDef CAT_SICK;
+extern const CategoryDef CAT_COLD;
+extern const CategoryDef CAT_CALM;
+extern const CategoryDef CAT_PLAYFUL;
+extern const CategoryDef CAT_HOT;
+extern const CategoryDef CAT_LONELY;
+extern const CategoryDef CAT_GRATEFUL;
+extern const CategoryDef CAT_BRAVE;
+extern const CategoryDef CAT_DREAMY;
+extern const CategoryDef CAT_AWE;
 
-// Scene categories
+// Status flows
 extern const CategoryDef CAT_BOOT;
 extern const CategoryDef CAT_NETWORK;
+
+// Scenes (32 categories)
 extern const CategoryDef CAT_WEATHER;
 extern const CategoryDef CAT_CLOCK;
 extern const CategoryDef CAT_MUSIC;
@@ -62,9 +75,23 @@ extern const CategoryDef CAT_PLANT;
 extern const CategoryDef CAT_MORNING;
 extern const CategoryDef CAT_GAMING;
 extern const CategoryDef CAT_CALENDAR;
+extern const CategoryDef CAT_ALARM;
+extern const CategoryDef CAT_NOTIFICATION;
+extern const CategoryDef CAT_BIRTHDAY;
+extern const CategoryDef CAT_REMINDER;
+extern const CategoryDef CAT_VIDEO;
+extern const CategoryDef CAT_READING;
+extern const CategoryDef CAT_SMARTHOME;
+extern const CategoryDef CAT_SHOPPING;
+extern const CategoryDef CAT_LOCK;
+extern const CategoryDef CAT_DELIVERY;
+extern const CategoryDef CAT_FLASHLIGHT;
+extern const CategoryDef CAT_PODCAST;
+extern const CategoryDef CAT_STOPWATCH;
 
+// Authoritative order (matches ui_design/scenes-arc-pack-3b.jsx ORDER block)
 const CategoryDef ALL_CATEGORIES[] = {
-    // Emotions (37 categories, ordered per REQUIREMENTS §7)
+    // Emotions (37 base)
     CAT_NORMAL,
     CAT_GREET,
     CAT_HAPPY,
@@ -85,11 +112,11 @@ const CategoryDef ALL_CATEGORIES[] = {
     CAT_COOL,
     CAT_MISCHIEVOUS,
     CAT_SUSPICIOUS,
-    CAT_CURIOUS,
-    CAT_CONFUSED,
     CAT_SLEEPY,
     CAT_SLEEPING,
     CAT_EXCITED,
+    CAT_CONFUSED,
+    CAT_CURIOUS,
     CAT_BORED,
     CAT_HUNGRY,
     CAT_LISTENING,
@@ -102,9 +129,21 @@ const CategoryDef ALL_CATEGORIES[] = {
     CAT_DEAD,
     CAT_ERROR,
     CAT_MUTE,
-    // Scenes (21 categories)
+    // Status flows
     CAT_BOOT,
     CAT_NETWORK,
+    // Luni emotion packs
+    CAT_SICK,
+    CAT_COLD,
+    CAT_CALM,
+    CAT_PLAYFUL,
+    CAT_HOT,
+    CAT_LONELY,
+    CAT_GRATEFUL,
+    CAT_BRAVE,
+    CAT_DREAMY,
+    CAT_AWE,
+    // Scenes
     CAT_WEATHER,
     CAT_CLOCK,
     CAT_MUSIC,
@@ -124,6 +163,19 @@ const CategoryDef ALL_CATEGORIES[] = {
     CAT_MORNING,
     CAT_GAMING,
     CAT_CALENDAR,
+    CAT_ALARM,
+    CAT_NOTIFICATION,
+    CAT_BIRTHDAY,
+    CAT_REMINDER,
+    CAT_VIDEO,
+    CAT_READING,
+    CAT_SMARTHOME,
+    CAT_SHOPPING,
+    CAT_LOCK,
+    CAT_DELIVERY,
+    CAT_FLASHLIGHT,
+    CAT_PODCAST,
+    CAT_STOPWATCH,
 };
 
 const uint8_t CATEGORY_COUNT = sizeof(ALL_CATEGORIES) / sizeof(ALL_CATEGORIES[0]);

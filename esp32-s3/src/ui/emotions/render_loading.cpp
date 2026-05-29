@@ -52,10 +52,55 @@ static void render_loading_spinner(GfxEngine& gfx, float t, const ColorContext& 
     gfx.fillCircle(dx, dy, 6, colors.accent);
 }
 
+// loading-rings: normal eyes + concentric expanding ring circles
+static void render_loading_rings(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t h = (int16_t)(EYE_H * 0.6f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+
+    // Concentric expanding rings
+    for (int i = 0; i < 3; i++) {
+        float p = fmodf(t * 1.2f + i * 0.33f, 1.0f);
+        int16_t r = (int16_t)(8.0f + p * 50.0f);
+        uint8_t op = (uint8_t)((1.0f - p) * 160.0f);
+        gfx.pushAlpha(op);
+        gfx.strokeCircle(SCX, CY, r, colors.accent, 2);
+        gfx.popAlpha();
+    }
+}
+
+// loading-bricks: normal eyes + horizontal progress bar filling at bottom
+static void render_loading_bricks(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t h = (int16_t)(EYE_H * 0.6f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+
+    // Progress bar as segmented bricks
+    int16_t bx = 40, by = SCREEN_H - 24;
+    int16_t totalW = SCREEN_W - 80;
+    constexpr int segs = 10;
+    int16_t segW = totalW / segs;
+    int filled = (int)(t * (float)segs);
+    float partial = t * (float)segs - (float)filled;
+
+    for (int i = 0; i < segs; i++) {
+        int16_t sx = bx + i * segW;
+        if (i < filled) {
+            gfx.fillRoundedRect(sx + 1, by, segW - 2, 6, 2, colors.accent);
+        } else if (i == filled) {
+            int16_t pw = (int16_t)((float)(segW - 2) * partial);
+            if (pw > 0)
+                gfx.fillRoundedRect(sx + 1, by, pw, 6, 2, colors.accent, 180);
+        }
+    }
+}
+
 const VariantDef LOADING_VARIANTS[] = {
     {"loading-dots",        "Three dots",   1200, TONE_NONE, render_loading_dots},
     {"loading-bar",         "Progress bar", 2400, TONE_NONE, render_loading_bar},
     {"loading-spinner-big", "Big spinner",  1000, TONE_NONE, render_loading_spinner},
+    {"loading-rings",       "Rings",        2000, TONE_NONE, render_loading_rings},
+    {"loading-bricks",      "Bricks",       1600, TONE_NONE, render_loading_bricks},
 };
 
 extern const CategoryDef CAT_LOADING = {

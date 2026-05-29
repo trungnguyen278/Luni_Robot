@@ -91,7 +91,7 @@ static void render_boot_credits(GfxEngine& gfx, float t, const ColorContext& col
     // Role line
     if (roleP > 0.0f) {
         uint8_t rOp = (uint8_t)(ease::out(roleP) * 230.0f);
-        gfx.drawText("design.firmware.hw", SCX, mY + 74, c, 1,
+        gfx.drawText("design \xB7 firmware \xB7 hw", SCX, mY + 74, c, 1,
                      GfxEngine::TextAlign::CENTER, rOp);
     }
 

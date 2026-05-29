@@ -88,12 +88,69 @@ static void render_listening_cup(GfxEngine& gfx, float t, const ColorContext& co
     }
 }
 
+// listening-focused: normal eyes + glowing ring border around each eye
+static void render_listening_focused(GfxEngine& gfx, float t, const ColorContext& colors) {
+    gfx.drawEye(LX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
+
+    // Glowing ring border around each eye
+    float glow = (sinf(t * TAU * 2.0f) + 1.0f) / 2.0f;
+    uint8_t op = (uint8_t)lerp(60.0f, 180.0f, glow);
+    int16_t rw = EYE_W / 2 + 8;
+    int16_t rh = EYE_H / 2 + 8;
+    gfx.pushAlpha(op);
+    gfx.strokeRoundedRect(LX - rw, CY - rh, rw * 2, rh * 2, EYE_RX + 4,
+                          colors.accent, 3);
+    gfx.strokeRoundedRect(RX - rw, CY - rh, rw * 2, rh * 2, EYE_RX + 4,
+                          colors.accent, 3);
+    gfx.popAlpha();
+}
+
+// listening-mic: normal eyes + microphone icon at bottom center
+static void render_listening_mic(GfxEngine& gfx, float t, const ColorContext& colors) {
+    gfx.drawEye(LX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
+
+    // Microphone icon: rounded rect body + stand
+    int16_t mx = SCX;
+    int16_t my = SCREEN_H - 36;
+    float pulse_v = (sinf(t * TAU * 2.0f) + 1.0f) / 2.0f;
+    uint8_t op = (uint8_t)lerp(140.0f, 255.0f, pulse_v);
+    gfx.fillRoundedRect(mx - 5, my - 12, 10, 18, 5, colors.accent, op);
+    // Stand arc
+    gfx.drawQuadBezier(mx - 10, my, mx - 10, my + 10, mx, my + 10,
+                       colors.accent, 3);
+    gfx.drawQuadBezier(mx, my + 10, mx + 10, my + 10, mx + 10, my,
+                       colors.accent, 3);
+    // Stand line
+    gfx.drawLine(mx, my + 10, mx, my + 16, colors.accent, 3, op);
+}
+
+// listening-bars: normal eyes + EQ bars at bottom (7 bars oscillating)
+static void render_listening_bars(GfxEngine& gfx, float t, const ColorContext& colors) {
+    gfx.drawEye(LX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
+
+    constexpr int bars = 7;
+    int16_t cx0 = SCX - ((bars - 1) * 12) / 2;
+    for (int i = 0; i < bars; i++) {
+        float phase = t * TAU * 3.0f + i * 0.7f;
+        int16_t bh = (int16_t)(4.0f + fabsf(sinf(phase)) * 20.0f);
+        int16_t bx = cx0 + i * 12 - 3;
+        int16_t by = SCREEN_H - 18 - bh;
+        gfx.fillRoundedRect(bx, by, 6, bh, 2, colors.accent);
+    }
+}
+
 // --- Category registration ---
 const VariantDef LISTENING_VARIANTS[] = {
     {"listening-attentive", "Attentive",   2200, TONE_NONE, render_listening_attentive},
     {"listening-waves",     "Sound waves", 1600, TONE_NONE, render_listening_waves},
     {"listening-eq",        "EQ pulse",    1400, TONE_NONE, render_listening_eq},
     {"listening-cup",       "Cupped ear",  2600, TONE_NONE, render_listening_cup},
+    {"listening-focused",   "Focused",     2000, TONE_NONE, render_listening_focused},
+    {"listening-mic",       "Microphone",  1600, TONE_NONE, render_listening_mic},
+    {"listening-bars",      "EQ bars",     1200, TONE_NONE, render_listening_bars},
 };
 
 extern const CategoryDef CAT_LISTENING = {

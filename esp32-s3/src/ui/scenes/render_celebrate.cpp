@@ -1,119 +1,198 @@
 #include "ui/VariantRegistry.hpp"
 #include "display/GfxEngine.hpp"
 #include "display/MathHelpers.hpp"
+#include "display/SceneArcHelpers.hpp"
 #include <cmath>
 
 using namespace geom;
 using namespace math;
 
-static void fillStar(GfxEngine& gfx, int16_t cx, int16_t cy, float r1, float r2,
-                     uint16_t color, uint8_t alpha = 255) {
-    for (int i = 0; i < 5; i++) {
-        float a1 = -1.5708f + i * (TAU / 5.0f);
-        float a2 = a1 + TAU / 10.0f;
-        float a3 = a1 + TAU / 5.0f;
-        int16_t x0 = (int16_t)(cx + cosf(a1) * r1);
-        int16_t y0 = (int16_t)(cy + sinf(a1) * r1);
-        int16_t x1 = (int16_t)(cx + cosf(a2) * r2);
-        int16_t y1 = (int16_t)(cy + sinf(a2) * r2);
-        int16_t x2 = (int16_t)(cx + cosf(a3) * r1);
-        int16_t y2 = (int16_t)(cy + sinf(a3) * r1);
-        gfx.fillTriangle(x0, y0, x1, y1, cx, cy, color, alpha);
-        gfx.fillTriangle(x1, y1, x2, y2, cx, cy, color, alpha);
-    }
-}
+/* -- Phase table --------------------------------------------------------- */
+static const PhaseEntry CELEB_PHASES[] = {
+    {"curious",   0.06f},   // Luni curious, centered
+    {"drumroll",  0.06f},   // Pulsing dots build anticipation
+    {"shrink",    0.05f},   // Eyes shrink to top-right corner
+    {"trophyUp",  0.08f},   // Trophy rises from bottom
+    {"sparks",    0.08f},   // Spark burst around trophy
+    {"confetti",  0.14f},   // Confetti falls from top
+    {"firework",  0.18f},   // 3 phased firework bursts
+    {"bow",       0.06f},   // Trophy dips (bow)
+    {"trophyDn",  0.06f},   // Trophy descends off-screen
+    {"grow",      0.07f},   // Eyes grow back to center
+    {"done",      0.16f},   // Excited Luni
+};
+static constexpr uint8_t PHASE_COUNT = sizeof(CELEB_PHASES) / sizeof(CELEB_PHASES[0]);
 
-static void render_celebrate_trophy(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = SCX, cy = CY + 16;
-    float shine = sinf(t * TAU) * 0.3f + 0.7f;
-    uint8_t shineOp = (uint8_t)(shine * 255);
-
-    // Trophy cup body
-    gfx.fillTriangle(cx - 24, cy - 30, cx + 24, cy - 30, cx + 22, cy + 4, colors.eye, shineOp);
-    gfx.fillTriangle(cx - 24, cy - 30, cx + 22, cy + 4, cx - 22, cy + 4, colors.eye, shineOp);
-    gfx.fillRoundedRect(cx - 8, cy + 12, 16, 12, 2, colors.eye, shineOp);
-    gfx.fillRoundedRect(cx - 22, cy + 22, 44, 6, 2, colors.eye, shineOp);
-
-    // Handles
-    gfx.pushAlpha(shineOp);
-    gfx.drawQuadBezier(cx - 24, cy - 22, cx - 40, cy - 18, cx - 36, cy - 4,
-                       colors.eye, 3);
-    gfx.drawQuadBezier(cx + 24, cy - 22, cx + 40, cy - 18, cx + 36, cy - 4,
-                       colors.eye, 3);
+/* -- Helper: draw trophy ------------------------------------------------- */
+static void drawTrophy(GfxEngine& gfx, int16_t cx, int16_t cy,
+                       uint16_t color, uint8_t alpha) {
+    // Cup body (trapezoid via two triangles)
+    gfx.fillTriangle((int16_t)(cx - 24), (int16_t)(cy - 28),
+                     (int16_t)(cx + 24), (int16_t)(cy - 28),
+                     (int16_t)(cx + 18), (int16_t)(cy + 4), color, alpha);
+    gfx.fillTriangle((int16_t)(cx - 24), (int16_t)(cy - 28),
+                     (int16_t)(cx + 18), (int16_t)(cy + 4),
+                     (int16_t)(cx - 18), (int16_t)(cy + 4), color, alpha);
+    // Stem
+    gfx.fillRoundedRect((int16_t)(cx - 6), (int16_t)(cy + 4), 12, 14, 2, color, alpha);
+    // Base
+    gfx.fillRoundedRect((int16_t)(cx - 20), (int16_t)(cy + 16), 40, 6, 2, color, alpha);
+    // Handles (bezier arcs)
+    gfx.pushAlpha(alpha);
+    gfx.drawQuadBezier((int16_t)(cx - 24), (int16_t)(cy - 20),
+                       (int16_t)(cx - 38), (int16_t)(cy - 14),
+                       (int16_t)(cx - 34), (int16_t)(cy + 2), color, 3);
+    gfx.drawQuadBezier((int16_t)(cx + 24), (int16_t)(cy - 20),
+                       (int16_t)(cx + 38), (int16_t)(cy - 14),
+                       (int16_t)(cx + 34), (int16_t)(cy + 2), color, 3);
     gfx.popAlpha();
-
-    // Orbiting sparkle stars
-    for (int i = 0; i < 4; i++) {
-        float p = fmodf(t * 1.2f + i * 0.25f, 1.0f);
-        float a = (float)i * (TAU / 4.0f) + t * TAU * 0.4f;
-        int16_t sx = (int16_t)(cx + cosf(a) * 60);
-        int16_t sy = (int16_t)(cy + sinf(a) * 30);
-        float s = lerp(8.0f, 2.0f, p);
-        fillStar(gfx, sx, sy, s, s * 0.4f, colors.eye, (uint8_t)((1.0f - p) * 255));
-    }
 }
 
-static void render_celebrate_confetti(GfxEngine& gfx, float t, const ColorContext& colors) {
-    static const ToneId PIECE_TONES[] = {
-        TONE_WARM, TONE_ROSE, TONE_CYAN, TONE_GREEN, TONE_PURPLE, TONE_ORANGE
-    };
+/* -- Main render --------------------------------------------------------- */
+static void render_celebrate(GfxEngine& gfx, float t, const ColorContext& colors) {
+    PhaseResult ph = phases(t, CELEB_PHASES, PHASE_COUNT);
 
-    gfx.drawText("YAY!", SCX, CY + 8, colors.eye, 3, GfxEngine::TextAlign::CENTER);
+    /* --- Eye state ---------------------------------------------------- */
+    float eyeCx = (float)SCX, eyeCy = (float)CY, eyeScale = 1.0f;
+    const char* eyeEmo = "curious";
 
-    int16_t sy = STATUS_H + 8;
-    for (int i = 0; i < 18; i++) {
-        float p = fmodf(t + i * 0.06f, 1.0f);
-        int16_t x = (int16_t)((i * 53 + (int)(sinf(p * TAU + (float)i) * 8.0f)) % SCREEN_W);
-        int16_t y = (int16_t)lerp((float)sy, (float)(SCREEN_H - 8), p);
-        uint8_t op = (uint8_t)((1.0f - p) * 0.9f * 255.0f);
-        uint16_t pc = colors.tones[PIECE_TONES[i % 6]];
-
-        int shape = i % 3;
-        if (shape == 0) {
-            gfx.fillRect(x - 3, y - 2, 6, 4, pc, op);
-        } else if (shape == 1) {
-            gfx.fillCircle(x, y, 3, pc, op);
-        } else {
-            gfx.fillRect(x - 2, y - 4, 3, 8, pc, op);
-        }
+    if (phaseIs(ph.name, "curious")) {
+        eyeEmo = "curious";
+    } else if (phaseIs(ph.name, "drumroll")) {
+        eyeEmo = "eager";
+    } else if (phaseIs(ph.name, "shrink")) {
+        float ep = ease::inOut(ph.p);
+        eyeCx    = lerp((float)SCX, 284.0f, ep);
+        eyeCy    = lerp((float)CY,  44.0f,  ep);
+        eyeScale = lerp(1.0f, 0.30f, ep);
+        eyeEmo   = "eager";
+    } else if (phaseIn(ph.name, "trophyUp", "sparks")) {
+        eyeCx = 284.0f; eyeCy = 44.0f; eyeScale = 0.30f;
+        eyeEmo = "surprised";
+    } else if (phaseIn(ph.name, "confetti", "firework")) {
+        eyeCx = 284.0f; eyeCy = 44.0f; eyeScale = 0.30f;
+        eyeEmo = "excited";
+    } else if (phaseIn(ph.name, "bow", "trophyDn")) {
+        eyeCx = 284.0f; eyeCy = 44.0f; eyeScale = 0.30f;
+        eyeEmo = "happy";
+    } else if (phaseIs(ph.name, "grow")) {
+        float ep = ease::inOut(ph.p);
+        eyeCx    = lerp(284.0f, (float)SCX, ep);
+        eyeCy    = lerp(44.0f,  (float)CY,  ep);
+        eyeScale = lerp(0.30f, 1.0f, ep);
+        eyeEmo   = "excited";
+    } else if (phaseIs(ph.name, "done")) {
+        eyeEmo = "excited";
     }
-}
 
-static void render_celebrate_firework(GfxEngine& gfx, float t, const ColorContext& colors) {
-    struct Burst { int16_t x, y; float phase; ToneId tone; };
-    static const Burst BURSTS[] = {
-        {(int16_t)(SCX - 60), (int16_t)(CY - 6),  0.0f, TONE_WARM},
-        {(int16_t)(SCX + 50), (int16_t)(CY + 14), 0.4f, TONE_ROSE},
-        {SCX,                 (int16_t)(CY - 20),  0.7f, TONE_GREEN},
-    };
+    /* --- Prop: trophy ------------------------------------------------- */
+    int16_t trophyCx = SCX, trophyCy = CY + 6;
 
-    for (int b = 0; b < 3; b++) {
-        float p = fmodf(t + BURSTS[b].phase, 1.0f);
-        float r = lerp(2.0f, 50.0f, p);
-        uint8_t op = (uint8_t)((1.0f - p) * 255);
-        uint16_t bc = colors.tones[BURSTS[b].tone];
-
-        for (int j = 0; j < 10; j++) {
-            float a = (float)j / 10.0f * TAU;
-            gfx.drawLine(
-                (int16_t)(BURSTS[b].x + cosf(a) * r * 0.5f),
-                (int16_t)(BURSTS[b].y + sinf(a) * r * 0.5f),
-                (int16_t)(BURSTS[b].x + cosf(a) * r),
-                (int16_t)(BURSTS[b].y + sinf(a) * r),
-                bc, 3, op);
+    if (phaseIs(ph.name, "drumroll")) {
+        // Pulsing dots (anticipation)
+        for (int i = 0; i < 3; i++) {
+            float dp = sinf(ph.p * TAU * 3.0f + (float)i * 1.2f);
+            uint8_t op = (uint8_t)(clamp(dp, 0.0f, 1.0f) * 200);
+            gfx.fillCircle((int16_t)(SCX - 20 + i * 20), CY + 30, 5, colors.eye, op);
         }
-        int16_t dotR = (int16_t)(3 + (1.0f - p) * 3);
-        gfx.fillCircle(BURSTS[b].x, BURSTS[b].y, dotR, bc, op);
+    } else if (phaseIs(ph.name, "trophyUp")) {
+        // Trophy rises from bottom
+        float ep = ease::out(ph.p);
+        trophyCy = (int16_t)lerp((float)(SCREEN_H + 40), (float)(CY + 6), ep);
+        drawTrophy(gfx, trophyCx, trophyCy, colors.eye, (uint8_t)(ep * 255));
+    } else if (phaseIs(ph.name, "sparks")) {
+        drawTrophy(gfx, trophyCx, trophyCy, colors.eye, 255);
+        // Spark lines radiating from trophy
+        for (int i = 0; i < 8; i++) {
+            float a = (float)i / 8.0f * TAU;
+            float r1 = 44.0f + ph.p * 10.0f;
+            float r2 = r1 + 14.0f;
+            uint8_t op = (uint8_t)((1.0f - ph.p * 0.5f) * 220);
+            gfx.drawLine((int16_t)(trophyCx + cosf(a) * r1),
+                         (int16_t)(trophyCy + sinf(a) * r1),
+                         (int16_t)(trophyCx + cosf(a) * r2),
+                         (int16_t)(trophyCy + sinf(a) * r2),
+                         colors.eye, 2, op);
+        }
+    } else if (phaseIs(ph.name, "confetti")) {
+        drawTrophy(gfx, trophyCx, trophyCy, colors.eye, 255);
+        // Confetti falling
+        static const ToneId CONF_TONES[] = {
+            TONE_WARM, TONE_ROSE, TONE_CYAN, TONE_GREEN, TONE_PURPLE, TONE_ORANGE
+        };
+        for (int i = 0; i < 18; i++) {
+            float ip = fmodf(ph.p * 1.5f + (float)i * 0.055f, 1.0f);
+            int16_t x = (int16_t)((i * 53 + (int)(sinf(ip * TAU + (float)i) * 8.0f)) % SCREEN_W);
+            int16_t y = (int16_t)lerp((float)(STATUS_H + 8), (float)(SCREEN_H - 8), ip);
+            uint8_t op = (uint8_t)((1.0f - ip) * 230);
+            uint16_t pc = colors.tones[CONF_TONES[i % 6]];
+            int shape = i % 3;
+            if (shape == 0) {
+                gfx.fillRect((int16_t)(x - 3), (int16_t)(y - 2), 6, 4, pc, op);
+            } else if (shape == 1) {
+                gfx.fillCircle(x, y, 3, pc, op);
+            } else {
+                gfx.fillRect((int16_t)(x - 2), (int16_t)(y - 4), 3, 8, pc, op);
+            }
+        }
+    } else if (phaseIs(ph.name, "firework")) {
+        drawTrophy(gfx, trophyCx, trophyCy, colors.eye, 255);
+        // 3 phased firework bursts
+        struct Burst { int16_t x, y; float phase; ToneId tone; };
+        static const Burst BURSTS[] = {
+            {(int16_t)(SCX - 60), (int16_t)(CY - 20), 0.0f,  TONE_WARM},
+            {(int16_t)(SCX + 55), (int16_t)(CY + 10), 0.33f, TONE_ROSE},
+            {SCX,                 (int16_t)(CY - 36),  0.66f, TONE_GREEN},
+        };
+        for (int b = 0; b < 3; b++) {
+            float bp = ph.p - BURSTS[b].phase;
+            if (bp < 0.0f) continue;
+            bp = clamp(bp / 0.34f, 0.0f, 1.0f);
+            float r = lerp(2.0f, 46.0f, bp);
+            uint8_t op = (uint8_t)((1.0f - bp) * 255);
+            uint16_t bc = colors.tones[BURSTS[b].tone];
+            for (int j = 0; j < 10; j++) {
+                float a = (float)j / 10.0f * TAU;
+                gfx.drawLine(
+                    (int16_t)(BURSTS[b].x + cosf(a) * r * 0.5f),
+                    (int16_t)(BURSTS[b].y + sinf(a) * r * 0.5f),
+                    (int16_t)(BURSTS[b].x + cosf(a) * r),
+                    (int16_t)(BURSTS[b].y + sinf(a) * r),
+                    bc, 3, op);
+            }
+            int16_t dotR = (int16_t)(3.0f + (1.0f - bp) * 3.0f);
+            gfx.fillCircle(BURSTS[b].x, BURSTS[b].y, dotR, bc, op);
+        }
+    } else if (phaseIs(ph.name, "bow")) {
+        // Trophy dips down then back (bow)
+        float dip = sinf(ph.p * PI) * 16.0f;
+        drawTrophy(gfx, trophyCx, (int16_t)(trophyCy + dip), colors.eye, 255);
+    } else if (phaseIs(ph.name, "trophyDn")) {
+        // Trophy descends off-screen
+        float ep = ease::in(ph.p);
+        trophyCy = (int16_t)lerp((float)(CY + 6), (float)(SCREEN_H + 50), ep);
+        drawTrophy(gfx, trophyCx, trophyCy, colors.eye, (uint8_t)((1.0f - ep) * 255));
+    }
+
+    /* --- Eyes (always on top) ----------------------------------------- */
+    drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
+                   TONE_LUT[TONE_WARM], colors.bg);
+
+    /* --- Label -------------------------------------------------------- */
+    if (phaseIn(ph.name, "trophyUp", "sparks")) {
+        drawActLabel(gfx, "TROPHY", colors.eye);
+    } else if (phaseIn(ph.name, "confetti", "firework")) {
+        drawActLabel(gfx, "CELEBRATE!", colors.eye);
+    } else if (phaseIs(ph.name, "done")) {
+        drawActLabel(gfx, "CHAMPION", colors.eye);
     }
 }
 
 const VariantDef CELEBRATE_VARIANTS[] = {
-    {"celebrate-trophy",   "Trophy",    2400, TONE_WARM,  render_celebrate_trophy},
-    {"celebrate-confetti", "Confetti",  3000, TONE_WARM,  render_celebrate_confetti},
-    {"celebrate-firework", "Fireworks", 2000, TONE_WARM,  render_celebrate_firework},
+    {"celebrate-grand", "Grand", 14000, TONE_NONE, render_celebrate},
 };
 
 extern const CategoryDef CAT_CELEBRATE = {
     "celebrate", "Celebrate", ContentKind::SCENE, TONE_WARM,
-    CELEBRATE_VARIANTS, sizeof(CELEBRATE_VARIANTS) / sizeof(CELEBRATE_VARIANTS[0])
+    CELEBRATE_VARIANTS, sizeof(CELEBRATE_VARIANTS) / sizeof(CELEBRATE_VARIANTS[0]), false
 };

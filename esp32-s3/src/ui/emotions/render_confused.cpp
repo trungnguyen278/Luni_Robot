@@ -51,9 +51,51 @@ static void render_confused_tilt(GfxEngine& gfx, float t, const ColorContext& co
     gfx.popTransform();
 }
 
+// confused-mismatch: one eye blinks while the other stays open, alternating
+static void render_confused_mismatch(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float phase = fmodf(t * 2.0f, 2.0f);
+    float lb, rb;
+    if (phase < 1.0f) {
+        lb = blink(phase, 0.5f, 0.2f);
+        rb = 0.0f;
+    } else {
+        lb = 0.0f;
+        rb = blink(phase - 1.0f, 0.5f, 0.2f);
+    }
+    int16_t lh = (int16_t)lerp((float)EYE_H, 6.0f, lb);
+    int16_t rh = (int16_t)lerp((float)EYE_H, 6.0f, rb);
+    gfx.drawEye(LX, CY, EYE_W, lh, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, rh, EYE_RX, 0, colors.eye);
+}
+
+// confused-spin-q: wobbling eyes + spinning question mark above
+static void render_confused_spin_q(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float wob = sinf(t * TAU * 2.0f) * 4.0f;
+    int16_t h = (int16_t)(EYE_H * 0.8f);
+    gfx.drawEye((int16_t)(LX + wob), CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye((int16_t)(RX - wob), CY, EYE_W, h, EYE_RX, 0, colors.eye);
+
+    // Spinning question mark
+    float spin = t * 360.0f;
+    int16_t qx = SCX;
+    int16_t qy = STATUS_H + 24;
+    gfx.pushTransform();
+    gfx.rotate(spin, (float)qx, (float)qy);
+    gfx.drawQuadBezier(qx - 10, qy - 6, qx - 10, qy - 18, qx, qy - 18,
+                       colors.accent, 5);
+    gfx.drawQuadBezier(qx, qy - 18, qx + 10, qy - 18, qx + 10, qy - 8,
+                       colors.accent, 5);
+    gfx.drawQuadBezier(qx + 10, qy - 8, qx + 10, qy, qx, qy + 6,
+                       colors.accent, 5);
+    gfx.fillCircle(qx, qy + 16, 4, colors.accent);
+    gfx.popTransform();
+}
+
 const VariantDef CONFUSED_VARIANTS[] = {
-    {"confused-qmark", "Question mark", 2600, TONE_NONE, render_confused_qmark},
-    {"confused-tilt",  "Head tilt",     3000, TONE_NONE, render_confused_tilt},
+    {"confused-qmark",    "Question mark", 2600, TONE_NONE, render_confused_qmark},
+    {"confused-tilt",     "Head tilt",     3000, TONE_NONE, render_confused_tilt},
+    {"confused-mismatch", "Mismatch",      2200, TONE_NONE, render_confused_mismatch},
+    {"confused-spin-q",   "Spin Q",        2200, TONE_NONE, render_confused_spin_q},
 };
 
 extern const CategoryDef CAT_CONFUSED = {

@@ -45,10 +45,47 @@ static void render_surprised_exclaim(GfxEngine& gfx, float t, const ColorContext
     }
 }
 
+// surprised-flash: rapid eye size pulse + flash lines radiating out
+static void render_surprised_flash(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float pulse_v = 1.0f + sinf(t * TAU * 4.0f) * 0.15f;
+    int16_t r = (int16_t)((float)(EYE_W / 2) * 1.2f * pulse_v);
+    gfx.fillCircle(LX, CY, r, colors.eye);
+    gfx.fillCircle(RX, CY, r, colors.eye);
+
+    // Flash lines radiating from center
+    for (int i = 0; i < 8; i++) {
+        float a = (float)i * (TAU / 8.0f) + t * TAU * 2.0f;
+        float inner = 55.0f;
+        float outer = 55.0f + sinf(t * TAU * 3.0f + (float)i) * 12.0f + 12.0f;
+        int16_t x0 = (int16_t)(SCX + cosf(a) * inner);
+        int16_t y0 = (int16_t)(CY + sinf(a) * inner);
+        int16_t x1 = (int16_t)(SCX + cosf(a) * outer);
+        int16_t y1 = (int16_t)(CY + sinf(a) * outer);
+        gfx.drawLine(x0, y0, x1, y1, colors.accent, 3, 200);
+    }
+}
+
+// surprised-mild: less extreme pop, raised brow lines
+static void render_surprised_mild(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float s = 1.0f + sinf(t * TAU * 0.5f) * 0.02f;
+    int16_t w = (int16_t)((float)EYE_W * 1.02f * s);
+    int16_t h = (int16_t)((float)EYE_H * 1.02f * s);
+    gfx.drawEye(LX, CY, w, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, w, h, EYE_RX, 0, colors.eye);
+
+    // Raised brow lines
+    float lift = sinf(t * TAU * 0.5f) * 3.0f;
+    int16_t by = (int16_t)(CY - 56 + lift);
+    gfx.drawLine(LX - 26, by, LX + 26, (int16_t)(by - 4), colors.eye, 5);
+    gfx.drawLine(RX - 26, (int16_t)(by - 4), RX + 26, by, colors.eye, 5);
+}
+
 // --- Category registration ---
 const VariantDef SURPRISED_VARIANTS[] = {
     {"surprised-pop",     "Pop",     2200, TONE_NONE, render_surprised_pop},
     {"surprised-exclaim", "Exclaim", 2400, TONE_NONE, render_surprised_exclaim},
+    {"surprised-flash",   "Flash",   1400, TONE_NONE, render_surprised_flash},
+    {"surprised-mild",    "Mild",    2400, TONE_NONE, render_surprised_mild},
 };
 
 extern const CategoryDef CAT_SURPRISED = {

@@ -1,88 +1,130 @@
 #include "ui/VariantRegistry.hpp"
 #include "display/GfxEngine.hpp"
 #include "display/MathHelpers.hpp"
+#include "display/SceneArcHelpers.hpp"
 #include <cmath>
 
 using namespace geom;
 using namespace math;
 
-static void render_music_notes(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t cx = 60, cy = CY + 4;
+// Music-jam arc: speakers fade in → bars dance → fade out (12s)
+static const PhaseEntry MUSIC_PHASES[] = {
+    {"neutral", 0.08f},
+    {"fadeIn",  0.10f},
+    {"shrink",  0.05f},
+    {"jam",     0.50f},
+    {"fadeOut", 0.10f},
+    {"grow",    0.05f},
+    {"done",    0.12f},
+};
+static constexpr uint8_t MP_COUNT = sizeof(MUSIC_PHASES) / sizeof(MUSIC_PHASES[0]);
 
-    gfx.pushTransform();
-    gfx.rotate(t * 360.0f, (float)cx, (float)cy);
-    gfx.fillCircle(cx, cy, 42, colors.eye);
-    gfx.fillCircle(cx, cy, 28, colors.bg);
-    gfx.fillCircle(cx, cy, 20, colors.eye);
-    gfx.fillCircle(cx, cy, 6, colors.bg);
-    gfx.drawLine(cx, (int16_t)(cy - 16), cx, (int16_t)(cy - 12), colors.bg, 2);
-    gfx.popTransform();
+static void drawSpeaker(GfxEngine& gfx, int16_t cx, int16_t cy,
+                        uint16_t color, uint16_t bg, float bassPulse) {
+    gfx.fillRoundedRect(cx - 22, cy - 40, 44, 88, 4, color);
+    // Tweeter
+    gfx.fillCircle(cx, cy - 18, 10, bg);
+    gfx.fillCircle(cx, cy - 18, 5, color);
+    // Woofer
+    gfx.fillCircle(cx, cy + 18, 16, bg);
+    int16_t wr = (int16_t)(9.0f + bassPulse * 2.0f);
+    gfx.fillCircle(cx, cy + 18, wr, color);
+}
 
-    for (int i = 0; i < 4; i++) {
-        float p = fmodf(t * 0.8f + i * 0.25f, 1.0f);
-        float x = lerp(120.0f, (float)(SCREEN_W - 24), p);
-        float y = (float)CY + sinf(p * TAU * 1.5f + (float)i) * 22.0f;
-        float fadeIn = fminf(1.0f, p * 4.0f);
-        float fadeOut = fminf(1.0f, (1.0f - p) * 4.0f);
-        uint8_t op = (uint8_t)(fadeIn * fadeOut * 255.0f);
+static void render_music_jam(GfxEngine& gfx, float t, const ColorContext& colors) {
+    PhaseResult ph = phases(t, MUSIC_PHASES, MP_COUNT);
 
-        gfx.fillEllipse((int16_t)x, (int16_t)(y + 8), 6, 5, colors.eye, op);
-        gfx.drawLine((int16_t)(x + 5), (int16_t)(y + 6),
-                     (int16_t)(x + 5), (int16_t)(y - 18), colors.eye, 3, op);
-        gfx.pushAlpha(op);
-        gfx.drawQuadBezier((int16_t)(x + 5), (int16_t)(y - 18),
-                           (int16_t)(x + 16), (int16_t)(y - 14),
-                           (int16_t)(x + 14), (int16_t)(y - 4),
-                           colors.eye, 3);
+    float eyeCx = (float)SCX, eyeCy = (float)CY, eyeScale = 1.0f;
+    const char* eyeEmo = "steady";
+
+    float beat = phaseIs(ph.name, "jam") ? sinf(ph.p * TAU * 16.0f) : 0.0f;
+
+    if (phaseIs(ph.name, "neutral")) { eyeEmo = "steady"; }
+    else if (phaseIs(ph.name, "fadeIn")) { eyeEmo = "curious"; }
+    else if (phaseIs(ph.name, "shrink")) {
+        eyeCy = lerp((float)CY, (float)CY + 50.0f, ease::inOut(ph.p));
+        eyeScale = lerp(1.0f, 0.42f, ease::inOut(ph.p));
+        eyeEmo = "happy";
+    }
+    else if (phaseIs(ph.name, "jam")) {
+        eyeCy = (float)CY + 50.0f + fabsf(beat) * 4.0f;
+        eyeScale = 0.42f; eyeEmo = "happy";
+    }
+    else if (phaseIs(ph.name, "fadeOut")) {
+        eyeCy = (float)CY + 50.0f; eyeScale = 0.42f; eyeEmo = "satisfied";
+    }
+    else if (phaseIs(ph.name, "grow")) {
+        eyeCy = lerp((float)CY + 50.0f, (float)CY, ease::inOut(ph.p));
+        eyeScale = lerp(0.42f, 1.0f, ease::inOut(ph.p));
+        eyeEmo = "satisfied";
+    }
+    else { eyeEmo = "satisfied"; }
+
+    // Speaker opacity
+    float spkOp = 0.0f;
+    if (phaseIs(ph.name, "fadeIn")) spkOp = ease::out(ph.p);
+    else if (phaseIn(ph.name, "shrink", "jam")) spkOp = 1.0f;
+    else if (phaseIs(ph.name, "fadeOut")) spkOp = 1.0f - ease::in(ph.p);
+
+    float bassPulse = phaseIs(ph.name, "jam")
+        ? fabsf(sinf(ph.p * TAU * 4.0f)) : 0.0f;
+
+    // Left speaker
+    if (spkOp > 0.01f) {
+        gfx.pushAlpha((uint8_t)(spkOp * 255));
+        drawSpeaker(gfx, 56, CY - 10, colors.eye, colors.bg, bassPulse);
+        drawSpeaker(gfx, SCREEN_W - 56, CY - 10, colors.eye, colors.bg, bassPulse);
         gfx.popAlpha();
     }
-}
 
-static void render_music_bars(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int n = 14;
-    int gap = 4;
-    int16_t bw = (SCREEN_W - 60 - gap * (n - 1)) / n;
+    // EQ bars during jam
+    if (phaseIs(ph.name, "jam")) {
+        for (int i = 0; i < 8; i++) {
+            float f1 = sinf(ph.p * TAU * 8.0f + i * 0.7f);
+            float f2 = sinf(ph.p * TAU * 16.0f + i * 0.3f);
+            int16_t h = (int16_t)(6.0f + fabsf(f1 * 14.0f + f2 * 8.0f));
+            int16_t x = SCX - 56 + i * 16;
+            gfx.fillRoundedRect(x - 5, CY - 30 - h / 2, 10, h, 3, colors.accent);
+        }
 
-    for (int i = 0; i < n; i++) {
-        float phase = t * TAU * 2.0f + i * 0.5f;
-        int16_t h = (int16_t)(14.0f + fabsf(sinf(phase)) * 80.0f);
-        int16_t x = (int16_t)(30 + i * (bw + gap));
-        int16_t y = SCREEN_H - 28 - h;
-        gfx.fillRoundedRect(x, y, bw, h, 3, colors.eye);
+        // Bass pulse ring
+        int16_t ringR = (int16_t)(40.0f + bassPulse * 30.0f);
+        float ringOp = 1.0f - bassPulse * 0.7f;
+        gfx.pushAlpha((uint8_t)(ringOp * 255));
+        gfx.strokeCircle(SCX, CY - 30, ringR, colors.accent, 2);
+        gfx.popAlpha();
+
+        // Floating notes
+        for (int i = 0; i < 3; i++) {
+            float p = fmodf(ph.p * 1.2f + i * 0.33f, 1.0f);
+            float nx = 80.0f + i * 80.0f + sinf(p * TAU + i) * 8.0f;
+            float ny = lerp((float)(SCREEN_H - 30), (float)(STATUS_H + 14), p);
+            uint8_t nop = (uint8_t)((1.0f - p) * 255);
+            int16_t nsz = (int16_t)lerp(2.0f, 1.0f, p);
+            gfx.fillCircle((int16_t)nx, (int16_t)ny, 4, colors.accent, nop);
+            gfx.drawLine((int16_t)(nx + 4), (int16_t)(ny - 10),
+                         (int16_t)(nx + 4), (int16_t)ny,
+                         colors.accent, 2, nop);
+        }
     }
 
-    gfx.drawLine(20, SCREEN_H - 24, SCREEN_W - 20, SCREEN_H - 24,
-                 colors.eye, 2, 102);
-}
+    drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t, colors.eye, colors.bg);
 
-static void render_music_wave(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t baseY = CY + 8;
-    int samples = 80;
-
-    for (int i = 0; i < samples; i++) {
-        float f0 = (float)i / (float)samples;
-        float f1 = (float)(i + 1) / (float)samples;
-        int16_t x0 = (int16_t)(20.0f + f0 * (SCREEN_W - 40));
-        int16_t x1 = (int16_t)(20.0f + f1 * (SCREEN_W - 40));
-        float phase0 = f0 * TAU * 3.0f + t * TAU * 2.0f;
-        float phase1 = f1 * TAU * 3.0f + t * TAU * 2.0f;
-        int16_t y0 = (int16_t)(baseY + sinf(phase0) * 30.0f * fabsf(sinf(f0 * PI)));
-        int16_t y1 = (int16_t)(baseY + sinf(phase1) * 30.0f * fabsf(sinf(f1 * PI)));
-        gfx.drawLine(x0, y0, x1, y1, colors.eye, 3);
-    }
-
-    int16_t sy = STATUS_H + 8;
-    gfx.fillTriangle(SCX - 8, sy + 12, SCX + 8, sy + 22, SCX - 8, sy + 32,
-                     colors.eye);
+    const char* label =
+        phaseIs(ph.name, "neutral") ? "SILENCE..." :
+        phaseIs(ph.name, "fadeIn")  ? "A SONG!" :
+        phaseIs(ph.name, "shrink")  ? "TURN IT UP" :
+        phaseIs(ph.name, "jam")     ? "JAMMING" :
+        phaseIs(ph.name, "fadeOut") ? "ENCORE?" :
+                                      "GREAT TUNE";
+    drawActLabel(gfx, label, colors.eye);
 }
 
 const VariantDef MUSIC_VARIANTS[] = {
-    {"music-notes", "Notes",     3000, TONE_ROSE,   render_music_notes},
-    {"music-bars",  "Equalizer", 1200, TONE_CYAN,   render_music_bars},
-    {"music-wave",  "Waveform",  1600, TONE_PURPLE, render_music_wave},
+    {"music-jam", "Speaker jam", 12000, TONE_NONE, render_music_jam},
 };
 
 extern const CategoryDef CAT_MUSIC = {
     "music", "Music", ContentKind::SCENE, TONE_ROSE,
-    MUSIC_VARIANTS, sizeof(MUSIC_VARIANTS) / sizeof(MUSIC_VARIANTS[0])
+    MUSIC_VARIANTS, sizeof(MUSIC_VARIANTS) / sizeof(MUSIC_VARIANTS[0]), false
 };

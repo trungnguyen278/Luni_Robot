@@ -37,7 +37,10 @@ public:
     void stop();
     void deinit();
 
+    using OnConnectionChange = std::function<void(bool connected)>;
+
     void onConfigComplete(OnConfigComplete cb) { config_cb_ = cb; }
+    void onConnectionChange(OnConnectionChange cb) { conn_cb_ = cb; }
     const char* getPairingPin() const { return pairing_pin_; }
 
     // Access levels
@@ -82,6 +85,7 @@ public:
 
     ConfigData temp_cfg_;
     OnConfigComplete config_cb_ = nullptr;
+    OnConnectionChange conn_cb_ = nullptr;
     std::atomic<AccessLevel> access_level_{AccessLevel::LEVEL_0};
 
     std::string device_id_str_;

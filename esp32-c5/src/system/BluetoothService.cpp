@@ -105,6 +105,7 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg)
             self->connected_ = true;
             self->started_ = false;
             self->access_level_ = BluetoothService::AccessLevel::LEVEL_0;
+            if (self->conn_cb_) self->conn_cb_(true);
         } else {
             self->started_ = false;
             self->start();
@@ -115,6 +116,7 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg)
         ESP_LOGI(TAG, "BLE Disconnected: reason=0x%x", event->disconnect.reason);
         self->connected_ = false;
         self->access_level_ = BluetoothService::AccessLevel::LEVEL_0;
+        if (self->conn_cb_) self->conn_cb_(false);
         self->start();
         break;
 

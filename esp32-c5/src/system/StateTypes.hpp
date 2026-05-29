@@ -159,7 +159,7 @@ inline bool isValidConnectionTransition(ConnectionState from, ConnectionState to
     case CS::BLE_PROVISIONING:
         return to == CS::BLE_CONNECTED || to == CS::WIFI_CONNECTING;
     case CS::BLE_CONNECTED:
-        return to == CS::WIFI_CONNECTING;
+        return to == CS::WIFI_CONNECTING || to == CS::BLE_PROVISIONING;
     }
     return false;
 }
