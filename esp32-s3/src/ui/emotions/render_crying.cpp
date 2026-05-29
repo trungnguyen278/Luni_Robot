@@ -44,9 +44,60 @@ static void render_crying_waterfall(GfxEngine& gfx, float t, const ColorContext&
     }
 }
 
+// crying-sob: vertical shake + tear spray (multiple small circles)
+static void render_crying_sob(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float shake = sinf(t * TAU * 6.0f) * 3.0f;
+    int16_t hw = EYE_W / 2;
+    int16_t cy = (int16_t)(CY + 10 + shake);
+    gfx.drawQuadBezier(LX - hw, cy, LX, cy + 22, LX + hw, cy, colors.eye, 12);
+    gfx.drawQuadBezier(RX - hw, cy, RX, cy + 22, RX + hw, cy, colors.eye, 12);
+
+    // Tear spray: small circles shooting outward
+    for (int i = 0; i < 6; i++) {
+        float p = fmodf(t * 3.0f + i * 0.17f, 1.0f);
+        float angle = (i < 3) ? (PI * 0.3f + i * 0.2f) : (PI * 0.5f + i * 0.2f);
+        int16_t base_x = (i < 3) ? LX : RX;
+        int16_t dir = (i < 3) ? -1 : 1;
+        int16_t tx = (int16_t)(base_x + dir * (10 + p * 30) * cosf(angle));
+        int16_t ty = (int16_t)(cy + 14 + p * 40);
+        uint8_t op = (uint8_t)((1.0f - p) * 200.0f);
+        gfx.fillCircle(tx, ty, (int16_t)(2 + (1.0f - p) * 3), colors.accent, op);
+    }
+}
+
+// crying-trickle: single tear forms and falls slowly from each eye
+static void render_crying_trickle(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t hw = EYE_W / 2;
+    int16_t cy = CY + 8;
+    int16_t h = (int16_t)(EYE_H * 0.72f);
+    gfx.drawEye(LX, cy, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, cy, EYE_W, h, EYE_RX, 0, colors.eye);
+
+    // Single tear from each eye, slow fall
+    for (int side = 0; side < 2; side++) {
+        int16_t ex = (side == 0) ? LX : RX;
+        float p = fmodf(t + side * 0.5f, 1.0f);
+        if (p < 0.2f) {
+            // Forming: growing circle at eye corner
+            float grow = p / 0.2f;
+            int16_t r = (int16_t)(2.0f + grow * 3.0f);
+            gfx.fillCircle((int16_t)(ex + (side == 0 ? -20 : 20)), cy + h / 2, r, colors.accent, 200);
+        } else {
+            // Falling
+            float fall = (p - 0.2f) / 0.8f;
+            int16_t tx = (int16_t)(ex + (side == 0 ? -20 : 20));
+            int16_t ty = (int16_t)(cy + h / 2 + fall * 70);
+            uint8_t op = (uint8_t)((1.0f - fall) * 220.0f);
+            gfx.fillEllipse(tx, ty, 4, (int16_t)(6 + fall * 4), colors.accent, op);
+        }
+    }
+}
+
 const VariantDef CRYING_VARIANTS[] = {
     {"crying-tears",     "Tears",     2400, TONE_NONE, render_crying_tears},
     {"crying-waterfall", "Waterfall", 1600, TONE_NONE, render_crying_waterfall},
+    {"crying-sob",       "Sob",       1200, TONE_NONE, render_crying_sob},
+    {"crying-trickle",   "Trickle",   2800, TONE_NONE, render_crying_trickle},
 };
 
 extern const CategoryDef CAT_CRYING = {

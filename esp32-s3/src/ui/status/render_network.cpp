@@ -1,5 +1,6 @@
 #include "ui/VariantRegistry.hpp"
 #include "ui/SceneManager.hpp"
+#include "system/StateManager.hpp"
 #include "display/GfxEngine.hpp"
 #include "display/MathHelpers.hpp"
 #include <cmath>
@@ -127,16 +128,9 @@ static void render_ble_pair(GfxEngine& gfx, float t, const ColorContext& colors)
 
     drawBTIcon(gfx, SCX, STATUS_H + 60, colors.accent);
 
-    gfx.drawText("PAIRING MODE", SCX, STATUS_H + 126, colors.eye, 1,
+    gfx.drawText("SEARCHING", SCX, STATUS_H + 126, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER);
-
-    const auto& sd = SceneManager::instance().getSceneData();
-    if (sd.ble_pin[0] != '\0') {
-        gfx.drawText("PIN", SCX, STATUS_H + 148, colors.eye, 1,
-                     GfxEngine::TextAlign::CENTER, 140);
-        gfx.drawText(sd.ble_pin, SCX, STATUS_H + 162, colors.accent, 2,
-                     GfxEngine::TextAlign::CENTER);
-    }
+    drawTypingDots(gfx, SCX, STATUS_H + 146, t, colors.accent);
 
     gfx.drawText("OPEN APP", SCX, SCREEN_H - 26, colors.accent, 1,
                  GfxEngine::TextAlign::CENTER, 217);
@@ -144,24 +138,60 @@ static void render_ble_pair(GfxEngine& gfx, float t, const ColorContext& colors)
                  GfxEngine::TextAlign::CENTER, 140);
 }
 
-// network-server-error: exclamation mark + "SERVER UNREACHABLE"
+// network-server-error: cloud icon + state-aware text
 static void render_server_error(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float shake = sinf(t * TAU * 6.0f) * 1.5f;
-    uint8_t blink = ((int)(t * 3.0f) % 2 == 0) ? 255 : 128;
+    auto connState = StateManager::instance().getConnectionState();
+
+    bool isConnecting = (connState == state::ConnectionState::WS_CONNECTING ||
+                         connState == state::ConnectionState::WS_AUTHENTICATING);
+
+    float shake = isConnecting ? 0.0f : sinf(t * TAU * 6.0f) * 1.5f;
+    uint8_t blink = isConnecting
+        ? (uint8_t)(180 + sinf(t * TAU * 2.0f) * 75.0f)
+        : ((int)(t * 3.0f) % 2 == 0) ? 255 : 128;
 
     gfx.pushTransform();
     gfx.translate(shake, 0.0f);
 
-    // Exclamation mark
-    gfx.fillRoundedRect(SCX - 3, STATUS_H + 38, 6, 20, 2, colors.accent, blink);
-    gfx.fillCircle(SCX, STATUS_H + 66, 3, colors.accent, blink);
+    // Cloud icon
+    gfx.fillEllipse(SCX - 10, STATUS_H + 36, 16, 12, colors.accent, blink);
+    gfx.fillEllipse(SCX + 10, STATUS_H + 36, 18, 14, colors.accent, blink);
+    gfx.fillEllipse(SCX, STATUS_H + 28, 14, 10, colors.accent, blink);
+    gfx.fillRoundedRect(SCX - 24, STATUS_H + 40, 50, 10, 5, colors.accent, blink);
 
-    gfx.drawText("SERVER UNREACHABLE", SCX, STATUS_H + 106, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER);
-    gfx.drawText("ERROR 503", SCX, STATUS_H + 124, colors.accent, 1,
-                 GfxEngine::TextAlign::CENTER, 217);
-    gfx.drawText("RETRYING IN A MOMENT", SCX, SCREEN_H - 18, colors.eye, 1,
-                 GfxEngine::TextAlign::CENTER, 140);
+    if (isConnecting) {
+        // Spinning arc below cloud (connecting indicator)
+        float spin = t * TAU * 2.0f;
+        gfx.drawArc(SCX, STATUS_H + 68, 14, spin, spin + 4.0f, colors.accent, 3);
+
+        gfx.drawText("CONNECTING SERVER", SCX, STATUS_H + 114, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER);
+        drawTypingDots(gfx, SCX, STATUS_H + 134, t, colors.accent);
+        gfx.drawText("PLEASE WAIT", SCX, SCREEN_H - 18, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER, 140);
+    } else {
+        // Exclamation mark below cloud (error indicator)
+        gfx.fillRoundedRect(SCX - 3, STATUS_H + 56, 6, 20, 2, colors.accent, blink);
+        gfx.fillCircle(SCX, STATUS_H + 82, 3, colors.accent, blink);
+
+        const char* title = "SERVER UNREACHABLE";
+        const char* code  = "CONNECTION FAILED";
+        const char* hint  = "RETRYING IN A MOMENT";
+
+        if (connState == state::ConnectionState::WS_ERROR) {
+            code = "WS ERROR";
+        } else if (connState == state::ConnectionState::RECONNECTING) {
+            title = "RECONNECTING";
+            code = "LOST CONNECTION";
+        }
+
+        gfx.drawText(title, SCX, STATUS_H + 114, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER);
+        gfx.drawText(code, SCX, STATUS_H + 132, colors.accent, 1,
+                     GfxEngine::TextAlign::CENTER, 217);
+        gfx.drawText(hint, SCX, SCREEN_H - 18, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER, 140);
+    }
 
     gfx.popTransform();
 }
@@ -193,8 +223,55 @@ static void render_bt_paired(GfxEngine& gfx, float t, const ColorContext& colors
         gfx.drawLine(SCX - 1, SCY - 5, SCX + 7, SCY - 15, colors.bg, 3);
     }
 
-    gfx.drawText("BLUETOOTH ON", SCX, SCY + 46, colors.eye, 1,
+    gfx.drawText("CONNECTED", SCX, SCY + 46, colors.eye, 1,
                  GfxEngine::TextAlign::CENTER);
+
+    const auto& sd = SceneManager::instance().getSceneData();
+    if (sd.ble_pin[0] != '\0') {
+        gfx.drawText("PIN", SCX, SCY + 66, colors.eye, 1,
+                     GfxEngine::TextAlign::CENTER, 140);
+        gfx.drawText(sd.ble_pin, SCX, SCY + 82, colors.accent, 2,
+                     GfxEngine::TextAlign::CENTER);
+    }
+}
+
+// network-ws-connect: WiFi OK, connecting to server
+static void render_ws_connect(GfxEngine& gfx, float t, const ColorContext& colors) {
+    // WiFi icon solid (connected)
+    drawWifiIcon(gfx, SCX - 80, STATUS_H + 48, 3, colors.eye, 140);
+
+    // Server icon (stacked rects)
+    int16_t sx = SCX + 60, sy = STATUS_H + 36;
+    for (int i = 0; i < 3; i++) {
+        int16_t ry = (int16_t)(sy + i * 18);
+        gfx.fillRoundedRect(sx - 20, ry, 40, 14, 3, colors.accent);
+        gfx.fillCircle(sx - 12, ry + 7, 2, colors.bg);
+        gfx.fillCircle(sx + 12, ry + 7, 2, colors.bg);
+    }
+
+    // Connecting arrow between wifi and server
+    float pulse = (sinf(t * TAU * 2.0f) + 1.0f) / 2.0f;
+    uint8_t arrowOp = (uint8_t)(128 + pulse * 127);
+    int16_t ax = SCX - 20, ay = STATUS_H + 50;
+    gfx.drawLine(ax, ay, (int16_t)(ax + 28), ay, colors.accent, 3, arrowOp);
+    gfx.drawLine((int16_t)(ax + 22), (int16_t)(ay - 5),
+                 (int16_t)(ax + 28), ay, colors.accent, 3, arrowOp);
+    gfx.drawLine((int16_t)(ax + 22), (int16_t)(ay + 5),
+                 (int16_t)(ax + 28), ay, colors.accent, 3, arrowOp);
+
+    gfx.drawText("CONNECTING SERVER", SCX, STATUS_H + 110, colors.eye, 1,
+                 GfxEngine::TextAlign::CENTER);
+    drawTypingDots(gfx, SCX, STATUS_H + 130, t, colors.accent);
+
+    // Progress bar
+    int16_t barW = SCREEN_W - 80;
+    int16_t barX = (SCREEN_W - barW) / 2;
+    int16_t barY = SCREEN_H - 38;
+    gfx.strokeRoundedRect(barX, barY, barW, 8, 2, colors.eye, 1);
+    int16_t fw = (int16_t)((float)(barW - 3) * clamp(t, 0.0f, 1.0f));
+    if (fw > 0) {
+        gfx.fillRoundedRect(barX + 1, barY + 1, fw, 6, 1, colors.accent);
+    }
 }
 
 // --- Category registration ---

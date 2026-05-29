@@ -80,20 +80,88 @@ const VariantDef* SceneManager::pickVariant(const char* categoryKey) {
     return pick;
 }
 
+bool SceneManager::isCategoryRecent(const char* key) const {
+    for (int i = 0; i < RECENT_CAT_SIZE; i++) {
+        if (recent_cats_[i] && strcmp(recent_cats_[i], key) == 0)
+            return true;
+    }
+    return false;
+}
+
+void SceneManager::recordCategory(const char* key) {
+    recent_cats_[recent_cat_head_] = key;
+    recent_cat_head_ = (recent_cat_head_ + 1) % RECENT_CAT_SIZE;
+}
+
+static bool isIdleExcluded(const char* key) {
+    static const char* EXCLUDED[] = {
+        "thinking", "listening", "loading", "boot", "network",
+        "charging", "error", "mute",
+    };
+    for (auto* ex : EXCLUDED) {
+        if (strcmp(key, ex) == 0) return true;
+    }
+    return false;
+}
+
+const CategoryDef* SceneManager::pickIdleCategory() {
+    const CategoryDef* candidates[64];
+    int count = 0;
+
+    for (uint8_t i = 0; i < CATEGORY_COUNT && count < 64; i++) {
+        const auto& cat = ALL_CATEGORIES[i];
+        if (isIdleExcluded(cat.key)) continue;
+        if (cat.kind == ContentKind::STATUS) continue;
+        if (isCategoryRecent(cat.key)) continue;
+        candidates[count++] = &cat;
+    }
+
+    if (count == 0) {
+        for (uint8_t i = 0; i < CATEGORY_COUNT && count < 64; i++) {
+            const auto& cat = ALL_CATEGORIES[i];
+            if (isIdleExcluded(cat.key)) continue;
+            if (cat.kind == ContentKind::STATUS) continue;
+            candidates[count++] = &cat;
+        }
+    }
+    if (count == 0) return findCategory("normal");
+    return candidates[rand() % count];
+}
+
 void SceneManager::tickIdle(float dt_ms) {
     if (scene_active_ || !idle_active_) return;
 
     idle_timer_ms_ += dt_ms;
     if (idle_timer_ms_ >= idle_interval_ms_) {
         idle_timer_ms_ = 0;
-        idle_interval_ms_ = 3000.0f + (float)(rand() % 3000);
 
-        const VariantDef* v = pickVariant("normal");
-        if (v) {
-            current_category_ = findCategory("normal");
-            current_variant_ = v;
-            elapsed_ms_ = 0;
+        const CategoryDef* cat = pickIdleCategory();
+        if (!cat) return;
+
+        const VariantDef* v = pickVariant(cat->key);
+        if (!v) return;
+
+        recordCategory(cat->key);
+        current_category_ = cat;
+        current_variant_ = v;
+        elapsed_ms_ = 0;
+
+        if (cat->kind == ContentKind::SCENE) {
+            if (cat->loops) {
+                // Looping scenes (weather, music): play one cycle then return to idle
+                scene_active_ = false;
+                idle_active_ = true;
+                idle_interval_ms_ = (float)v->duration_ms + 500.0f;
+            } else {
+                scene_active_ = true;
+                idle_active_ = false;
+                idle_interval_ms_ = 3000.0f + (float)(rand() % 3000);
+            }
+        } else {
+            idle_interval_ms_ = 3000.0f + (float)(rand() % 5000);
         }
+
+        ESP_LOGD(TAG, "Idle: %s/%s", cat->key, v->id);
     }
 }
 
@@ -128,4 +196,8 @@ void SceneManager::update(GfxEngine& gfx, float dt_ms) {
 
     ColorContext colors = resolveColors();
     current_variant_->render(gfx, t, colors);
+
+    if (!should_loop && raw >= 1.0f) {
+        exitScene();
+    }
 }

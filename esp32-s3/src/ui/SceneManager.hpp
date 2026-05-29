@@ -91,14 +91,22 @@ private:
     bool scene_active_ = false;
     bool idle_active_ = true;
 
-    // Recency filter
+    // Recency filter (variants)
     static constexpr int RECENT_SIZE = 6;
     const char* recent_ids_[RECENT_SIZE] = {};
     int recent_head_ = 0;
 
+    // Recency filter (categories for idle)
+    static constexpr int RECENT_CAT_SIZE = 8;
+    const char* recent_cats_[RECENT_CAT_SIZE] = {};
+    int recent_cat_head_ = 0;
+    bool isCategoryRecent(const char* key) const;
+    void recordCategory(const char* key);
+
     // Idle timer
     float idle_timer_ms_ = 0;
     float idle_interval_ms_ = 4000;
+    const CategoryDef* pickIdleCategory();
 
     SceneData scene_data_;
 };

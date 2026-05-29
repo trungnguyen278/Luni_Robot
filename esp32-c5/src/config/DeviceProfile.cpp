@@ -217,7 +217,7 @@ bool DeviceProfile::setup(AppController& app)
     // =========================================================
     auto network_mgr = std::make_unique<NetworkManager>();
 
-    const std::string default_ws = "ws://171.226.10.121:8000/v2/ws";
+    const std::string default_ws = "ws://lunirobot.io.vn/ws/device";
 
     NetworkManager::Config net_cfg{};
     net_cfg.wifi_ssid    = user.wifi_ssid;

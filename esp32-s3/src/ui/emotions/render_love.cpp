@@ -62,11 +62,43 @@ static void render_love_wink(GfxEngine& gfx, float t, const ColorContext& colors
     }
 }
 
+// love-blush: heart eyes + pink cheek circles below eyes
+static void render_love_blush(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float s = (1.0f + sinf(t * TAU * 2.0f) * 0.08f) * (float)EYE_W * 0.9f;
+    fillHeart(gfx, LX, CY, s, colors.eye);
+    fillHeart(gfx, RX, CY, s, colors.eye);
+
+    // Blushing cheek circles
+    float blush = (sinf(t * TAU) + 1.0f) / 2.0f;
+    int16_t cr = (int16_t)lerp(6.0f, 10.0f, blush);
+    uint8_t op = (uint8_t)lerp(120.0f, 200.0f, blush);
+    gfx.fillCircle(LX - 8, CY + 42, cr, colors.accent, op);
+    gfx.fillCircle(RX + 8, CY + 42, cr, colors.accent, op);
+}
+
+// love-shower: normal eyes + falling heart shapes from top
+static void render_love_shower(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t h = (int16_t)(EYE_H * 0.9f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+
+    for (int i = 0; i < 6; i++) {
+        float p = fmodf(t * 1.2f + i * 0.166f, 1.0f);
+        float x = 30.0f + i * 52.0f + sinf(p * TAU + (float)i * 1.5f) * 10.0f;
+        float y = lerp((float)(STATUS_H + 4), (float)(SCREEN_H - 10), p);
+        float sz = 12.0f + (1.0f - p) * 4.0f;
+        uint8_t op = (uint8_t)((1.0f - p) * 200.0f);
+        fillHeart(gfx, (int16_t)x, (int16_t)y, sz, colors.accent, op);
+    }
+}
+
 // --- Category registration ---
 const VariantDef LOVE_VARIANTS[] = {
-    {"love-hearts",   "Heart eyes",     1600, TONE_NONE, render_love_hearts},
+    {"love-hearts",   "Heart eyes",      1600, TONE_NONE, render_love_hearts},
     {"love-floating", "Floating hearts", 2400, TONE_NONE, render_love_floating},
-    {"love-wink",     "Heart wink",     2400, TONE_NONE, render_love_wink},
+    {"love-wink",     "Heart wink",      2400, TONE_NONE, render_love_wink},
+    {"love-blush",    "Blush",           2800, TONE_NONE, render_love_blush},
+    {"love-shower",   "Heart shower",    3000, TONE_NONE, render_love_shower},
 };
 
 extern const CategoryDef CAT_LOVE = {

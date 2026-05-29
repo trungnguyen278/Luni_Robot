@@ -71,10 +71,41 @@ static void render_excited_grin(GfxEngine& gfx, float t, const ColorContext& col
                        mx + 60, SCREEN_H - 36, colors.eye, 6);
 }
 
+// excited-giddy: rapid jittery eyes with random small offsets
+static void render_excited_giddy(GfxEngine& gfx, float t, const ColorContext& colors) {
+    // Pseudo-random jitter using fast sin combinations
+    float jx = sinf(t * 97.0f) * 3.0f + sinf(t * 131.0f) * 2.0f;
+    float jy = cosf(t * 113.0f) * 3.0f + cosf(t * 79.0f) * 2.0f;
+    int16_t w = (int16_t)(EYE_W * 1.08f);
+    int16_t h = (int16_t)(EYE_H * 1.08f);
+    gfx.drawEye((int16_t)(LX + jx), (int16_t)(CY + jy), w, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye((int16_t)(RX - jx), (int16_t)(CY - jy), w, h, EYE_RX, 0, colors.eye);
+}
+
+// excited-shockwave: wide eyes + expanding ring circles from center
+static void render_excited_shockwave(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t w = (int16_t)(EYE_W * 1.12f);
+    int16_t h = (int16_t)(EYE_H * 1.1f);
+    gfx.drawEye(LX, CY, w, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, w, h, EYE_RX, 0, colors.eye);
+
+    // Expanding ring circles
+    for (int i = 0; i < 3; i++) {
+        float p = fmodf(t * 1.5f + i * 0.33f, 1.0f);
+        int16_t r = (int16_t)(10.0f + p * 80.0f);
+        uint8_t op = (uint8_t)((1.0f - p) * 180.0f);
+        gfx.pushAlpha(op);
+        gfx.strokeCircle(SCX, CY, r, colors.accent, 3);
+        gfx.popAlpha();
+    }
+}
+
 const VariantDef EXCITED_VARIANTS[] = {
-    {"excited-stars",  "Star eyes", 1200, TONE_NONE, render_excited_stars},
-    {"excited-bounce", "Bounce",     800, TONE_NONE, render_excited_bounce},
-    {"excited-grin",   "Wide grin", 1600, TONE_NONE, render_excited_grin},
+    {"excited-stars",     "Star eyes",  1200, TONE_NONE, render_excited_stars},
+    {"excited-bounce",    "Bounce",      800, TONE_NONE, render_excited_bounce},
+    {"excited-grin",      "Wide grin",  1600, TONE_NONE, render_excited_grin},
+    {"excited-giddy",     "Giddy",       900, TONE_NONE, render_excited_giddy},
+    {"excited-shockwave", "Shockwave",  1600, TONE_NONE, render_excited_shockwave},
 };
 
 extern const CategoryDef CAT_EXCITED = {

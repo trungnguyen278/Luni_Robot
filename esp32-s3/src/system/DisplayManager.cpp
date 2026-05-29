@@ -370,9 +370,12 @@ void DisplayManager::handleConnectivity(state::ConnectionState s)
         break;
 
     case state::ConnectionState::WIFI_CONNECTED:
+        scene_mgr_.showScene("network", "network-wifi-connect");
+        break;
+
     case state::ConnectionState::WS_CONNECTING:
     case state::ConnectionState::WS_AUTHENTICATING:
-        scene_mgr_.showScene("network", "network-wifi-connect");
+        scene_mgr_.showScene("network", "network-server-error");
         break;
 
     case state::ConnectionState::ONLINE:
