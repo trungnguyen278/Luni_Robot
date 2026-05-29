@@ -1,14 +1,13 @@
-/* MOCHI-P emotion library — COLOR pass.
+/* Luni emotion library — COLOR pass.
    Assigns a `tone` (key into window.EmotionCore.EYE_TONES) to every
-   emotion + scene category. The renderer reads `cat.tone` and applies
-   it as a CSS variable on the screen, so every `var(--eye)` inside the
-   variant SVG picks up the new color — no per-variant changes needed.
+   EMOTION category. The renderer reads `cat.tone` and applies it as a CSS
+   variable on the screen, so every `var(--eye)` inside the variant SVG
+   picks up the color — no per-variant changes needed.
 
-   The robot stays "one bright color on near-black" (TFT-friendly),
-   but each category now reads with the right emotional temperature.
-
-   Loaded AFTER emotion-more.jsx, scenes-extras.jsx (anything that
-   creates a category). Loaded BEFORE app.jsx.
+   Scope note: scene categories now set their own `tone` inline in the
+   scenes-arc-pack-* files, so this pass only tones emotions plus the two
+   `status` flows (boot / network). Loaded AFTER everything that creates an
+   emotion or status category, BEFORE the scene-arc packs + app.jsx.
 */
 
 const cats = window.EMOTION_CATEGORIES;
@@ -72,48 +71,24 @@ const EMOTION_TONE = {
   scared:       'white',
 };
 
-// scene tones — picked per scene category
+// status-flow tones. boot/network are the only non-emotion categories
+// toned here; every `scene` category sets its own tone in the
+// scenes-arc-pack-* files.
 const SCENE_TONE = {
-  weather:    'cyan',
   boot:       'red',
   network:    'cyan',
-  clock:      'cyan',
-  music:      'rose',
-  timer:      'orange',
-  cooking:    'orange',
-  walking:    'green',
-  celebrate:  'warm',
-  night:      'purple',
-  fitness:    'red',
-  call:       'green',
-  message:    'cyan',
-  camera:     'white',
-  navigation: 'cyan',
-  gift:       'rose',
-  coffee:     'warm',
-  plant:      'green',
-  morning:    'warm',
-  gaming:     'purple',
-  calendar:   'cyan',
 };
 
-// scene tones — per-variant overrides (variants in the same category can
-// each have their own emotional temperature). Format: 'category-variant-id'.
+// per-variant tone overrides for the status flows (a single category can
+// hold variants of different emotional temperature).
 const SCENE_VARIANT_TONE = {
-  // weather: sun=warm, rain=blue, cloudy=cyan, snow=white, storm=purple
-  'weather-sunny':        'warm',
-  'weather-rainy':        'blue',
-  'weather-cloudy':       'cyan',
-  'weather-snow':         'white',
-  'weather-storm':        'purple',
-
   // boot: single brand-clean flow, all cyan
   'boot-poweron':            'cyan',
   'boot-checks-personal':    'cyan',
   'boot-credits':            'cyan',
   'boot-ready-personal':     'cyan',
 
-  // network: cyan for in-progress, red for failures, purple for BLE
+  // network: cyan for in-progress, red for failures, purple for Bluetooth
   'network-wifi-scan':       'cyan',
   'network-wifi-connect':    'cyan',
   'network-wifi-retry':      'orange',
@@ -121,86 +96,6 @@ const SCENE_VARIANT_TONE = {
   'network-bt-scan':         'purple',
   'network-bt-paired':       'purple',
   'network-server-error':    'red',
-
-  // clock: alarm screams red, others stay cyan
-  'clock-digital':        'cyan',
-  'clock-analog':         'cyan',
-  'clock-alarm':          'red',
-
-  // music: notes are rose, bars are cyan (eq look), wave is purple (dreamy)
-  'music-notes':          'rose',
-  'music-bars':           'cyan',
-  'music-wave':           'purple',
-
-  // timer: countdown burns warm/orange, hourglass = warm sand, progress = cyan
-  'timer-countdown':      'orange',
-  'timer-progress':       'cyan',
-  'timer-hourglass':      'warm',
-
-  // cooking: pan = red (fire), pot = blue (water steam)
-  'cooking-pan':          'red',
-  'cooking-pot':          'blue',
-
-  // walking: footprints = green (nature), runner = red (energy)
-  'walking-footprints':   'green',
-  'walking-runner':       'red',
-
-  // celebrate: trophy gold; confetti + firework opt into multi-color renderers
-  'celebrate-trophy':     'warm',
-  'celebrate-confetti':   'multi',
-  'celebrate-firework':   'multi',
-
-  // night: moon dreamy purple, starfield white
-  'night-moon':           'purple',
-  'night-stars':          'white',
-
-  // fitness: heart rate red, steps green (health), dumbbell warm
-  'fitness-hr':           'red',
-  'fitness-steps':        'green',
-  'fitness-dumbbell':     'warm',
-
-  // call: incoming green, active cyan, missed red
-  'call-incoming':        'green',
-  'call-active':          'cyan',
-  'call-missed':          'red',
-
-  // message: typing cyan, envelope white, bubbles warm
-  'message-typing':       'cyan',
-  'message-envelope':     'white',
-  'message-bubbles':      'warm',
-
-  // camera: shutter white (flash), focus cyan
-  'camera-shutter':       'white',
-  'camera-focus':         'cyan',
-
-  // navigation: compass cyan, pin red, arrow green
-  'navigation-compass':   'cyan',
-  'navigation-pin':       'red',
-  'navigation-arrow':     'green',
-
-  // gift: wrapped rose, opened warm
-  'gift-wrapped':         'rose',
-  'gift-open':            'warm',
-
-  // coffee: both warm (caramel)
-  'coffee-pour':          'warm',
-  'coffee-cup':           'warm',
-
-  // plant: growing green, watering blue
-  'plant-grow':           'green',
-  'plant-water':          'blue',
-
-  // morning: sunrise warm, alarm rays red (urgent)
-  'morning-sunrise':      'warm',
-  'morning-alarm-rays':   'red',
-
-  // gaming: pad purple (gamer aesthetic), powerup warm/gold
-  'gaming-pad':           'purple',
-  'gaming-powerup':       'warm',
-
-  // calendar: date cyan, reminder red
-  'calendar-date':        'cyan',
-  'calendar-reminder':    'red',
 };
 
 // apply
@@ -211,7 +106,7 @@ for (const k of Object.keys(cats)) {
   if (TONES[tone]) cats[k].tone = tone;
   else cats[k].tone = 'cyan';
 
-  // Per-variant tone overrides (mostly for scenes).
+  // Per-variant tone overrides (status flows).
   if (cats[k].variants) {
     for (const v of cats[k].variants) {
       const override = SCENE_VARIANT_TONE[v.id];
