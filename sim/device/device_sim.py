@@ -136,9 +136,14 @@ class AdpcmDecoder:
 # ============================================================================
 
 class DLuniceSimulator:
-    def __init__(self, server_url: str, codec_type: str):
+    def __init__(self, server_url: str, codec_type: str,
+                 device_token: str = "", mac: str = "SIMDEV000001"):
         self.server_url = server_url
         self.codec_type = codec_type
+        # Production WS auth identity (see WsProtocol.cpp / ws/device.py).
+        # device_token is sim-only; supply via --device-token or env.
+        self.device_token = device_token
+        self.mac = mac
         self.ws = None
         self.recording = False
         self.playing = False
@@ -239,14 +244,22 @@ class DLuniceSimulator:
                 self.ws = ws
                 print("[CONNECTED] WebSocket connected")
 
-                # Send handshake
+                # Production auth handshake (matches firmware createAuthMessage
+                # and the server's _authenticate_device in ws/device.py).
                 handshake = json.dumps({
-                    "cmd": "dLunice_handshake",
-                    "dLunice_id": "SIM_DLuniCE_001",
-                    "firmware_version": "2.0.0-sim",
-                    "dLunice_name": "Luni-Simulator"
+                    "type": "auth",
+                    "id": str(int(time.time() * 1000)),
+                    "ts": int(time.time() * 1000),
+                    "payload": {
+                        "device_token": self.device_token,
+                        "mac": self.mac,
+                        "fw_version": "2.0.0-sim",
+                        "model": "Luni-C5",
+                    },
                 })
                 await ws.send(handshake)
+                print(f"[AUTH] Sent auth (mac={self.mac}, "
+                      f"token={'set' if self.device_token else 'EMPTY'})")
 
                 # Start audio input stream
                 stream = sd.InputStream(
@@ -355,7 +368,8 @@ class DLuniceSimulator:
 
 
 async def main(args):
-    sim = DLuniceSimulator(args.server, args.codec)
+    sim = DLuniceSimulator(args.server, args.codec,
+                           device_token=args.device_token, mac=args.mac)
     await sim.run()
 
 
@@ -365,5 +379,11 @@ if __name__ == "__main__":
                         help="Server WebSocket URL")
     parser.add_argument("--codec", choices=["opus", "adpcm"], default="adpcm",
                         help="Audio codec (default: adpcm)")
+    parser.add_argument("--device-token", type=str,
+                        default=os.environ.get("LUNI_DEVICE_TOKEN", ""),
+                        help="Device token for WS auth (or env LUNI_DEVICE_TOKEN)")
+    parser.add_argument("--mac", type=str,
+                        default=os.environ.get("LUNI_DEVICE_MAC", "SIMDEV000001"),
+                        help="Device MAC / id, colon-less (or env LUNI_DEVICE_MAC)")
     args = parser.parse_args()
     asyncio.run(main(args))

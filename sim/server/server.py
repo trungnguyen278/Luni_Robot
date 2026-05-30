@@ -309,6 +309,29 @@ async def handle_dLunice(websocket, args):
                 # Handle handshake
                 try:
                     data = json.loads(message)
+                    # Production auth handshake (matches firmware + ws/device.py).
+                    if data.get('type') == 'auth':
+                        payload = data.get('payload', {})
+                        session.dLunice_id = payload.get('mac', 'unknown')
+                        token = payload.get('device_token', '')
+                        expected = os.environ.get('LUNI_SIM_EXPECTED_TOKEN')
+                        ok = (expected is None) or (token == expected)
+                        await websocket.send(json.dumps({
+                            "type": "auth_result",
+                            "id": data.get('id'),
+                            "payload": {
+                                "status": "ok" if ok else "fail",
+                                "reason": None if ok else "token_mismatch",
+                            },
+                        }))
+                        print(f"  [AUTH] mac={session.dLunice_id} "
+                              f"fw={payload.get('fw_version', '?')} -> "
+                              f"{'ok' if ok else 'fail'}")
+                        if not ok:
+                            await websocket.close(code=4001, reason="auth_failed")
+                            return
+                        continue
+                    # Back-compat: legacy audio-sim handshake.
                     if data.get('cmd') == 'dLunice_handshake':
                         session.dLunice_id = data.get('dLunice_id', 'unknown')
                         print(f"  [HANDSHAKE] DLunice ID: {session.dLunice_id}")
