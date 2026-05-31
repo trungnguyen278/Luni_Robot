@@ -222,7 +222,10 @@ bool DeviceProfile::setup(AppController& app)
     // =========================================================
     auto network_mgr = std::make_unique<NetworkManager>();
 
-    const std::string default_ws = "ws://lunirobot.io.vn/ws/device";
+    // Production endpoint is behind Cloudflare (TLS only). Default to wss://
+    // so an unprovisioned unit still reaches the server; the app may override
+    // this via BLE provisioning (see Luni_App AppConfig.defaultDeviceWsUrl).
+    const std::string default_ws = "wss://lunirobot.io.vn/ws/device";
 
     NetworkManager::Config net_cfg{};
     net_cfg.wifi_ssid    = user.wifi_ssid;

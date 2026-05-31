@@ -375,7 +375,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Luni V2 DLunice Simulator")
-    parser.add_argument("--server", type=str, default="ws://localhost:8000/ws",
+    parser.add_argument("--server", type=str, default="ws://localhost:8000/ws/device",
                         help="Server WebSocket URL")
     parser.add_argument("--codec", choices=["opus", "adpcm"], default="adpcm",
                         help="Audio codec (default: adpcm)")

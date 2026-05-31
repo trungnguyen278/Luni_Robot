@@ -69,7 +69,9 @@ public:
     // Call every frame with delta time in ms
     void update(GfxEngine& gfx, float dt_ms);
 
-    // Pick random variant from a category (with recency filter)
+    // Pick random variant from a category (with recency filter).
+    // The `moon` category is special-cased: it never picks randomly — the
+    // variant is the one matching tonight's lunar day (see pickMoonVariant).
     const VariantDef* pickVariant(const char* categoryKey);
 
     // Idle loop management
@@ -107,6 +109,11 @@ private:
     float idle_timer_ms_ = 0;
     float idle_interval_ms_ = 4000;
     const CategoryDef* pickIdleCategory();
+
+    // Deterministic moon-phase variant for tonight's lunar day (from
+    // scene_data_.lunar_day, fed by the server). Mirrors the JSX
+    // LuniMoon.sceneForLunarDay() mapping.
+    const VariantDef* pickMoonVariant();
 
     SceneData scene_data_;
 };

@@ -1,6 +1,7 @@
 #include "SceneManager.hpp"
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include "esp_log.h"
 
 static const char* TAG = "SceneManager";
@@ -47,6 +48,13 @@ void SceneManager::exitScene() {
 }
 
 const VariantDef* SceneManager::pickVariant(const char* categoryKey) {
+    // The moon is never random — it always shows tonight's lunar phase.
+    // This covers both idle (tickIdle) and explicit showScene("moon").
+    if (strcmp(categoryKey, "moon") == 0) {
+        const VariantDef* mv = pickMoonVariant();
+        if (mv) return mv;
+    }
+
     const CategoryDef* cat = findCategory(categoryKey);
     if (!cat || cat->variant_count == 0) return nullptr;
 
@@ -78,6 +86,46 @@ const VariantDef* SceneManager::pickVariant(const char* categoryKey) {
     recent_head_ = (recent_head_ + 1) % RECENT_SIZE;
 
     return pick;
+}
+
+// Nearest of the 8 canonical phases (i/8) to a synodic position p∈[0,1),
+// measured circularly. Mirrors sceneIdForP() in ui_design/scenes-moon.jsx.
+static int moonIndexForP(float p) {
+    p -= floorf(p);
+    int best = 0;
+    float bestd = 9.0f;
+    for (int i = 0; i < 8; i++) {
+        float d = fabsf((float)i / 8.0f - p);
+        if (d > 0.5f) d = 1.0f - d;
+        if (d < bestd) { bestd = d; best = i; }
+    }
+    return best;
+}
+
+const VariantDef* SceneManager::pickMoonVariant() {
+    const CategoryDef* cat = findCategory("moon");
+    if (!cat || cat->variant_count == 0) return nullptr;
+
+    constexpr float SYNODIC = 29.530588853f;
+    int idx;
+
+    if (scene_data_.lunar_day >= 1 && scene_data_.lunar_day <= 30) {
+        // Server-provided âm lịch day (sent on connect / day change).
+        float p = (float)((scene_data_.lunar_day - 1) % 30) / SYNODIC;
+        idx = moonIndexForP(p);
+    } else if (scene_data_.unix_time > 0) {
+        // Fallback: compute phase from the synced clock (port of moonPhaseP).
+        // Reference new moon: 2000-01-06 18:14 UTC = 10962.7597 days since epoch.
+        const double NEWREF_DAYS = 10962.7597;
+        double days = (double)scene_data_.unix_time / 86400.0;
+        double age = fmod(days - NEWREF_DAYS, (double)SYNODIC);
+        if (age < 0) age += SYNODIC;
+        idx = moonIndexForP((float)(age / SYNODIC));
+    } else {
+        idx = 0;  // not synced yet → Sóc
+    }
+
+    return &cat->variants[idx % cat->variant_count];
 }
 
 bool SceneManager::isCategoryRecent(const char* key) const {

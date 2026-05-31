@@ -288,6 +288,7 @@ cases of the same scene look or read alike.
 | Scene     | Cases | Variants                                                                                     |
 | --------- | ----- | -------------------------------------------------------------------------------------------- |
 | `weather` | 7     | sunny (`weather-window`) · cloudy · rainy · storm · snow · fog · windy                          |
+| `moon`    | 8     | trăng non/Sóc · lưỡi liềm đầu · thượng huyền · khuyết đầu · Rằm · khuyết cuối · hạ huyền · liềm tàn |
 | `call`    | 3     | incoming · outgoing · missed                                                                  |
 | `message` | 3     | chat · incoming · sent                                                                        |
 
@@ -316,6 +317,32 @@ Falls back to the first variant (sunny / incoming / chat) for an unknown
 state. Adding a new case = push another variant onto the category's
 `variants` array; nothing else changes (no new category, so the
 authoritative KEYS order in `scenes-arc-pack-3b.jsx` is untouched).
+
+**`moon` — the lunar multi-case scene.** Luni *is* the moon, so the month
+is a first-class state. `scenes-moon.jsx` adds a `moon` category where
+**Luni's own body is the moon**. Per the identity rule (eyes are Luni),
+each phase story **opens and closes on the signature cyan eyes**: the
+canonical centered pair shows first, the moon disc then *materializes
+around those same eyes* (they draw together and shrink onto the disc), the
+story plays, the disc dissolves, and the eyes return to their signature
+pose. Each phase is its own long vignette (≥22s) with a distinct mood:
+
+  Sóc (mùng 1) ngủ say (sao băng vụt qua) → lưỡi liềm bừng tỉnh → thượng
+  huyền leo dốc trời → khuyết đầu háo hức (đèn lồng thắp dần) → **RẰM**
+  tròn đầy an nhiên (mắt hiền, quầng sáng dịu, đèn lồng bay) → khuyết cuối
+  mãn nguyện → hạ huyền ngáp dài → liềm tàn về nghỉ → vòng về Sóc.
+
+The phone app conveys phase only by how brightly it draws the moon glyph;
+on the TFT that reads nearly the same every night, so each phase here is
+its own vignette (lit fraction + face mood + props + beat). The host
+picks tonight's story by lunar date via `window.LuniMoon`:
+
+```js
+showScene('moon', LuniMoon.sceneId());            // tonight's ngày âm lịch
+showScene('moon', LuniMoon.sceneForLunarDay(15)); // a specific âm lịch day (Rằm)
+```
+
+The 30 lunar days fold onto the 8 phase stories (nearest canonical phase).
 
 ---
 
@@ -486,6 +513,8 @@ scenes-weather.jsx           ← multi-case WEATHER: append cloudy/rainy/storm/s
                                fog/windy onto cats.weather (per-variant tones)
 scenes-comms.jsx             ← multi-case CALL (outgoing/missed) + MESSAGE
                                (incoming/sent) appended onto their categories
+scenes-moon.jsx              ← multi-case MOON: new `moon` category, one story
+                               per lunar phase + window.LuniMoon date hookup
 app.jsx                      ← viewer UI (Color/Mono + Idle toggles, 3 sections)
 README.md                    ← onboarding / quick start (read alongside this)
 REQUIREMENTS.md              ← this file
@@ -513,7 +542,8 @@ REQUIREMENTS.md              ← this file
 17. scenes-arc-pack-3b.jsx  ← define 6 scene-arc videos + authoritative KEYS order
 18. scenes-weather.jsx      ← append weather cases: cloudy/rainy/storm/snow/fog/windy
 19. scenes-comms.jsx        ← append call (outgoing/missed) + message (incoming/sent)
-20. app.jsx                 ← consumes
+20. scenes-moon.jsx         ← new `moon` category (8 phase stories) + KEYS splice
+21. app.jsx                 ← consumes
 ```
 
 ### Architecture note — who owns what
