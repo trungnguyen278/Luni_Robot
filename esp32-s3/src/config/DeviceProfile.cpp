@@ -362,7 +362,16 @@ bool DeviceProfile::setup(AppController& app)
         });
         uart_bridge->onDeviceCmd([](uart_proto::ControlCmd cmd,
                                     const uint8_t* data, size_t len) {
-            if (cmd == uart_proto::ControlCmd::BLE_PIN && len > 0 && len < 8) {
+            if (cmd == uart_proto::ControlCmd::SET_EMOTION && len > 0) {
+                // Emotion key string from the server (relayed by C5). Render the
+                // matching category; SceneManager picks a random variant in it.
+                char key[32];
+                size_t n = (len < sizeof(key) - 1) ? len : sizeof(key) - 1;
+                memcpy(key, data, n);
+                key[n] = '\0';
+                ESP_LOGI("UartDev", "SET_EMOTION: %s", key);
+                SceneManager::instance().showEmotion(key);
+            } else if (cmd == uart_proto::ControlCmd::BLE_PIN && len > 0 && len < 8) {
                 auto& sd = SceneManager::instance().getSceneData();
                 memcpy(sd.ble_pin, data, len);
                 sd.ble_pin[len] = '\0';

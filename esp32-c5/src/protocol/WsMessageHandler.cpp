@@ -111,6 +111,23 @@ void WsMessageHandler::handleSetEmotion(cJSON* payload, NetworkManager* net)
     else if (strcmp(e, "cool") == 0)      emo = state::EmotionState::COOL;
 
     StateManager::instance().setEmotionState(emo);
+
+    // Forward the FULL emotion key string to S3 so it can render any of the 45
+    // emotion categories (the enum above only covers C5's own state tracking and
+    // is limited to ~13 values). S3's DEVICE_CMD handler maps this key to
+    // SceneManager::showEmotion(key), which plays a random variant in that list.
+    size_t keylen = strlen(e);
+    if (keylen > 0 && keylen < uart_proto::MAX_PAYLOAD - 1) {
+        uint8_t cmd_payload[uart_proto::MAX_PAYLOAD];
+        cmd_payload[0] = (uint8_t)uart_proto::ControlCmd::SET_EMOTION;
+        memcpy(&cmd_payload[1], e, keylen);
+        uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+        size_t flen = uart_proto::buildFrame(frame, uart_proto::MsgType::DEVICE_CMD,
+                                             cmd_payload, (uint8_t)(keylen + 1));
+        if (flen > 0) {
+            uart_write_bytes(UART_NUM_1, frame, flen);
+        }
+    }
 }
 
 void WsMessageHandler::handleSetScene(cJSON* payload, NetworkManager* net)
