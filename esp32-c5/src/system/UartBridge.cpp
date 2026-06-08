@@ -1,5 +1,7 @@
 #include "UartBridge.hpp"
 #include "esp_log.h"
+#include <cstring>
+#include <cstdlib>
 
 static const char* TAG = "UartBridge";
 
@@ -137,10 +139,73 @@ void UartBridge::rxLoop()
                 if (log_cb_) {
                     log_cb_(payload, payload_len);
                 }
+            } else if (type == (uint8_t)uart_proto::MsgType::IMAGE_CHUNK &&
+                       payload_len >= uart_proto::image::CHUNK_HDR) {
+                handleImageChunk(payload, payload_len);
             }
         }
     }
 
     ESP_LOGW(TAG, "RX task ended");
+    resetImage();
     vTaskDelete(nullptr);
+}
+
+// Reassemble a JPEG from IMAGE_CHUNK frames; fire image_cb_ on the last chunk.
+void UartBridge::handleImageChunk(const uint8_t* p, uint8_t len)
+{
+    namespace im = uart_proto::image;
+    uint16_t seq   = (uint16_t)(p[0] | (p[1] << 8));
+    uint8_t  flags = p[2];
+    const uint8_t* data = p + im::CHUNK_HDR;
+    size_t data_len = len - im::CHUNK_HDR;
+
+    if (flags & im::FLAG_FIRST) {
+        resetImage();
+        if (data_len < im::FIRST_HDR) return;
+        uint32_t total = (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+                         ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+        if (total == 0 || total > 64 * 1024) {
+            ESP_LOGW(TAG, "image too big/zero: %lu", (unsigned long)total);
+            return;
+        }
+        img_buf_ = (uint8_t*)malloc(total);
+        if (!img_buf_) {
+            ESP_LOGE(TAG, "image malloc %lu failed", (unsigned long)total);
+            return;
+        }
+        img_total_ = total;
+        img_recv_  = 0;
+        img_seq_   = 0;
+        data     += im::FIRST_HDR;
+        data_len -= im::FIRST_HDR;
+    }
+
+    if (!img_buf_) return;                 // a non-first chunk with no buffer
+    if (seq != img_seq_) {                 // lost/out-of-order chunk → abort frame
+        ESP_LOGW(TAG, "image seq gap %u != %u, drop frame", seq, img_seq_);
+        resetImage();
+        return;
+    }
+    if (img_recv_ + data_len > img_total_) { resetImage(); return; }
+
+    memcpy(img_buf_ + img_recv_, data, data_len);
+    img_recv_ += data_len;
+    img_seq_++;
+
+    if (flags & im::FLAG_LAST) {
+        if (img_recv_ == img_total_ && image_cb_) {
+            ESP_LOGI(TAG, "image complete: %zu bytes", img_total_);
+            image_cb_(img_buf_, img_total_);
+        }
+        resetImage();
+    }
+}
+
+void UartBridge::resetImage()
+{
+    if (img_buf_) { free(img_buf_); img_buf_ = nullptr; }
+    img_total_ = 0;
+    img_recv_  = 0;
+    img_seq_   = 0;
 }

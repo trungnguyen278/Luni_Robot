@@ -1,2 +1,4 @@
 dependencies:
   78/esp-opus: ">=1.0.0"
+  # Camera (Freenove ESP32-S3-WROOM CAM / OV2640). Paired with -DLUNI_ENABLE_CAMERA.
+  espressif/esp32-camera: "^2.0.0"

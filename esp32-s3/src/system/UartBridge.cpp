@@ -95,6 +95,58 @@ bool UartBridge::sendLogEntry(const uint8_t* data, size_t len)
     return written == (int)frame_len;
 }
 
+bool UartBridge::sendImage(const uint8_t* jpeg, size_t len, uint16_t width, uint16_t height)
+{
+    namespace up = uart_proto;
+    if (!jpeg || len == 0) return false;
+
+    uint8_t payload[up::MAX_PAYLOAD];
+    uint8_t frame[up::MAX_FRAME_SIZE];
+    uint16_t seq = 0;
+    size_t off = 0;
+    bool first = true;
+
+    while (off < len) {
+        size_t p = 0;
+        payload[p++] = (uint8_t)(seq & 0xFF);
+        payload[p++] = (uint8_t)(seq >> 8);
+        size_t flags_idx = p++;            // filled in once we know FIRST/LAST
+        uint8_t flags = 0;
+
+        if (first) {
+            flags |= up::image::FLAG_FIRST;
+            payload[p++] = (uint8_t)(len & 0xFF);
+            payload[p++] = (uint8_t)((len >> 8) & 0xFF);
+            payload[p++] = (uint8_t)((len >> 16) & 0xFF);
+            payload[p++] = (uint8_t)((len >> 24) & 0xFF);
+            payload[p++] = (uint8_t)(width & 0xFF);
+            payload[p++] = (uint8_t)(width >> 8);
+            payload[p++] = (uint8_t)(height & 0xFF);
+            payload[p++] = (uint8_t)(height >> 8);
+            first = false;
+        }
+
+        size_t room = up::MAX_PAYLOAD - p;
+        size_t n = (len - off < room) ? (len - off) : room;
+        for (size_t i = 0; i < n; ++i) payload[p++] = jpeg[off + i];
+        off += n;
+
+        if (off >= len) flags |= up::image::FLAG_LAST;
+        payload[flags_idx] = flags;
+
+        size_t frame_len = up::buildFrame(frame, up::MsgType::IMAGE_CHUNK,
+                                          payload, (uint8_t)p);
+        if (frame_len == 0) return false;
+        if (uart_write_bytes(cfg_.uart_num, frame, frame_len) != (int)frame_len)
+            return false;
+
+        seq++;
+        if ((seq & 0x07) == 0) vTaskDelay(1);  // yield so control frames aren't starved
+    }
+    ESP_LOGI(TAG, "Image sent: %zu bytes in %u chunks", len, (unsigned)seq);
+    return true;
+}
+
 void UartBridge::rxTaskEntry(void* arg)
 {
     static_cast<UartBridge*>(arg)->rxLoop();

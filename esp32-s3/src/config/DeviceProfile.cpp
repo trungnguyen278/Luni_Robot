@@ -10,6 +10,9 @@
 #include "system/UartBridge.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
+#include "system/MotionManager.hpp"
+#include "system/CameraManager.hpp"
+#include "WakeWordDetector.hpp"
 #include "config/BootSubsystems.hpp"
 #include "ui/SceneManager.hpp"
 
@@ -35,6 +38,18 @@
 #include "esp_log.h"
 
 static const char* TAG = "DeviceProfile";
+
+// Servo + IMU motion controller. File-scope so it persists after setup() and is
+// reachable (without capture) from the UART onDeviceCmd lambda for MOTION_CMD.
+static MotionManager s_motion;
+
+// Optional camera (lazy-init on first CAMERA_CAPTURE). Disabled unless built
+// with -DLUNI_ENABLE_CAMERA (see CameraManager).
+static CameraManager s_camera;
+
+// On-device wake word ("Hi Luni") — replaces the push-to-talk button. Active
+// only when built with -DLUNI_ENABLE_WAKEWORD + a trained model (WakeWordDetector).
+static WakeWordDetector s_wakeword;
 
 // =============================================================================
 // User settings from NVS
@@ -180,11 +195,10 @@ bool DeviceProfile::setup(AppController& app)
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         (i2s_port_t)PinConfig::I2S_NUM, I2S_ROLE_MASTER);
-    // Larger DMA buffer to prevent underrun during Opus decode jitter.
-    // 6 descriptors × 480 frames = 2880 samples (~60ms @ 48kHz).
-    // With only 4×240 (960 samples = 20ms), a single decode stall causes audible pop.
-    chan_cfg.dma_desc_num  = 6;
-    chan_cfg.dma_frame_num = 480;
+    // DMA buffer sizing from AudioConfig (tunable). Larger buffer absorbs Opus
+    // decode jitter and prevents speaker underrun pops.
+    chan_cfg.dma_desc_num  = AudioConfig::DMA_DESC_NUM;
+    chan_cfg.dma_frame_num = AudioConfig::DMA_FRAME_NUM;
 
     esp_err_t err = i2s_new_channel(&chan_cfg, &tx_chan, &rx_chan);
     if (err != ESP_OK) {
@@ -198,7 +212,7 @@ bool DeviceProfile::setup(AppController& app)
         .pin_bclk    = (gpio_num_t)PinConfig::I2S_BCLK,
         .pin_ws      = (gpio_num_t)PinConfig::I2S_WS,
         .pin_din     = (gpio_num_t)PinConfig::I2S_DIN,
-        .sample_rate = 48000
+        .sample_rate = AudioConfig::SAMPLE_RATE
     };
     auto mic = std::make_unique<I2SAudioInput_ICS43434>(rx_chan, mic_cfg);
 
@@ -207,7 +221,7 @@ bool DeviceProfile::setup(AppController& app)
         .pin_ws      = (gpio_num_t)PinConfig::I2S_WS,
         .pin_dout    = (gpio_num_t)PinConfig::I2S_DOUT,
         .pin_sd      = (gpio_num_t)PinConfig::SPK_SD,
-        .sample_rate = 48000
+        .sample_rate = AudioConfig::SAMPLE_RATE
     };
     auto speaker = std::make_unique<I2SAudioOutput_MAX98357>(tx_chan, spk_cfg);
     speaker->init();
@@ -228,6 +242,46 @@ bool DeviceProfile::setup(AppController& app)
     i2s_channel_enable(tx_chan);
     ESP_LOGI(TAG, "I2S TX enabled (clock source for full-duplex)");
     bootData.boot_check_results[BOOT_AUDIO] = BOOT_OK;
+
+    // =========================================================
+    // 4b. MOTION (PCA9685 servos + MPU6050 IMU on shared I2C)
+    // =========================================================
+    {
+        MotionManager::Config mcfg{
+            .sda         = PinConfig::I2C::SDA,
+            .scl         = PinConfig::I2C::SCL,
+            .i2c_port    = PinConfig::I2C::PORT,
+            .scl_hz      = (uint32_t)PinConfig::I2C::FREQ_HZ,
+            .pca_addr    = (uint8_t)PinConfig::I2C::PCA9685_ADDR,
+            .imu_addr    = (uint8_t)PinConfig::I2C::MPU6050_ADDR,
+            .pwm_freq_hz = PinConfig::Servo::PWM_FREQ_HZ,
+        };
+        if (s_motion.init(mcfg)) {
+            s_motion.start();
+            bootData.boot_check_results[BOOT_MOTION] = BOOT_OK;
+            ESP_LOGI(TAG, "MotionManager OK (servos%s)",
+                     s_motion.imuReady() ? " + IMU" : ", no IMU");
+        } else {
+            ESP_LOGW(TAG, "MotionManager init failed (servos unavailable)");
+            bootData.boot_check_results[BOOT_MOTION] = BOOT_FAIL;
+        }
+    }
+
+    // =========================================================
+    // 4c. WAKE WORD ("Hi Luni") — replaces the push-to-talk button
+    // =========================================================
+    // On detection, enter LISTENING with InputSource::WAKEWORD: this starts the
+    // mic (state-gated) and makes AppController send START to C5. Active only
+    // when built with -DLUNI_ENABLE_WAKEWORD + a trained model. The mic tap that
+    // feeds s_wakeword.feed() is the remaining integration step (docs/WAKEWORD.md).
+    s_wakeword.onDetected([]() {
+        auto& sm = StateManager::instance();
+        if (sm.getConnectionState() != state::ConnectionState::ONLINE) return;
+        if (sm.getInteractionState() == state::InteractionState::LISTENING) return;
+        sm.setInteractionState(state::InteractionState::LISTENING,
+                               state::InputSource::WAKEWORD);
+    });
+    s_wakeword.init();
 
     // =========================================================
     // 5. SPI BRIDGE (Communication with C5 via SPI3)
@@ -294,6 +348,7 @@ bool DeviceProfile::setup(AppController& app)
         UartBridge::Config uart_cfg{
             .pin_tx = (gpio_num_t)PinConfig::UART_TX,
             .pin_rx = (gpio_num_t)PinConfig::UART_RX,
+            .baud_rate = PinConfig::UART_BAUD,
         };
 
         if (!uart_bridge->init(uart_cfg)) {
@@ -302,7 +357,17 @@ bool DeviceProfile::setup(AppController& app)
         }
 
         UartBridge* uart_raw = uart_bridge.get();
-        uart_bridge->onStatusUpdate([uart_raw](uint8_t interaction, uint8_t connectivity,
+        AudioManager* audio_raw = audio_mgr.get();
+
+        // IMU events (e.g. fall) → forward to server as a small JSON log entry.
+        s_motion.setImuEventCb([uart_raw](const char* evt, float pitch, float roll) {
+            char buf[96];
+            int n = snprintf(buf, sizeof(buf),
+                "{\"type\":\"imu\",\"evt\":\"%s\",\"pitch\":%.0f,\"roll\":%.0f}",
+                evt, pitch, roll);
+            if (n > 0) uart_raw->sendLogEntry((const uint8_t*)buf, (size_t)n);
+        });
+        uart_bridge->onStatusUpdate([uart_raw, audio_raw](uint8_t interaction, uint8_t connectivity,
                                                 uint8_t system_state, uint8_t emotion) {
             auto& sm = StateManager::instance();
 
@@ -329,17 +394,30 @@ bool DeviceProfile::setup(AppController& app)
                     cur_inter == state::InteractionState::TRIGGERED) {
                     sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
                 }
+            } else if (new_inter == state::InteractionState::LISTENING) {
+                // The push-to-talk button now lives on the C5. When C5 reports
+                // LISTENING, open our microphone here. Use src=UNKNOWN (NOT BUTTON)
+                // so AppController::onInteractionStateChanged does NOT echo a START
+                // back to C5 (which originated it).
+                if (cur_inter != state::InteractionState::LISTENING) {
+                    if (cur_inter == state::InteractionState::SPEAKING && audio_raw) {
+                        audio_raw->stopSpeaking(true);  // barge-in
+                    }
+                    sm.setInteractionState(state::InteractionState::LISTENING,
+                                           state::InputSource::UNKNOWN);
+                }
             } else if (new_inter == state::InteractionState::PROCESSING &&
                        cur_inter != state::InteractionState::SPEAKING) {
                 sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
             } else if (new_inter == state::InteractionState::IDLE &&
-                       cur_inter == state::InteractionState::SPEAKING) {
+                       (cur_inter == state::InteractionState::SPEAKING ||
+                        cur_inter == state::InteractionState::LISTENING)) {
+                // Includes button-release: C5 reports IDLE while we are LISTENING.
                 sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::UNKNOWN);
             }
         });
 
         DisplayManager* disp_raw = display_mgr.get();
-        AudioManager* audio_raw = audio_mgr.get();
         uart_bridge->onControlCmd([disp_raw, audio_raw](uart_proto::ControlCmd cmd,
                                                           const uint8_t* data, size_t len) {
             switch (cmd) {
@@ -360,7 +438,7 @@ bool DeviceProfile::setup(AppController& app)
                 break;
             }
         });
-        uart_bridge->onDeviceCmd([](uart_proto::ControlCmd cmd,
+        uart_bridge->onDeviceCmd([uart_raw](uart_proto::ControlCmd cmd,
                                     const uint8_t* data, size_t len) {
             if (cmd == uart_proto::ControlCmd::SET_EMOTION && len > 0) {
                 // Emotion key string from the server (relayed by C5). Render the
@@ -376,6 +454,23 @@ bool DeviceProfile::setup(AppController& app)
                 memcpy(sd.ble_pin, data, len);
                 sd.ble_pin[len] = '\0';
                 ESP_LOGI("UartDev", "BLE PIN: %s", sd.ble_pin);
+            } else if (cmd == uart_proto::ControlCmd::MOTION_CMD && len > 0) {
+                // [action:1][param0:1][param1:1] — robot movement from server/app.
+                auto action = (uart_proto::MotionAction)data[0];
+                uint8_t p0 = (len > 1) ? data[1] : 0;
+                uint8_t p1 = (len > 2) ? data[2] : 0;
+                ESP_LOGI("UartDev", "MOTION_CMD action=0x%02X p0=%d p1=%d",
+                         (int)data[0], p0, p1);
+                s_motion.post(action, p0, p1);
+            } else if (cmd == uart_proto::ControlCmd::CAMERA_CAPTURE) {
+                // Capture one frame and stream it to C5 → server. Lazy-init the
+                // camera. No-op if built without LUNI_ENABLE_CAMERA.
+                if (!s_camera.isReady()) s_camera.init();
+                const uint8_t* buf = nullptr; size_t n = 0; uint16_t w = 0, h = 0;
+                if (s_camera.captureJpeg(&buf, &n, &w, &h) && buf && n > 0) {
+                    uart_raw->sendImage(buf, n, w, h);
+                }
+                s_camera.releaseFrame();
             }
         });
     } else {
@@ -384,25 +479,30 @@ bool DeviceProfile::setup(AppController& app)
     bootData.boot_check_results[BOOT_COMMS] = BOOT_OK;
 
     // =========================================================
-    // 7. TOUCH INPUT (Button)
+    // 7. TOUCH INPUT (Button) — MOVED to ESP32-C5
     // =========================================================
-    auto touch_input = std::make_unique<TouchInput>();
-    TouchInput::Config touch_cfg{
-        .pin = (gpio_num_t)PinConfig::BUTTON,
-        .active_low = true,
-        .long_press_ms = 1200
-    };
-
-    if (!touch_input->init(touch_cfg)) {
-        ESP_LOGE(TAG, "TouchInput init failed");
-        return false;
+    // The push-to-talk button now lives on the C5 (PinConfig::USER_BUTTON). S3
+    // follows the LISTENING state pushed by C5 over UART (see onStatusUpdate).
+    // A local button is only created if one is explicitly wired (BUTTON >= 0).
+    std::unique_ptr<TouchInput> touch_input;
+    if (PinConfig::BUTTON >= 0) {
+        touch_input = std::make_unique<TouchInput>();
+        TouchInput::Config touch_cfg{
+            .pin = (gpio_num_t)PinConfig::BUTTON,
+            .active_low = true,
+            .long_press_ms = 1200
+        };
+        if (!touch_input->init(touch_cfg)) {
+            ESP_LOGE(TAG, "TouchInput init failed");
+            return false;
+        }
+        touch_input->onEvent([&app](TouchInput::Event e) {
+            if (e == TouchInput::Event::PRESS)   app.postEvent(event::AppEvent::USER_BUTTON);
+            if (e == TouchInput::Event::RELEASE) app.postEvent(event::AppEvent::RELEASE_BUTTON);
+        });
+    } else {
+        ESP_LOGI(TAG, "Button on C5; S3 follows LISTENING via UART status");
     }
-
-    touch_input->onEvent([&app](TouchInput::Event e) {
-        if (e == TouchInput::Event::PRESS)   app.postEvent(event::AppEvent::USER_BUTTON);
-        if (e == TouchInput::Event::RELEASE) app.postEvent(event::AppEvent::RELEASE_BUTTON);
-    });
-    bootData.boot_check_results[BOOT_TOUCH] = BOOT_OK;
 
     // =========================================================
     // 8. ATTACH MODULES -> APP CONTROLLER

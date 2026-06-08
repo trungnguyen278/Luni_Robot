@@ -29,6 +29,8 @@ void WsMessageHandler::handleMessage(const ws::ParsedMessage& msg, NetworkManage
     case ws::MsgType::CONFIG_UPDATE:   handleConfigUpdate(msg.payload, net); break;
     case ws::MsgType::INTERACTION_MSG: handleInteractionMsg(msg.payload, net); break;
     case ws::MsgType::ACK:            handleAck(msg.payload, net); break;
+    case ws::MsgType::MOTION:         handleMotion(msg.payload, net); break;
+    case ws::MsgType::CAMERA_CAPTURE: handleCameraCapture(msg.payload, net); break;
     default:
         ESP_LOGW(TAG, "Unhandled message type: %s", ws::msgTypeToString(msg.type));
         break;
@@ -231,4 +233,51 @@ void WsMessageHandler::handleInteractionMsg(cJSON* payload, NetworkManager* net)
 void WsMessageHandler::handleAck(cJSON* payload, NetworkManager* net)
 {
     // ACK for tracked messages — currently no-op
+}
+
+void WsMessageHandler::handleMotion(cJSON* payload, NetworkManager* net)
+{
+    if (!payload) return;
+
+    // "action": string (home/stop/walk_fwd/walk_back/turn_left/turn_right/
+    //            gesture/set_joint) OR numeric MotionAction; optional p0, p1.
+    uart_proto::MotionAction action = uart_proto::MotionAction::HOME;
+    cJSON* act = cJSON_GetObjectItem(payload, "action");
+    if (cJSON_IsString(act)) {
+        const char* a = act->valuestring;
+        if      (!strcmp(a, "home"))       action = uart_proto::MotionAction::HOME;
+        else if (!strcmp(a, "stop"))       action = uart_proto::MotionAction::STOP;
+        else if (!strcmp(a, "walk_fwd"))   action = uart_proto::MotionAction::WALK_FWD;
+        else if (!strcmp(a, "walk_back"))  action = uart_proto::MotionAction::WALK_BACK;
+        else if (!strcmp(a, "turn_left"))  action = uart_proto::MotionAction::TURN_LEFT;
+        else if (!strcmp(a, "turn_right")) action = uart_proto::MotionAction::TURN_RIGHT;
+        else if (!strcmp(a, "gesture"))    action = uart_proto::MotionAction::GESTURE;
+        else if (!strcmp(a, "set_joint"))  action = uart_proto::MotionAction::SET_JOINT;
+    } else if (cJSON_IsNumber(act)) {
+        action = (uart_proto::MotionAction)act->valueint;
+    }
+
+    cJSON* p0j = cJSON_GetObjectItem(payload, "p0");
+    cJSON* p1j = cJSON_GetObjectItem(payload, "p1");
+    uint8_t p0 = cJSON_IsNumber(p0j) ? (uint8_t)p0j->valueint : 0;
+    uint8_t p1 = cJSON_IsNumber(p1j) ? (uint8_t)p1j->valueint : 0;
+
+    ESP_LOGI(TAG, "MOTION action=%d p0=%d p1=%d", (int)action, p0, p1);
+
+    uint8_t cmd_payload[] = { (uint8_t)uart_proto::ControlCmd::MOTION_CMD,
+                              (uint8_t)action, p0, p1 };
+    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::DEVICE_CMD,
+                                        cmd_payload, sizeof(cmd_payload));
+    if (len > 0) uart_write_bytes(UART_NUM_1, frame, len);
+}
+
+void WsMessageHandler::handleCameraCapture(cJSON* payload, NetworkManager* net)
+{
+    ESP_LOGI(TAG, "CAMERA_CAPTURE request");
+    uint8_t cmd_payload[] = { (uint8_t)uart_proto::ControlCmd::CAMERA_CAPTURE };
+    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::DEVICE_CMD,
+                                        cmd_payload, sizeof(cmd_payload));
+    if (len > 0) uart_write_bytes(UART_NUM_1, frame, len);
 }

@@ -32,6 +32,8 @@ enum class MsgType : uint8_t {
     CONFIG_UPDATE,
     INTERACTION_MSG,
     ACK,
+    MOTION,           // servo robot movement → relayed to S3 as MOTION_CMD
+    CAMERA_CAPTURE,   // request one camera frame → relayed to S3
 
     UNKNOWN = 0xFF,
 };
@@ -48,6 +50,8 @@ struct AudioFrameHeader {
 
 static constexpr uint8_t AUDIO_UPLINK   = 0xAA;
 static constexpr uint8_t AUDIO_DOWNLINK = 0xAB;
+// Camera image uplink (device → server): first byte tag, then raw JPEG bytes.
+static constexpr uint8_t IMAGE_UPLINK   = 0xAC;
 
 // JSON message builder helpers
 cJSON* createMessage(MsgType type, const char* id = nullptr);

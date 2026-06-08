@@ -30,6 +30,8 @@ static constexpr MsgTypeEntry MSG_TYPE_MAP[] = {
     { "config_update",     MsgType::CONFIG_UPDATE },
     { "interaction_msg",   MsgType::INTERACTION_MSG },
     { "ack",               MsgType::ACK },
+    { "motion",            MsgType::MOTION },
+    { "camera_capture",    MsgType::CAMERA_CAPTURE },
 };
 
 static constexpr size_t MSG_TYPE_MAP_SIZE = sizeof(MSG_TYPE_MAP) / sizeof(MSG_TYPE_MAP[0]);

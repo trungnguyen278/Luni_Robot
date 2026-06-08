@@ -15,6 +15,7 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/lib"
         "${CMAKE_SOURCE_DIR}/lib/network"
         "${CMAKE_SOURCE_DIR}/lib/spi"
+        "${CMAKE_SOURCE_DIR}/lib/touch"
     REQUIRES
         driver
         esp_wifi

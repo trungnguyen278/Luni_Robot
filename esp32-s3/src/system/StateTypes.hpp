@@ -90,6 +90,7 @@ enum class InputSource : uint8_t
     BUTTON,
     SERVER_COMMAND,
     SYSTEM,
+    WAKEWORD,
     UNKNOWN
 };
 

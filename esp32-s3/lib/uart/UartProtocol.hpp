@@ -27,7 +27,18 @@ enum class MsgType : uint8_t {
     OTA_STATUS     = 0x04,  // C5 -> S3: OTA state + progress
     LOG_ENTRY      = 0x05,  // S3 -> C5: log from S3 → forward to server
     DEVICE_CMD     = 0x06,  // C5 -> S3: command from server/app (emotion, scene, etc.)
+    IMAGE_CHUNK    = 0x07,  // S3 -> C5: a JPEG camera frame, split into chunks
 };
+
+// IMAGE_CHUNK payload: [seq:2 LE][flags:1][data...]
+// FIRST chunk's data begins with a header: [total_len:4 LE][width:2][height:2]
+namespace image {
+    static constexpr uint8_t FLAG_FIRST = 0x01;
+    static constexpr uint8_t FLAG_LAST  = 0x02;
+    static constexpr size_t  CHUNK_HDR  = 3;             // seq(2)+flags(1)
+    static constexpr size_t  FIRST_HDR  = 8;             // total(4)+w(2)+h(2)
+    static constexpr size_t  MAX_DATA   = MAX_PAYLOAD - CHUNK_HDR;  // 247
+}
 
 // Control command sub-types
 enum class ControlCmd : uint8_t {
@@ -48,6 +59,26 @@ enum class ControlCmd : uint8_t {
 
     BOOT_DONE      = 0x30,
     BLE_PIN        = 0x31,
+
+    // Motion (servo robot). Sent C5 -> S3 as a DEVICE_CMD sub-type.
+    // Payload: [action:1][param:0-3]  (see MotionAction).
+    MOTION_CMD     = 0x40,
+
+    // Camera. C5 -> S3 DEVICE_CMD: request one frame to be captured + streamed
+    // back to the server (as IMAGE_CHUNK frames). No payload.
+    CAMERA_CAPTURE = 0x50,
+};
+
+// Motion action codes carried in a MOTION_CMD payload[0].
+enum class MotionAction : uint8_t {
+    HOME       = 0x00,  // all joints to neutral
+    STOP       = 0x01,  // freeze / detach
+    WALK_FWD   = 0x02,  // param[0] = steps (0 = continuous)
+    WALK_BACK  = 0x03,
+    TURN_LEFT  = 0x04,
+    TURN_RIGHT = 0x05,
+    GESTURE    = 0x06,  // param[0] = gesture id
+    SET_JOINT  = 0x07,  // param[0] = joint index, param[1] = angle (0-180)
 };
 
 // Status payload (same as SPI)

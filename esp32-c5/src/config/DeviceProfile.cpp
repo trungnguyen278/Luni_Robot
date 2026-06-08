@@ -4,13 +4,17 @@
 #include "system/NetworkManager.hpp"
 #include "system/SpiBridge.hpp"
 #include "system/UartBridge.hpp"
+#include "protocol/WsProtocol.hpp"
 #include "system/BluetoothService.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
 
 #include "config/PinConfig.hpp"
 
+#include "TouchInput.hpp"
 #include "WifiService.hpp"
+#include <cstring>
+#include <cstdlib>
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -21,6 +25,38 @@
 #include "driver/gpio.h"
 
 static const char* TAG = "DeviceProfile";
+
+// User push-to-talk button (moved here from S3). File-scope so it lives for the
+// program lifetime after DeviceProfile::setup() returns.
+static TouchInput s_userButton;
+
+// ---- Voice-turn triggers (shared by the button and the legacy UART path) ----
+// Begin a listening turn: tell the server, reset downlink, and flip interaction
+// state to LISTENING. The state change is auto-pushed to S3 over UART (see
+// AppController::onInteractionStateChanged) so S3 opens its microphone.
+static void triggerListenStart(NetworkManager* net, SpiBridge* spi)
+{
+    if (!net) return;
+    // Mirror the old S3 guard: only start a turn when actually online.
+    if (StateManager::instance().getConnectionState() != state::ConnectionState::ONLINE) {
+        ESP_LOGW(TAG, "Listen START ignored: not ONLINE");
+        return;
+    }
+    net->endSpeakingSession();
+    if (spi) spi->resetDownlink();
+    net->sendText("START");
+    StateManager::instance().setInteractionState(
+        state::InteractionState::LISTENING, state::InputSource::BUTTON);
+}
+
+static void triggerListenEnd(NetworkManager* net)
+{
+    if (!net) return;
+    net->waitTxDrain(1000);
+    net->sendText("END");
+    StateManager::instance().setInteractionState(
+        state::InteractionState::IDLE, state::InputSource::BUTTON);
+}
 
 static bool shouldEraseNvs()
 {
@@ -273,6 +309,7 @@ bool DeviceProfile::setup(AppController& app)
     UartBridge::Config uart_cfg{
         .pin_tx = (gpio_num_t)PinConfig::UART_TX,
         .pin_rx = (gpio_num_t)PinConfig::UART_RX,
+        .baud_rate = PinConfig::UART_BAUD,
     };
 
     if (!uart_bridge->init(uart_cfg)) {
@@ -286,17 +323,11 @@ bool DeviceProfile::setup(AppController& app)
     uart_bridge->onControlCmd([net_ptr, spi_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
         switch (cmd) {
         case uart_proto::ControlCmd::START:
-            net_ptr->endSpeakingSession();
-            spi_ptr->resetDownlink();
-            net_ptr->sendText("START");
-            StateManager::instance().setInteractionState(
-                state::InteractionState::LISTENING, state::InputSource::BUTTON);
+            // Legacy path (button now lives on C5 — see s_userButton below).
+            triggerListenStart(net_ptr, spi_ptr);
             break;
         case uart_proto::ControlCmd::END:
-            net_ptr->waitTxDrain(1000);
-            net_ptr->sendText("END");
-            StateManager::instance().setInteractionState(
-                state::InteractionState::IDLE, state::InputSource::BUTTON);
+            triggerListenEnd(net_ptr);
             break;
         case uart_proto::ControlCmd::SET_VOLUME:
             if (len >= 1) {
@@ -350,6 +381,43 @@ bool DeviceProfile::setup(AppController& app)
     uart_bridge->onLogEntry([net_ptr](const uint8_t* data, size_t len) {
         net_ptr->sendText(reinterpret_cast<const char*>(data), len);
     });
+
+    // Forward a reassembled camera JPEG to the server. Tag the first byte with
+    // the binary-frame direction convention (0xAA=audio uplink, 0xAB=audio
+    // downlink, 0xAC=image uplink) so the server can route it. Then raw JPEG.
+    uart_bridge->onImageComplete([net_ptr](const uint8_t* jpeg, size_t len) {
+        uint8_t* buf = (uint8_t*)malloc(len + 1);
+        if (!buf) { ESP_LOGE(TAG, "image fwd malloc failed"); return; }
+        buf[0] = ws::IMAGE_UPLINK;   // 0xAC
+        memcpy(buf + 1, jpeg, len);
+        net_ptr->sendBinary(buf, len + 1);
+        free(buf);
+    });
+
+    // =========================================================
+    // 4b. USER PUSH-TO-TALK BUTTON (moved from S3)
+    // =========================================================
+    // net_ptr / spi_ptr stay valid after attachModules (objects live in
+    // AppController; only ownership moves). PRESS starts a listening turn,
+    // RELEASE ends it. The interaction-state change is pushed to S3 over UART.
+    if (PinConfig::USER_BUTTON >= 0) {
+        TouchInput::Config btn_cfg{
+            .pin = (gpio_num_t)PinConfig::USER_BUTTON,
+            .active_low = true,
+            .long_press_ms = 1500,
+            .debounce_ms = 30,
+        };
+        if (s_userButton.init(btn_cfg)) {
+            s_userButton.onEvent([net_ptr, spi_ptr](TouchInput::Event e) {
+                if (e == TouchInput::Event::PRESS)   triggerListenStart(net_ptr, spi_ptr);
+                if (e == TouchInput::Event::RELEASE) triggerListenEnd(net_ptr);
+            });
+            s_userButton.start();
+            ESP_LOGI(TAG, "User button ready on GPIO%d (push-to-talk)", PinConfig::USER_BUTTON);
+        } else {
+            ESP_LOGW(TAG, "User button init failed (non-fatal)");
+        }
+    }
 
     // =========================================================
     // 5. ATTACH MODULES -> APP CONTROLLER

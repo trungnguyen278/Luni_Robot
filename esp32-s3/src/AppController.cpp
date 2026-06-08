@@ -251,11 +251,14 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
 {
     ESP_LOGI(TAG, "Interaction: %d (src=%d)", (int)s, (int)src);
 
-    // Forward interaction state to C5 via UART
+    // Forward interaction state to C5 via UART.
+    // Trigger sources that own a listening turn: BUTTON (legacy) or WAKEWORD (now).
     if (uart) {
-        if (s == state::InteractionState::LISTENING && src == state::InputSource::BUTTON) {
+        bool trig = (src == state::InputSource::BUTTON ||
+                     src == state::InputSource::WAKEWORD);
+        if (s == state::InteractionState::LISTENING && trig) {
             uart->sendControlCmd(uart_proto::ControlCmd::START);
-        } else if (s == state::InteractionState::IDLE && src == state::InputSource::BUTTON) {
+        } else if (s == state::InteractionState::IDLE && trig) {
             uart->sendControlCmd(uart_proto::ControlCmd::END);
         }
     }
