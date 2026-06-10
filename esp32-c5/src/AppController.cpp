@@ -51,6 +51,13 @@ void AppController::attachModules(std::unique_ptr<NetworkManager> networkIn,
     uart    = std::move(uartIn);
 }
 
+void AppController::setProvisioningContext(std::vector<WifiInfo> networks,
+                                           BluetoothService::ConfigData cfg)
+{
+    prov_networks_ = std::move(networks);
+    prov_cfg_ = std::move(cfg);
+}
+
 bool AppController::init()
 {
     ESP_LOGI(TAG, "init()");
@@ -235,7 +242,14 @@ void AppController::startBleProvisioning()
 {
     if (ble_active_) return;
 
-    if (!ble_.init("Luni")) {
+    // Prefer the freshest scan: NetworkManager captures a live scan right before
+    // entering BLE provisioning at runtime; fall back to the boot scan otherwise.
+    const std::vector<WifiInfo>* networks = &prov_networks_;
+    if (network && !network->scannedNetworks().empty()) {
+        networks = &network->scannedNetworks();
+    }
+
+    if (!ble_.init("Luni", *networks, &prov_cfg_)) {
         ESP_LOGE(TAG, "BLE init failed");
         return;
     }
@@ -261,15 +275,20 @@ void AppController::startBleProvisioning()
                 nvs_set_str(h, "ws_url", cfg.ws_url.c_str());
             if (!cfg.user_id.empty())
                 nvs_set_str(h, "user_id", cfg.user_id.c_str());
+            if (!cfg.device_token.empty())
+                nvs_set_str(h, "device_token", cfg.device_token.c_str());
             if (!cfg.admin_secret.empty())
                 nvs_set_str(h, "admin_secret", cfg.admin_secret.c_str());
             nvs_commit(h);
             nvs_close(h);
         }
 
-        if (network) {
-            network->setCredentials(cfg.ssid, cfg.pass);
-        }
+        // Persist only — do NOT tear down BLE or connect live here. The app's
+        // pairing flow expects to keep the BLE link after COMMIT to send the
+        // RESTART command; on reboot the device reads the new creds + token from
+        // NVS and connects normally (device_token now present → no auth-fail loop).
+        // Releasing provisioning here would drop the app's connection mid-flow.
+        ESP_LOGI(TAG, "Provisioning saved to NVS; awaiting app RESTART");
     });
 
     ble_.start();

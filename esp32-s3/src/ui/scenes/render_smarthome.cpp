@@ -203,7 +203,7 @@ static void render_smarthome(GfxEngine& gfx, float t, const ColorContext& colors
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_GREEN], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIs(ph.name, "light")) {
@@ -218,10 +218,10 @@ static void render_smarthome(GfxEngine& gfx, float t, const ColorContext& colors
 }
 
 const VariantDef SMARTHOME_VARIANTS[] = {
-    {"smarthome-main", "Smart Home", 14000, TONE_NONE, render_smarthome},
+    {"home-lights", "Lights on", 14000, TONE_NONE, render_smarthome},
 };
 
 extern const CategoryDef CAT_SMARTHOME = {
-    "smarthome", "Smart Home", ContentKind::SCENE, TONE_GREEN,
+    "smarthome", "Smart Home", ContentKind::SCENE, TONE_WARM,
     SMARTHOME_VARIANTS, sizeof(SMARTHOME_VARIANTS) / sizeof(SMARTHOME_VARIANTS[0]), false
 };

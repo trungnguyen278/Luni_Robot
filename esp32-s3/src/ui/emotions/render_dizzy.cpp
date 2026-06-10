@@ -47,24 +47,35 @@ static void render_dizzy_wobble(GfxEngine& gfx, float t, const ColorContext& col
     gfx.drawLine(sx - 6, sy, sx + 6, sy, colors.accent, 3);
 }
 
-// dizzy-stars: X eyes (crossed lines) + 3 orbiting star shapes
-static void render_dizzy_stars(GfxEngine& gfx, float t, const ColorContext& colors) {
-    // X eyes
-    int16_t sz = 20;
-    gfx.drawLine(LX - sz, CY - sz, LX + sz, CY + sz, colors.eye, 8);
-    gfx.drawLine(LX + sz, CY - sz, LX - sz, CY + sz, colors.eye, 8);
-    gfx.drawLine(RX - sz, CY - sz, RX + sz, CY + sz, colors.eye, 8);
-    gfx.drawLine(RX + sz, CY - sz, RX - sz, CY + sz, colors.eye, 8);
+// Simple 5-pointed star using triangles (matches JSX starPath).
+static void fillStar(GfxEngine& gfx, int16_t cx, int16_t cy, float r1, float r2,
+                     uint16_t color, uint8_t alpha = 255) {
+    for (int i = 0; i < 5; i++) {
+        float a1 = -1.5708f + i * (TAU / 5.0f);
+        float a2 = a1 + TAU / 10.0f;
+        float a3 = a1 + TAU / 5.0f;
+        gfx.fillTriangle((int16_t)(cx + cosf(a1) * r1), (int16_t)(cy + sinf(a1) * r1),
+                         (int16_t)(cx + cosf(a2) * r2), (int16_t)(cy + sinf(a2) * r2),
+                         cx, cy, color, alpha);
+        gfx.fillTriangle((int16_t)(cx + cosf(a2) * r2), (int16_t)(cy + sinf(a2) * r2),
+                         (int16_t)(cx + cosf(a3) * r1), (int16_t)(cy + sinf(a3) * r1),
+                         cx, cy, color, alpha);
+    }
+}
 
-    // 3 orbiting star shapes (4-point stars as crossed lines)
-    for (int i = 0; i < 3; i++) {
-        float a = t * TAU * 1.5f + (float)i * (TAU / 3.0f);
-        float orbitR = 70.0f + sinf(t * TAU + (float)i) * 10.0f;
-        int16_t sx = (int16_t)(SCX + cosf(a) * orbitR);
-        int16_t sy = (int16_t)(CY + sinf(a) * orbitR * 0.5f);
-        int16_t ss = 6;
-        gfx.drawLine(sx, sy - ss, sx, sy + ss, colors.accent, 3);
-        gfx.drawLine(sx - ss, sy, sx + ss, sy, colors.accent, 3);
+// dizzy-stars: X eyes (crossed lines) + 4 KO stars orbiting overhead
+static void render_dizzy_stars(GfxEngine& gfx, float t, const ColorContext& colors) {
+    int16_t sz = 22;
+    gfx.drawLine(LX - sz, CY - sz, LX + sz, CY + sz, colors.eye, 9);
+    gfx.drawLine(LX + sz, CY - sz, LX - sz, CY + sz, colors.eye, 9);
+    gfx.drawLine(RX - sz, CY - sz, RX + sz, CY + sz, colors.eye, 9);
+    gfx.drawLine(RX + sz, CY - sz, RX - sz, CY + sz, colors.eye, 9);
+
+    for (int i = 0; i < 4; i++) {
+        float a = t * TAU + (float)i / 4.0f * TAU;
+        int16_t cx = (int16_t)(SCREEN_W / 2 + cosf(a) * 110.0f);
+        int16_t cy = (int16_t)(STATUS_H + 28 + sinf(a) * 12.0f);
+        fillStar(gfx, cx, cy, 8.0f, 3.0f, colors.accent, 204);
     }
 }
 

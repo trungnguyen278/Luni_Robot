@@ -30,6 +30,9 @@ public:
     void releaseFrame();
 
 private:
-    bool  ready_ = false;
-    void* fb_    = nullptr;   // camera_fb_t* (opaque to avoid the heavy include)
+    bool      ready_   = false;
+    // Software-encoded JPEG buffer (malloc'd by frame2jpg, owned by us). The raw
+    // RGB565 camera_fb_t is returned to the driver immediately after encoding.
+    uint8_t*  jpg_     = nullptr;
+    size_t    jpg_len_ = 0;
 };

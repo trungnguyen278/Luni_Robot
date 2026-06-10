@@ -265,7 +265,7 @@ static void render_flashlight(GfxEngine& gfx, float t, const ColorContext& color
 
     /* --- Eyes (always on top) ------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (phaseIn(ph.name, "sweep1", "reveal1", "sweep2", "reveal2")) {
@@ -280,7 +280,7 @@ static void render_flashlight(GfxEngine& gfx, float t, const ColorContext& color
 }
 
 const VariantDef FLASHLIGHT_VARIANTS[] = {
-    {"flashlight-main", "Main", 14000, TONE_NONE, render_flashlight},
+    {"flashlight-sweep", "Sweep & reveal", 14000, TONE_NONE, render_flashlight},
 };
 
 extern const CategoryDef CAT_FLASHLIGHT = {

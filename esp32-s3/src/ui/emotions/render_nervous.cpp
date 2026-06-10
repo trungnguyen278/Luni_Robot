@@ -25,14 +25,21 @@ static void render_nervous_sweat(GfxEngine& gfx, float t, const ColorContext& co
                      sx, sy - dr * 2, colors.accent, op);
 }
 
-// nervous-fidget: eyes sway left-right with slight height variation
+// nervous-fidget: darting pupils + body jitter + worried wavy mouth
 static void render_nervous_fidget(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float dx = sinf(t * TAU * 3.0f) * 5.0f;
-    float dy = cosf(t * TAU * 4.0f) * 2.0f;
-    int16_t h = (int16_t)(EYE_H * 0.88f + dy);
-
-    gfx.drawEye((int16_t)(LX + dx), (int16_t)(CY + dy), EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye((int16_t)(RX + dx), (int16_t)(CY - dy), EYE_W, h, EYE_RX, 0, colors.eye);
+    float dx = sinf(t * TAU * 5.0f) * 10.0f;
+    float sh = cosf(t * TAU * 9.0f) * 1.5f;
+    gfx.pushTransform();
+    gfx.translate(sh, 0.0f);
+    int16_t h = (int16_t)(EYE_H * 0.85f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.fillCircle((int16_t)(LX + dx), CY, 9, colors.bg);
+    gfx.fillCircle((int16_t)(RX + dx), CY, 9, colors.bg);
+    int16_t mx = SCREEN_W / 2, my = SCREEN_H - 26;
+    gfx.drawQuadBezier(mx - 18, my, mx - 9, my - 4, mx, my, colors.eye, 3);
+    gfx.drawQuadBezier(mx, my, mx + 9, my + 4, mx + 18, my, colors.eye, 3);
+    gfx.popTransform();
 }
 
 // nervous-gulp: normal eyes with throat-bob effect (small circle moving down at center)

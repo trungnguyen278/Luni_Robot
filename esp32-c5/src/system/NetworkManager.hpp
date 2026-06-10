@@ -2,8 +2,11 @@
 #include <memory>
 #include <functional>
 #include <string>
+#include <vector>
 #include <atomic>
 #include <cstring>
+
+#include "WifiService.hpp"   // WifiInfo
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -62,6 +65,10 @@ public:
     // OTA
     void checkOtaUpdate();
 
+    // Latest WiFi scan captured just before entering BLE provisioning, served
+    // to the app over BLE so it always sees a fresh, real network list.
+    const std::vector<WifiInfo>& scannedNetworks() const { return last_scan_; }
+
     // Access sub-managers
     WebSocketClient* getWsClient() { return ws_.get(); }
     OtaManager* getOtaManager() { return ota_.get(); }
@@ -77,6 +84,10 @@ private:
     void runConnectionStateMachine();
     void transition(state::ConnectionState to,
                     state::ConnectFailReason reason = state::ConnectFailReason::NONE);
+
+    // Scan WiFi and cache into last_scan_. Call right before transitioning into
+    // BLE_PROVISIONING so the app gets the freshest list.
+    void scanForProvisioning();
 
     // Heartbeat
     static void heartbeatTimerCb(void* arg);
@@ -101,8 +112,10 @@ private:
     state::ConnectFailReason last_fail_ = state::ConnectFailReason::NONE;
     uint8_t reconnect_attempts_ = 0;
     bool wifi_credentials_exist_ = false;
+    bool device_token_exists_ = false;
     bool was_online_ = false;
     bool awaiting_provision_ = false;
+    std::vector<WifiInfo> last_scan_;
 
     // Timers
     esp_timer_handle_t heartbeat_timer_ = nullptr;
@@ -112,5 +125,6 @@ private:
 
     std::atomic<bool> started_{false};
     std::atomic<bool> ws_connected_{false};
+    std::atomic<bool> ws_auth_failed_{false};
     std::atomic<bool> speaking_session_active_{false};
 };

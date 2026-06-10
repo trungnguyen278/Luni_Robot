@@ -5,14 +5,16 @@ static const char* TAG = "CameraManager";
 
 #ifdef LUNI_ENABLE_CAMERA
 #include "esp_camera.h"
+#include "img_converters.h"   // frame2jpg — software RGB565 -> JPEG encode
+#include "esp_heap_caps.h"
+#include <cstdlib>            // free()
 #include "config/PinConfig.hpp"
 #include "config/CameraConfig.hpp"
 
-bool CameraManager::init()
+// Fill the board-fixed pins + clock. Pixel format / frame size / fb settings are
+// left to the caller.
+static void applyBoardConfig(camera_config_t& cfg)
 {
-    if (ready_) return true;
-
-    camera_config_t cfg = {};
     cfg.pin_pwdn     = PinConfig::Camera::PWDN;
     cfg.pin_reset    = PinConfig::Camera::RESET;
     cfg.pin_xclk     = PinConfig::Camera::XCLK;
@@ -35,10 +37,20 @@ bool CameraManager::init()
     // backlight (see DisplayDriver). Avoid the collision.
     cfg.ledc_timer   = LEDC_TIMER_1;
     cfg.ledc_channel = LEDC_CHANNEL_1;
+}
 
-    cfg.pixel_format = PIXFORMAT_JPEG;
+bool CameraManager::init()
+{
+    if (ready_) return true;
+
+    camera_config_t cfg = {};
+    applyBoardConfig(cfg);
+    // Capture RAW RGB565, not JPEG: this module's hardware JPEG encoder is broken
+    // (NO-SOI), but raw RGB565 frames are clean. captureJpeg() encodes to JPEG in
+    // software (frame2jpg).
+    cfg.pixel_format = PIXFORMAT_RGB565;
     cfg.frame_size   = (framesize_t)CameraConfig::FRAME_SIZE;
-    cfg.jpeg_quality = CameraConfig::JPEG_QUALITY;
+    cfg.jpeg_quality = CameraConfig::JPEG_QUALITY;   // unused in RGB565 mode
     cfg.fb_count     = CameraConfig::FB_COUNT;
     cfg.fb_location  = CAMERA_FB_IN_PSRAM;
     cfg.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
@@ -49,7 +61,29 @@ bool CameraManager::init()
         return false;
     }
     ready_ = true;
-    ESP_LOGI(TAG, "Camera ready (QVGA JPEG)");
+
+    // Make sure auto-exposure / gain / white-balance are on and bias a bit
+    // brighter — captured frames were coming out near-black (JPEG only ~2KB).
+    sensor_t* s = esp_camera_sensor_get();
+    if (s) {
+        s->set_exposure_ctrl(s, 1);                 // AEC on
+        s->set_aec2(s, 1);                          // low-light AEC algorithm
+        s->set_gain_ctrl(s, 1);                     // AGC on
+        s->set_gainceiling(s, GAINCEILING_16X);     // allow more gain in dim light
+        s->set_whitebal(s, 1);                      // AWB on
+        s->set_awb_gain(s, 1);
+        s->set_brightness(s, 1);                    // -2..2, nudge brighter
+    }
+
+    // Warm-up: the OV2640 emits dark/half-exposed frames right after init while
+    // AEC/AGC converge. Pull and drop several so the first real capture is clean.
+    for (int i = 0; i < 8; ++i) {
+        camera_fb_t* fb = esp_camera_fb_get();
+        if (fb) esp_camera_fb_return(fb);
+    }
+
+    ESP_LOGI(TAG, "Camera ready (RGB565 QQVGA -> SW JPEG) PSRAM free=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return true;
 }
 
@@ -70,25 +104,53 @@ bool CameraManager::captureJpeg(const uint8_t** out, size_t* out_len,
     if (h) *h = 0;
     if (!ready_) return false;
 
-    releaseFrame();   // drop any previously held frame
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-        ESP_LOGW(TAG, "fb_get returned null");
+    releaseFrame();   // free any previously encoded JPEG
+
+    // Drop a few frames so AEC/AGC adjust to the current scene before we keep one
+    // (captures are on-demand and infrequent — the first frame is often stale/dark).
+    camera_fb_t* fb = nullptr;
+    for (int i = 0; i < 4; ++i) {
+        if (fb) esp_camera_fb_return(fb);
+        fb = esp_camera_fb_get();
+        if (!fb) {
+            ESP_LOGW(TAG, "fb_get returned null");
+            return false;
+        }
+    }
+
+    // Encode the raw RGB565 frame to JPEG in software (the hardware JPEG encoder
+    // on this OV2640 is broken). frame2jpg malloc's the output; we own it now and
+    // free it in releaseFrame(). Return the camera frame buffer straight away.
+    const uint16_t fw = (uint16_t)fb->width;
+    const uint16_t fh = (uint16_t)fb->height;
+    uint8_t* jpg = nullptr;
+    size_t   jlen = 0;
+    const bool ok = frame2jpg(fb, CameraConfig::SW_JPEG_QUALITY, &jpg, &jlen);
+    esp_camera_fb_return(fb);
+
+    if (!ok || !jpg || jlen < 2) {
+        ESP_LOGW(TAG, "frame2jpg failed (ok=%d len=%u)", ok ? 1 : 0, (unsigned)jlen);
+        if (jpg) free(jpg);
         return false;
     }
-    fb_ = fb;
-    if (out) *out = fb->buf;
-    if (out_len) *out_len = fb->len;
-    if (w) *w = (uint16_t)fb->width;
-    if (h) *h = (uint16_t)fb->height;
+
+    jpg_ = jpg;
+    jpg_len_ = jlen;
+    ESP_LOGI(TAG, "captured JPEG %u bytes (%ux%u)", (unsigned)jlen, fw, fh);
+
+    if (out) *out = jpg_;
+    if (out_len) *out_len = jpg_len_;
+    if (w) *w = fw;
+    if (h) *h = fh;
     return true;
 }
 
 void CameraManager::releaseFrame()
 {
-    if (fb_) {
-        esp_camera_fb_return((camera_fb_t*)fb_);
-        fb_ = nullptr;
+    if (jpg_) {
+        free(jpg_);
+        jpg_ = nullptr;
+        jpg_len_ = 0;
     }
 }
 

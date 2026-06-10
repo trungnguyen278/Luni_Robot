@@ -6,35 +6,28 @@
 using namespace geom;
 using namespace math;
 
-// focused-laser: very narrow eyes with bright center dots, no distraction
+// focused-laser: narrow eyes + bg pupils + a laser beam to the right edge
 static void render_focused_laser(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float sh = sinf(t * TAU * 4.0f) * 0.5f;
-    int16_t h = (int16_t)(EYE_H * 0.4f);
-    gfx.drawEye(LX, CY, EYE_W, h, 10, 0, colors.eye);
-    gfx.drawEye(RX, CY, EYE_W, h, 10, 0, colors.eye);
-
-    // Bright center dots (pulsing intensity)
-    float pulse_val = (sinf(t * TAU * 3.0f) + 1.0f) / 2.0f;
-    uint8_t dotAlpha = (uint8_t)(180 + pulse_val * 75.0f);
-    int16_t dotR = (int16_t)(4.0f + pulse_val * 2.0f);
-    gfx.fillCircle(LX, (int16_t)(CY + sh), dotR, colors.accent, dotAlpha);
-    gfx.fillCircle(RX, (int16_t)(CY - sh), dotR, colors.accent, dotAlpha);
+    float pulseI = 1.0f + sinf(t * TAU * 4.0f) * 0.1f;
+    int16_t w = (int16_t)(EYE_W * 0.9f), h = (int16_t)(EYE_H * 0.65f);
+    gfx.drawEye(LX, CY, w, h, 10, 0, colors.eye);
+    gfx.drawEye(RX, CY, w, h, 10, 0, colors.eye);
+    gfx.fillCircle(LX, CY, (int16_t)(6.0f * pulseI), colors.bg);
+    gfx.fillCircle(RX, CY, (int16_t)(6.0f * pulseI), colors.bg);
+    uint8_t op = (uint8_t)((0.25f + sinf(t * TAU * 6.0f) * 0.15f) * 255.0f);
+    gfx.drawLine(SCREEN_W / 2, CY, SCREEN_W, CY, colors.accent, 2, op);
 }
 
-// focused-scan: eyes have bg pupil circles that scan slowly left-right
+// focused-scan: eyes + scan-lock square brackets sweeping left-right
 static void render_focused_scan(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t h = (int16_t)(EYE_H * 0.55f);
-    gfx.drawEye(LX, CY, EYE_W, h, 14, 0, colors.eye);
-    gfx.drawEye(RX, CY, EYE_W, h, 14, 0, colors.eye);
-
-    // Scanning pupil circles
-    float scan = sinf(t * TAU * 0.4f) * 12.0f;
-    gfx.fillCircle((int16_t)(LX + scan), CY, 11, colors.bg);
-    gfx.fillCircle((int16_t)(RX + scan), CY, 11, colors.bg);
-
-    // Tiny bright center in each pupil
-    gfx.fillCircle((int16_t)(LX + scan), CY, 3, colors.accent, 200);
-    gfx.fillCircle((int16_t)(RX + scan), CY, 3, colors.accent, 200);
+    float phase = fmodf(t * 2.0f, 1.0f);
+    float dx = phase < 0.5f ? lerp(-14.0f, 14.0f, phase * 2.0f)
+                            : lerp(14.0f, -14.0f, (phase - 0.5f) * 2.0f);
+    int16_t h = (int16_t)(EYE_H * 0.7f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.strokeRect((int16_t)(LX + dx - 8), CY - 8, 16, 16, colors.bg, 3);
+    gfx.strokeRect((int16_t)(RX + dx - 8), CY - 8, 16, 16, colors.bg, 3);
 }
 
 // focused-target: eyes with concentric target rings, crosshair lines

@@ -92,87 +92,99 @@ static void render_normal_drift(GfxEngine& gfx, float t, const ColorContext& col
     gfx.drawEye((int16_t)(RX + dx), (int16_t)(CY + dy), EYE_W, h, EYE_RX, 0, colors.eye);
 }
 
-// normal-search: eyes scan L->R->L, pupils offset sinf
+// normal-search: pupils scan through a 7-point keyframe sequence (x+y)
 static void render_normal_search(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float scan = sinf(t * TAU) * 16.0f;
-    float b = blink(t, 0.5f, 0.06f);
+    static constexpr float sx[] = {0, -14, 14, 0, -8, 8, 0};
+    static constexpr float sy[] = {0, -2, -2, 0, 6, 6, 0};
+    constexpr int n = 7;
+    int idx = (int)clamp((float)((int)(t * n)), 0.0f, (float)(n - 1));
+    float e = ease::inOut(t * n - idx);
+    int nxt = (idx + 1) % n;
+    float dx = lerp(sx[idx], sx[nxt], e);
+    float dy = lerp(sy[idx], sy[nxt], e);
+    gfx.drawEyes(colors.eye);
+    gfx.fillCircle((int16_t)(LX + dx), (int16_t)(CY + dy), 11, colors.bg);
+    gfx.fillCircle((int16_t)(RX + dx), (int16_t)(CY + dy), 11, colors.bg);
+}
+
+// normal-look-up: pupils glance upward (eyes still) with a blink
+static void render_normal_look_up(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float phase = sinf(t * TAU - PI / 2.0f);
+    float dy = phase < 0.0f ? phase * 22.0f : 0.0f;
+    float b = blink(t, 0.9f, 0.06f);
     int16_t h = (int16_t)lerp((float)EYE_H, 4.0f, b);
     gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
     gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-    if (b < 0.3f) {
-        gfx.fillCircle((int16_t)(LX + scan), CY, 11, colors.bg);
-        gfx.fillCircle((int16_t)(RX + scan), CY, 11, colors.bg);
+    if (h > 30) {
+        gfx.fillCircle(LX, (int16_t)(CY + dy), 11, colors.bg);
+        gfx.fillCircle(RX, (int16_t)(CY + dy), 11, colors.bg);
     }
-}
-
-// normal-look-up: eyes glance upward with single blink
-static void render_normal_look_up(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float dy = sinf(t * TAU * 0.5f) * -12.0f;
-    float b = blink(t, 0.7f, 0.07f);
-    int16_t h = (int16_t)lerp((float)EYE_H, 4.0f, b);
-    gfx.drawEye(LX, (int16_t)(CY + dy), EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, (int16_t)(CY + dy), EYE_W, h, EYE_RX, 0, colors.eye);
 }
 
 // normal-tired-blink: frequent heavy blinks
 static void render_normal_tired_blink(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float b = fmaxf(fmaxf(blink(t, 0.2f, 0.1f), blink(t, 0.45f, 0.1f)),
-                    fmaxf(blink(t, 0.65f, 0.1f), blink(t, 0.88f, 0.1f)));
-    int16_t h = (int16_t)lerp((float)EYE_H * 0.85f, 4.0f, b);
-    gfx.drawEye(LX, CY + 6, EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY + 6, EYE_W, h, EYE_RX, 0, colors.eye);
+    float b = fmaxf(fmaxf(blink(t, 0.18f, 0.09f), blink(t, 0.5f, 0.09f)),
+                    blink(t, 0.82f, 0.09f));
+    int16_t h = (int16_t)lerp((float)EYE_H * 0.78f, 4.0f, b);
+    gfx.drawEye(LX, CY + 8, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY + 8, EYE_W, h, EYE_RX, 0, colors.eye);
 }
 
-// normal-stare: very still, minimal movement, one blink at t=0.7
+// normal-stare: very still, late blink + asymmetric end twitch (right eye)
 static void render_normal_stare(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float b = blink(t, 0.7f, 0.06f);
+    float tw = (t > 0.84f && t < 0.94f) ? sinf((t - 0.84f) / 0.1f * PI) * 6.0f : 0.0f;
+    float b = blink(t, 0.96f, 0.04f);
     int16_t h = (int16_t)lerp((float)EYE_H, 4.0f, b);
-    float micro = sinf(t * TAU * 0.3f) * 0.5f;
-    gfx.drawEye(LX, (int16_t)(CY + micro), EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, (int16_t)(CY + micro), EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye((int16_t)(RX + tw), CY, EYE_W, h, EYE_RX, 0, colors.eye);
 }
 
-// normal-peek: eyes narrow then widen periodically
+// normal-peek: pupils peek left/right through a 5-point sequence, with blink
 static void render_normal_peek(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float phase = (sinf(t * TAU * 2.0f) + 1.0f) / 2.0f;
-    int16_t h = (int16_t)lerp(EYE_H * 0.35f, (float)EYE_H, phase);
+    static constexpr float sx[] = {0, 14, 0, -14, 0};
+    constexpr int n = 5;
+    int idx = (int)clamp((float)((int)(t * n)), 0.0f, (float)(n - 1));
+    float dx = lerp(sx[idx], sx[(idx + 1) % n], ease::inOut(t * n - idx));
+    float b = blink(t, 0.55f, 0.06f);
+    int16_t h = (int16_t)lerp((float)EYE_H * 0.9f, 4.0f, b);
     gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
     gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-}
-
-// normal-pendulum: pupils swing left-right like pendulum
-static void render_normal_pendulum(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float swing = sinf(t * TAU) * 18.0f;
-    float b = blink(t, 0.5f, 0.06f);
-    int16_t h = (int16_t)lerp((float)EYE_H, 4.0f, b);
-    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-    if (b < 0.2f) {
-        gfx.fillCircle((int16_t)(LX + swing), CY, 12, colors.bg);
-        gfx.fillCircle((int16_t)(RX + swing), CY, 12, colors.bg);
+    if (h > 30) {
+        gfx.fillCircle((int16_t)(LX + dx), CY, 11, colors.bg);
+        gfx.fillCircle((int16_t)(RX + dx), CY, 11, colors.bg);
     }
 }
 
-// normal-puff: eyes + small cheek puff circles that pulse
-static void render_normal_puff(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float puff = (sinf(t * TAU * 2.0f) + 1.0f) / 2.0f;
-    gfx.drawEye(LX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY, EYE_W, EYE_H, EYE_RX, 0, colors.eye);
-    int16_t cr = (int16_t)lerp(4.0f, 10.0f, puff);
-    uint8_t op = (uint8_t)lerp(80.0f, 200.0f, puff);
-    gfx.fillCircle(LX - 6, CY + 46, cr, colors.accent, op);
-    gfx.fillCircle(RX + 6, CY + 46, cr, colors.accent, op);
+// normal-pendulum: pupils swing left-right (eyes always open)
+static void render_normal_pendulum(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float dx = sinf(t * TAU) * 12.0f;
+    gfx.drawEyes(colors.eye);
+    gfx.fillCircle((int16_t)(LX + dx), CY, 11, colors.bg);
+    gfx.fillCircle((int16_t)(RX + dx), CY, 11, colors.bg);
 }
 
-// normal-rem: closed eyes with rapid twitching
+// normal-puff: single cheek-puff pulse — eyes squish, big cheek ellipses
+static void render_normal_puff(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float puff = pulse(t, 0.5f, 0.18f);
+    int16_t h = (int16_t)((float)EYE_H * (1.0f - puff * 0.3f));
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    if (puff > 0.05f) {
+        uint8_t op = (uint8_t)(puff * 0.6f * 255.0f);
+        gfx.fillEllipse(28, CY + 18, 20, 14, colors.accent, op);
+        gfx.fillEllipse(SCREEN_W - 28, CY + 18, 20, 14, colors.accent, op);
+    }
+}
+
+// normal-rem: open eyes with darting pupils (lissajous) — dreaming
 static void render_normal_rem(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float twitch = sinf(t * TAU * 12.0f) * 2.5f;
-    int16_t hw = (EYE_W - 6) / 2;
-    int16_t cy = CY + 10;
-    gfx.drawQuadBezier((int16_t)(LX - hw + twitch), cy, LX, cy + 6,
-                       (int16_t)(LX + hw + twitch), cy, colors.eye, 10);
-    gfx.drawQuadBezier((int16_t)(RX - hw - twitch), cy, RX, cy + 6,
-                       (int16_t)(RX + hw - twitch), cy, colors.eye, 10);
+    float a = sinf(t * TAU * 4.0f) * 10.0f;
+    float bb = cosf(t * TAU * 5.0f) * 5.0f;
+    int16_t h = (int16_t)((float)EYE_H * 0.85f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.fillCircle((int16_t)(LX + a), (int16_t)(CY + bb), 10, colors.bg);
+    gfx.fillCircle((int16_t)(RX + a), (int16_t)(CY + bb), 10, colors.bg);
 }
 
 // --- Category registration ---

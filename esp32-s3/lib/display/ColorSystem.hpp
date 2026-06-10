@@ -21,10 +21,10 @@ enum ToneId : uint8_t {
 constexpr uint16_t TONE_LUT[TONE_COUNT] = {
     0x5F5F,  // cyan   #5be9ff  R=11 G=58 B=31
     0xFE8C,  // warm   #ffd166  R=31 G=52 B=12
-    0xFB53,  // rose   #ff6b9d  R=31 G=26 B=19 (adjusted: 0xFB54)
+    0xFB53,  // rose   #ff6b9d  R=31 G=26 B=19
     0xFACE,  // red    #ff5b6e  R=31 G=22 B=14
     0x75DF,  // blue   #76b8ff  R=14 G=46 B=31
-    0x7F51,  // green  #7be88e  R=15 G=58 B=17 (adjusted: 0x7F52)
+    0x7F51,  // green  #7be88e  R=15 G=58 B=17
     0xB47F,  // purple #b48cff  R=22 G=36 B=31
     0xFCEB,  // orange #ff9d5b  R=31 G=39 B=11
     0xF7BF,  // white  #f0f4ff  R=30 G=61 B=31

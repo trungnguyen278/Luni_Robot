@@ -303,7 +303,7 @@ void AudioManager::audioRecvLoop()
         }
 
         // Drain mode: discard all data arriving from C5 pipeline until timeout.
-        // After alignment breaks, C5's buffer (48KB) still contains shifted data.
+        // After alignment breaks, C5's downlink buffer can still contain shifted data.
         // We must wait for it to flush through SPI before clean data arrives.
         if (draining) {
             if (xTaskGetTickCount() >= drain_until) {

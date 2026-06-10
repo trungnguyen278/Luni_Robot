@@ -259,7 +259,7 @@ static void render_morning(GfxEngine& gfx, float t, const ColorContext& colors) 
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "sunPeek", "sunUp")) {

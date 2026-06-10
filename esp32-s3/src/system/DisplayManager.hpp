@@ -115,8 +115,11 @@ public:
     SceneManager* getSceneManager() { return &scene_mgr_; }
 
     // --- Asset Playback (for testing/direct control) ---
-    // Play a named emotion animation at coordinates (default centers animation).
-    void playEmotion(const std::string& name, int x = 0, int y = 0);
+    // Play a named emotion category. `hold_ms` controls how long it stays before
+    // the idle rotation resumes (see SceneManager hold sentinels); pass
+    // SceneManager::HOLD_STICKY for state-bound faces that must persist.
+    void playEmotion(const std::string& name,
+                     float hold_ms = SceneManager::HOLD_AUTO);
 
     // Render a text message (centers when x or y < 0); stops animation while active.
     void playText(const std::string& text,
@@ -151,7 +154,10 @@ private:
 private:
     std::unique_ptr<DisplayDriver> drv; // owned low-level driver
     std::unique_ptr<GfxEngine> gfx_;              // procedural RGB565
-    SceneManager scene_mgr_;
+    // The render path and the data/SET_EMOTION path (DeviceProfile, the scene
+    // render_*() helpers) must share one SceneManager — bind to the singleton so
+    // server-pushed emotions, sync data and boot results all reach what we draw.
+    SceneManager& scene_mgr_ = SceneManager::instance();
 
     // battery
     uint8_t battery_percent = 255;

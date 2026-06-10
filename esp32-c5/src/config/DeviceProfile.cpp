@@ -15,6 +15,7 @@
 #include "WifiService.hpp"
 #include <cstring>
 #include <cstdlib>
+#include <utility>
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -157,12 +158,21 @@ bool DeviceProfile::setup(AppController& app)
     auto user = user_cfg::load();
 
     // =========================================================
-    // 1. BLE PROVISIONING (only when no WiFi credentials)
+    // 1. PROVISIONING PREP (only when WiFi creds or device token missing)
+    //    Scans WiFi here so the app can show a real network list over BLE.
+    //    BLE provisioning is driven later by the NetworkManager state machine.
     // =========================================================
     esp_netif_init();
     esp_event_loop_create_default();
 
-    if (user.wifi_ssid.empty()) {
+    const bool has_wifi = !user.wifi_ssid.empty();
+    const bool has_device_token = !user.device_token.empty();
+    const bool needs_provisioning = !has_wifi || (has_wifi && !has_device_token);
+    if (needs_provisioning) {
+        ESP_LOGW(TAG, "Provisioning required: wifi=%s token=%s",
+                 has_wifi ? "set" : "missing",
+                 has_device_token ? "set" : "missing");
+
         esp_netif_t* scan_netif = esp_netif_create_default_wifi_sta();
         wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
         esp_wifi_init(&wifi_cfg);
@@ -192,65 +202,22 @@ bool DeviceProfile::setup(AppController& app)
         BluetoothService::ConfigData ble_cfg;
         ble_cfg.device_name  = user.device_name;
         ble_cfg.volume       = user.volume;
+        ble_cfg.ssid         = user.wifi_ssid;
+        ble_cfg.pass         = user.wifi_pass;
         ble_cfg.ws_url       = user.ws_url;
         ble_cfg.user_id      = user.user_id;
+        ble_cfg.device_token = user.device_token;
 
-        static BluetoothService ble;
-        if (!ble.init("Luni", networks, &ble_cfg)) {
-            ESP_LOGE(TAG, "BLE init failed");
-            return false;
-        }
-
-        static volatile bool ble_config_received = false;
-        static BluetoothService::ConfigData received_cfg;
-        ble_config_received = false;
-
-        ble.onConfigComplete([](const BluetoothService::ConfigData& cfg) {
-            received_cfg = cfg;
-            ble_config_received = true;
-            ESP_LOGI(TAG, "BLE config received: ssid='%s'", cfg.ssid.c_str());
-        });
-
-        ble.start();
-        ESP_LOGI(TAG, "Waiting for BLE provisioning...");
-
-        while (!ble_config_received) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-        }
-
-        ble.deinit();
-        vTaskDelay(pdMS_TO_TICKS(200));
-
-        nvs_handle_t h;
-        if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
-            if (!received_cfg.ssid.empty())
-                nvs_set_str(h, "ssid", received_cfg.ssid.c_str());
-            if (!received_cfg.pass.empty())
-                nvs_set_str(h, "pass", received_cfg.pass.c_str());
-            if (!received_cfg.ws_url.empty())
-                nvs_set_str(h, "ws_url", received_cfg.ws_url.c_str());
-            if (!received_cfg.user_id.empty())
-                nvs_set_str(h, "user_id", received_cfg.user_id.c_str());
-            if (!received_cfg.device_token.empty())
-                nvs_set_str(h, "device_token", received_cfg.device_token.c_str());
-            if (!received_cfg.admin_secret.empty())
-                nvs_set_str(h, "admin_secret", received_cfg.admin_secret.c_str());
-            if (!received_cfg.device_name.empty())
-                nvs_set_str(h, "device_name", received_cfg.device_name.c_str());
-            nvs_set_u8(h, "volume", received_cfg.volume);
-            nvs_commit(h);
-            nvs_close(h);
-        }
-
-        user.wifi_ssid    = received_cfg.ssid;
-        user.wifi_pass    = received_cfg.pass;
-        if (!received_cfg.ws_url.empty()) user.ws_url = received_cfg.ws_url;
-        if (!received_cfg.user_id.empty()) user.user_id = received_cfg.user_id;
-        if (!received_cfg.device_token.empty()) user.device_token = received_cfg.device_token;
-        user.device_name  = received_cfg.device_name;
-        user.volume       = received_cfg.volume;
-
-        ESP_LOGI(TAG, "BLE provisioning complete, continuing with WiFi connect");
+        // Hand the scanned list + current settings to the AppController. BLE
+        // provisioning itself is no longer blocking here — it is started later by
+        // the NetworkManager connection state machine (when WiFi creds or device
+        // token are missing), which notifies the S3 to show the provisioning
+        // screen and applies the received config live. See
+        // AppController::startBleProvisioning / NetworkManager::applyProvisionedConfig.
+        const unsigned scanned = (unsigned)networks.size();
+        app.setProvisioningContext(std::move(networks), std::move(ble_cfg));
+        ESP_LOGI(TAG, "Provisioning context ready (scanned %u networks); "
+                      "BLE will start via NetworkManager", scanned);
     }
 
     // =========================================================

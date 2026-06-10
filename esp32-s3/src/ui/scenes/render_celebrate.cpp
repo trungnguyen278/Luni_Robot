@@ -176,7 +176,7 @@ static void render_celebrate(GfxEngine& gfx, float t, const ColorContext& colors
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "trophyUp", "sparks")) {
@@ -193,6 +193,6 @@ const VariantDef CELEBRATE_VARIANTS[] = {
 };
 
 extern const CategoryDef CAT_CELEBRATE = {
-    "celebrate", "Celebrate", ContentKind::SCENE, TONE_WARM,
+    "celebrate", "Celebrate", ContentKind::SCENE, TONE_CYAN,
     CELEBRATE_VARIANTS, sizeof(CELEBRATE_VARIANTS) / sizeof(CELEBRATE_VARIANTS[0]), false
 };

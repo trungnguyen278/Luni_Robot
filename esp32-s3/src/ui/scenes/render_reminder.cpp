@@ -227,7 +227,7 @@ static void render_reminder(GfxEngine& gfx, float t, const ColorContext& colors)
 
     /* --- Eyes (always on top) ------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_RED], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (phaseIn(ph.name, "glassIn", "drink", "glassOut",
@@ -243,7 +243,7 @@ static void render_reminder(GfxEngine& gfx, float t, const ColorContext& colors)
 }
 
 const VariantDef REMINDER_VARIANTS[] = {
-    {"reminder-main", "Main", 14000, TONE_NONE, render_reminder},
+    {"reminder-triple", "Water meds stretch", 14000, TONE_NONE, render_reminder},
 };
 
 extern const CategoryDef CAT_REMINDER = {

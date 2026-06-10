@@ -41,23 +41,21 @@ static void render_sleeping_deep(GfxEngine& gfx, float t, const ColorContext& co
     gfx.drawQuadBezier(LX - hw, cy, LX, cy + 14, LX + hw, cy, colors.eye, 10);
     gfx.drawQuadBezier(RX - hw, cy, RX, cy + 14, RX + hw, cy, colors.eye, 10);
 
-    // Z letters
-    for (int i = 0; i < 3; i++) {
-        float p = fmodf(t + i * 0.33f, 1.0f);
-        uint8_t scale = (uint8_t)(1 + p * 2);
-        int16_t x = (int16_t)(RX + 20 + i * 8 + p * 20);
-        int16_t y = (int16_t)(CY - 20 - p * 40);
-        uint8_t op = (uint8_t)((1.0f - p) * 220.0f);
-        gfx.drawChar(x, y, 'Z', colors.accent, scale, op);
+    // Snore bubble (outlined) at the mouth, on the out-breath
+    float phase = sinf(t * TAU);
+    if (phase > 0.0f) {
+        gfx.pushAlpha(178);
+        gfx.strokeCircle(SCREEN_W / 2, SCREEN_H - 30, (int16_t)(6 + phase * 8), colors.accent, 3);
+        gfx.popAlpha();
     }
 
-    // Snore bubble from nose area
-    float bub = fmodf(t * 0.6f, 1.0f);
-    int16_t br = (int16_t)(3.0f + bub * 8.0f);
-    uint8_t bop = (uint8_t)((1.0f - bub) * 160.0f);
-    gfx.pushAlpha(bop);
-    gfx.strokeCircle(SCX + 20, (int16_t)(cy + 20 - bub * 16), br, colors.accent, 2);
-    gfx.popAlpha();
+    // 2 rising Z letters
+    for (int i = 0; i < 2; i++) {
+        float p = fmodf(t * 0.6f + i * 0.5f, 1.0f);
+        int16_t x = (int16_t)(RX + 28 + p * 28);
+        int16_t y = (int16_t)(CY - 16 - p * 50);
+        gfx.drawChar(x, y, 'Z', colors.accent, (uint8_t)(1 + p * 2), (uint8_t)((1.0f - p) * 255.0f));
+    }
 }
 
 // sleeping-bubble: closed eyes + snore bubble that grows and pops

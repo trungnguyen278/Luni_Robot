@@ -173,7 +173,7 @@ static void render_birthday(GfxEngine& gfx, float t, const ColorContext& colors)
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_ROSE], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "candles", "blow", "confetti")) {
@@ -184,7 +184,7 @@ static void render_birthday(GfxEngine& gfx, float t, const ColorContext& colors)
 }
 
 const VariantDef BIRTHDAY_VARIANTS[] = {
-    {"birthday-main", "Birthday", 14000, TONE_NONE, render_birthday},
+    {"birthday-cake", "Cake + blow", 14000, TONE_NONE, render_birthday},
 };
 
 extern const CategoryDef CAT_BIRTHDAY = {

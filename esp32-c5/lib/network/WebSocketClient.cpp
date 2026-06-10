@@ -1,6 +1,7 @@
 #include "WebSocketClient.hpp"
 #include "protocol/WsProtocol.hpp"
 #include "config/ServerConfig.hpp"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
@@ -18,7 +19,7 @@ WebSocketClient::~WebSocketClient()
 void WebSocketClient::init()
 {
     if (!tx_buffer_) {
-        tx_buffer_ = xStreamBufferCreate(48 * 1024, 1);
+        tx_buffer_ = xStreamBufferCreate(server_cfg::WS_TX_BUFFER_SIZE, 1);
     }
     if (!auth_event_) {
         auth_event_ = xEventGroupCreate();
@@ -41,6 +42,7 @@ esp_err_t WebSocketClient::connect(const char* url)
     esp_websocket_client_config_t cfg = {};
     cfg.uri = url_.c_str();
     cfg.buffer_size = server_cfg::WS_BUFFER_SIZE;
+    cfg.network_timeout_ms = server_cfg::WS_NETWORK_TIMEOUT_MS;
     cfg.disable_auto_reconnect = true;  // We manage reconnect in NetworkManager
     cfg.ping_interval_sec = server_cfg::WS_PING_INTERVAL_SEC;
     cfg.pingpong_timeout_sec = server_cfg::WS_PINGPONG_TIMEOUT_SEC;
@@ -48,10 +50,20 @@ esp_err_t WebSocketClient::connect(const char* url)
     cfg.keep_alive_idle = server_cfg::TCP_KEEPALIVE_IDLE_SEC;
     cfg.keep_alive_interval = server_cfg::TCP_KEEPALIVE_INTERVAL_SEC;
     cfg.keep_alive_count = server_cfg::TCP_KEEPALIVE_COUNT;
+    if (url_.rfind("wss://", 0) == 0) {
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    }
+
+    ESP_LOGI(TAG, "WS init heap: free=%lu largest=%u txbuf=%u",
+             (unsigned long)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)server_cfg::WS_TX_BUFFER_SIZE);
 
     client_ = esp_websocket_client_init(&cfg);
     if (!client_) {
-        ESP_LOGE(TAG, "Failed to init websocket");
+        ESP_LOGE(TAG, "Failed to init websocket (free=%lu largest=%u)",
+                 (unsigned long)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         return ESP_FAIL;
     }
 
@@ -70,7 +82,8 @@ esp_err_t WebSocketClient::connect(const char* url)
 
     if (!tx_task_) {
         run_tx_task_ = true;
-        xTaskCreate(&WebSocketClient::txTaskEntry, "ws_tx", 6144, this, 6, &tx_task_);
+        xTaskCreate(&WebSocketClient::txTaskEntry, "ws_tx",
+                    server_cfg::WS_TX_TASK_STACK_SIZE, this, 6, &tx_task_);
     }
 
     return ESP_OK;
@@ -114,9 +127,12 @@ void WebSocketClient::setDeviceInfo(const char* mac, const char* device_token,
 
 // === Authentication ===
 
-esp_err_t WebSocketClient::authenticate()
+esp_err_t WebSocketClient::sendAuthMessage()
 {
     if (!connected_ || !client_) return ESP_FAIL;
+    if (auth_event_) {
+        xEventGroupClearBits(auth_event_, AUTH_SUCCESS_BIT | AUTH_FAIL_BIT);
+    }
 
     cJSON* auth_msg = ws::createAuthMessage(
         mac_.c_str(), device_token_.c_str(), fw_version_.c_str(), model_.c_str());
@@ -134,23 +150,11 @@ esp_err_t WebSocketClient::authenticate()
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Auth message sent, waiting for result...");
-
-    xEventGroupClearBits(auth_event_, AUTH_SUCCESS_BIT | AUTH_FAIL_BIT);
-    EventBits_t bits = xEventGroupWaitBits(auth_event_,
-        AUTH_SUCCESS_BIT | AUTH_FAIL_BIT,
-        pdTRUE, pdFALSE,
-        pdMS_TO_TICKS(server_cfg::WS_AUTH_TIMEOUT_MS));
-
-    if (bits & AUTH_SUCCESS_BIT) {
-        authenticated_ = true;
-        ESP_LOGI(TAG, "Authentication successful");
-        return ESP_OK;
-    }
-
-    ESP_LOGW(TAG, "Authentication failed (bits=0x%lx, close_code=%d)",
-             (unsigned long)bits, last_close_code_);
-    return ESP_FAIL;
+    ESP_LOGI(TAG, "Auth message sent, waiting for auth_result...");
+    ESP_LOGI(TAG, "Auth credentials: mac=%s token=%s",
+             mac_.empty() ? "<empty>" : mac_.c_str(),
+             device_token_.empty() ? "<empty>" : "<set>");
+    return ESP_OK;
 }
 
 // === Send methods ===
@@ -250,7 +254,7 @@ void WebSocketClient::txLoop()
 {
     ESP_LOGI(TAG, "TX task started");
 
-    constexpr size_t BATCH_BUF_SIZE = 2048;
+    constexpr size_t BATCH_BUF_SIZE = server_cfg::WS_TX_BATCH_SIZE;
     uint8_t* buf = (uint8_t*)malloc(BATCH_BUF_SIZE);
     if (!buf) {
         ESP_LOGE(TAG, "TX: failed to allocate batch buffer");
@@ -314,12 +318,9 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
         authenticated_ = false;
         if (state_cb_) state_cb_(true);
 
-        // Start auth flow
-        if (authenticate() != ESP_OK) {
-            ESP_LOGE(TAG, "Auth failed, disconnecting");
+        if (sendAuthMessage() != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send auth message");
             if (auth_cb_) auth_cb_(false, last_close_code_);
-        } else {
-            if (auth_cb_) auth_cb_(true, 0);
         }
         break;
 
@@ -335,9 +336,19 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
                     cJSON* status = cJSON_GetObjectItem(msg.payload, "status");
                     if (status && cJSON_IsString(status) &&
                         strcmp(status->valuestring, "ok") == 0) {
-                        xEventGroupSetBits(auth_event_, AUTH_SUCCESS_BIT);
+                        authenticated_ = true;
+                        ESP_LOGI(TAG, "Authentication successful");
+                        if (auth_event_) xEventGroupSetBits(auth_event_, AUTH_SUCCESS_BIT);
+                        if (auth_cb_) auth_cb_(true, 0);
                     } else {
-                        xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+                        const char* reason = "unknown";
+                        cJSON* reason_item = cJSON_GetObjectItem(msg.payload, "reason");
+                        if (reason_item && cJSON_IsString(reason_item)) {
+                            reason = reason_item->valuestring;
+                        }
+                        ESP_LOGW(TAG, "Authentication rejected: %s", reason);
+                        if (auth_event_) xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+                        if (auth_cb_) auth_cb_(false, last_close_code_);
                     }
                     if (msg.root) cJSON_Delete(msg.root);
                     break;
@@ -362,6 +373,7 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
         authenticated_ = false;
         if (tx_buffer_) xStreamBufferReset(tx_buffer_);
         xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+        if (!authenticated_ && auth_cb_) auth_cb_(false, last_close_code_);
         if (state_cb_) state_cb_(false);
         break;
 
@@ -371,6 +383,7 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
         authenticated_ = false;
         if (tx_buffer_) xStreamBufferReset(tx_buffer_);
         xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+        if (!authenticated_ && auth_cb_) auth_cb_(false, last_close_code_);
         if (state_cb_) state_cb_(false);
         break;
 
@@ -380,6 +393,7 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
         authenticated_ = false;
         if (tx_buffer_) xStreamBufferReset(tx_buffer_);
         xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
+        if (!authenticated_ && auth_cb_) auth_cb_(false, last_close_code_);
         if (state_cb_) state_cb_(false);
         break;
 

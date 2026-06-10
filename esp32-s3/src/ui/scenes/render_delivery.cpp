@@ -167,7 +167,7 @@ static void render_delivery(GfxEngine& gfx, float t, const ColorContext& colors)
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "shake", "open")) {
@@ -180,10 +180,10 @@ static void render_delivery(GfxEngine& gfx, float t, const ColorContext& colors)
 }
 
 const VariantDef DELIVERY_VARIANTS[] = {
-    {"delivery-main", "Delivery", 14000, TONE_NONE, render_delivery},
+    {"delivery-route", "On the way", 14000, TONE_NONE, render_delivery},
 };
 
 extern const CategoryDef CAT_DELIVERY = {
-    "delivery", "Delivery", ContentKind::SCENE, TONE_WARM,
+    "delivery", "Delivery", ContentKind::SCENE, TONE_ORANGE,
     DELIVERY_VARIANTS, sizeof(DELIVERY_VARIANTS) / sizeof(DELIVERY_VARIANTS[0]), false
 };

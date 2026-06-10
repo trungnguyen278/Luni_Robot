@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace server_cfg {
@@ -7,8 +8,15 @@ namespace server_cfg {
 static constexpr uint32_t WS_AUTH_TIMEOUT_MS        = 5000;
 static constexpr uint32_t WS_PING_INTERVAL_SEC      = 10;
 static constexpr uint32_t WS_PINGPONG_TIMEOUT_SEC   = 120;
-static constexpr uint32_t WS_BUFFER_SIZE             = 8192;
+static constexpr uint32_t WS_BUFFER_SIZE             = 4096;
+static constexpr uint32_t WS_NETWORK_TIMEOUT_MS      = 10000;
+static constexpr size_t   WS_TX_BUFFER_SIZE          = 32 * 1024;
+static constexpr size_t   WS_TX_BATCH_SIZE           = 2048;
+static constexpr uint32_t WS_TX_TASK_STACK_SIZE      = 4096;
 static constexpr uint32_t HEARTBEAT_INTERVAL_MS      = 30000;
+
+// Inter-MCU audio bridge
+static constexpr size_t   SPI_DL_AUDIO_BUFFER_SIZE   = 24 * 1024;
 
 // Reconnect
 static constexpr uint32_t RECONNECT_BASE_DELAY_MS    = 1000;

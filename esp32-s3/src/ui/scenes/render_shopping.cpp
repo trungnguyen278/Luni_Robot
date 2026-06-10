@@ -183,7 +183,7 @@ static void render_shopping(GfxEngine& gfx, float t, const ColorContext& colors)
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_ORANGE], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "item1", "item2", "item3")) {
@@ -196,10 +196,10 @@ static void render_shopping(GfxEngine& gfx, float t, const ColorContext& colors)
 }
 
 const VariantDef SHOPPING_VARIANTS[] = {
-    {"shopping-main", "Shopping", 14000, TONE_NONE, render_shopping},
+    {"shopping-bag", "Fill the bag", 14000, TONE_NONE, render_shopping},
 };
 
 extern const CategoryDef CAT_SHOPPING = {
-    "shopping", "Shopping", ContentKind::SCENE, TONE_ORANGE,
+    "shopping", "Shopping", ContentKind::SCENE, TONE_GREEN,
     SHOPPING_VARIANTS, sizeof(SHOPPING_VARIANTS) / sizeof(SHOPPING_VARIANTS[0]), false
 };

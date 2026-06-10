@@ -6,71 +6,60 @@
 using namespace geom;
 using namespace math;
 
-// annoyed-flat: very flat narrow eyes, expressionless, occasional micro-twitch
+// annoyed-flat: deadpan flat eye-bars + angled-down brows + flat mouth
 static void render_annoyed_flat(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float twitch = 0.0f;
-    float tp = fmodf(t * 0.8f, 1.0f);
-    if (tp > 0.7f && tp < 0.75f) {
-        twitch = sinf((tp - 0.7f) / 0.05f * PI) * 3.0f;
-    }
-
-    int16_t h = (int16_t)(EYE_H * 0.35f);
-    gfx.drawEye(LX, (int16_t)(CY + 4), EYE_W, (int16_t)(h + twitch), 8, 0, colors.eye);
-    gfx.drawEye(RX, (int16_t)(CY + 4), EYE_W, h, 8, 0, colors.eye);
+    int16_t tw = (t > 0.45f && t < 0.5f) ? 3 : 0;
+    gfx.pushTransform();
+    gfx.translate(0.0f, (float)tw);
+    int16_t w = (int16_t)(EYE_W * 1.05f);
+    gfx.drawEye(LX, CY, w, 10, 5, 0, colors.eye);
+    gfx.drawEye(RX, CY, w, 10, 5, 0, colors.eye);
+    gfx.drawLine(LX - 32, CY - 28, LX + 28, CY - 22, colors.eye, 5);
+    gfx.drawLine(RX + 32, CY - 28, RX - 28, CY - 22, colors.eye, 5);
+    gfx.drawLine(SCREEN_W / 2 - 18, SCREEN_H - 26, SCREEN_W / 2 + 18, SCREEN_H - 26,
+                 colors.eye, 4);
+    gfx.popTransform();
 }
 
-// annoyed-twitch: normal-ish eyes but right eye twitches with brief height pulse
+// annoyed-twitch: left eye twitches periodically; right stays steady half-closed
 static void render_annoyed_twitch(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t lh = (int16_t)(EYE_H * 0.65f);
-    gfx.drawEye(LX, CY, EYE_W, lh, EYE_RX, 0, colors.eye);
+    bool burst = (t > 0.55f && t < 0.62f);
+    float tw = burst ? sinf((t - 0.55f) / 0.07f * PI) * 8.0f : 0.0f;
 
-    // Right eye twitch: periodic rapid pulse
-    float cyc = fmodf(t * 1.2f, 1.0f);
-    float tw = 0.0f;
-    if (cyc > 0.4f && cyc < 0.55f) {
-        tw = sinf((cyc - 0.4f) / 0.15f * PI) * 0.35f;
-    }
-    if (cyc > 0.6f && cyc < 0.7f) {
-        tw = sinf((cyc - 0.6f) / 0.1f * PI) * 0.25f;
-    }
+    int16_t lh = burst ? 6 : (int16_t)(EYE_H * 0.45f);
+    gfx.drawEye((int16_t)(LX + tw * 0.3f), CY + 6, EYE_W, lh, 10, 0, colors.eye);
+    gfx.drawEye(RX, CY + 6, EYE_W, (int16_t)(EYE_H * 0.45f), 10, 0, colors.eye);
 
-    int16_t rh = (int16_t)(EYE_H * (0.65f - tw));
-    gfx.drawEye(RX, CY, EYE_W, rh, EYE_RX, 0, colors.eye);
-
-    // Subtle angry brow on right side
-    float bsh = sinf(t * TAU * 5.0f) * tw * 4.0f;
-    if (tw > 0.05f) {
-        gfx.drawLine(RX - 30, (int16_t)(CY - 44 + bsh), RX + 30, CY - 34,
-                     colors.eye, 4);
-    }
+    // Angled-in brows (left lifts with the twitch)
+    gfx.drawLine(LX - 32, (int16_t)(CY - 30 - tw), LX + 28, CY - 20, colors.eye, 6);
+    gfx.drawLine(RX + 32, CY - 30, RX - 28, CY - 20, colors.eye, 6);
 }
 
-// annoyed-sigh-side: eyes roll to one side slowly then back, slight droop
+// annoyed-sigh-side: eyes look to the side; sigh puff drifts up-right
 static void render_annoyed_sigh_side(GfxEngine& gfx, float t, const ColorContext& colors) {
-    // Smooth side-roll: ease in-out
-    float phase = fmodf(t * 0.6f, 1.0f);
-    float roll;
-    if (phase < 0.4f) {
-        roll = ease::inOut(phase / 0.4f);
-    } else if (phase < 0.7f) {
-        roll = 1.0f;
-    } else {
-        roll = 1.0f - ease::inOut((phase - 0.7f) / 0.3f);
+    float side = sinf(t * TAU * 0.6f) * 8.0f + 6.0f;
+    float phase = fmodf(t, 1.0f);
+    int16_t h = (int16_t)(EYE_H * 0.5f);
+
+    gfx.drawEye(LX, CY + 6, EYE_W, h, 12, 0, colors.eye);
+    gfx.drawEye(RX, CY + 6, EYE_W, h, 12, 0, colors.eye);
+
+    // Pupils glance to the side
+    gfx.fillCircle((int16_t)(LX + side), CY + 10, 8, colors.bg);
+    gfx.fillCircle((int16_t)(RX + side), CY + 10, 8, colors.bg);
+
+    // Sigh puff drifting up-right
+    if (phase > 0.35f) {
+        float p = phase - 0.35f;
+        int16_t px = (int16_t)(SCX + 20 + p * 40.0f);
+        int16_t py = (int16_t)(SCREEN_H - 28 - p * 24.0f);
+        int16_t pr = (int16_t)(4.0f + p * 4.0f);
+        float op = 1.0f - p * 1.5f;
+        if (op > 0.0f) {
+            gfx.drawArc(px, py, pr, 0.0f, TAU, colors.accent, 2,
+                        (uint8_t)(op * 255.0f));
+        }
     }
-    float dx = roll * 18.0f;
-
-    float droop = 3.0f + sinf(t * TAU * 0.4f) * 1.5f;
-    int16_t h = (int16_t)(EYE_H * 0.55f);
-
-    gfx.drawEye((int16_t)(LX + dx), (int16_t)(CY + droop), EYE_W, h, 14, 0, colors.eye);
-    gfx.drawEye((int16_t)(RX + dx), (int16_t)(CY + droop), EYE_W, h, 14, 0, colors.eye);
-
-    // Droopy lids: bg rectangles over top of eyes
-    int16_t lidH = (int16_t)(8.0f + droop);
-    gfx.fillRect((int16_t)(LX + dx - EYE_W / 2), (int16_t)(CY + droop - h / 2 - 2),
-                 EYE_W, lidH, colors.bg);
-    gfx.fillRect((int16_t)(RX + dx - EYE_W / 2), (int16_t)(CY + droop - h / 2 - 2),
-                 EYE_W, lidH, colors.bg);
 }
 
 // --- Category registration ---

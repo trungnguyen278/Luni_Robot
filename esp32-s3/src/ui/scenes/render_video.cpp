@@ -178,7 +178,7 @@ static void render_video(GfxEngine& gfx, float t, const ColorContext& colors) {
 
     /* --- Eyes (always on top) ------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_ROSE], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (phaseIn(ph.name, "play", "frame1", "frame2", "frame3")) {
@@ -191,7 +191,7 @@ static void render_video(GfxEngine& gfx, float t, const ColorContext& colors) {
 }
 
 const VariantDef VIDEO_VARIANTS[] = {
-    {"video-main", "Main", 14000, TONE_NONE, render_video},
+    {"video-watch", "Watch a clip", 14000, TONE_NONE, render_video},
 };
 
 extern const CategoryDef CAT_VIDEO = {

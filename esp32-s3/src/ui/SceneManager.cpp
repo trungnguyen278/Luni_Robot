@@ -10,7 +10,8 @@ static SceneManager s_instance;
 
 SceneManager& SceneManager::instance() { return s_instance; }
 
-void SceneManager::showScene(const char* categoryKey, const char* variantId) {
+void SceneManager::showScene(const char* categoryKey, const char* variantId,
+                             float hold_ms) {
     const CategoryDef* cat = findCategory(categoryKey);
     if (!cat || cat->variant_count == 0) return;
 
@@ -31,20 +32,49 @@ void SceneManager::showScene(const char* categoryKey, const char* variantId) {
     elapsed_ms_ = 0;
     scene_active_ = (cat->kind != ContentKind::EMOTION);
     idle_active_ = false;
-    ESP_LOGI(TAG, "Show %s/%s (%ums)",
-             cat->key, variant->id, variant->duration_ms);
+
+    // Resolve the hold window. Explicitly shown content no longer stays forever
+    // ("set cố định") — once the window elapses, update() returns to the idle
+    // rotation. STICKY content is left to the caller to swap out (state-bound).
+    if (hold_ms == HOLD_STICKY) {
+        holding_ = false;
+        hold_ms_ = 0.0f;
+    } else {
+        hold_ms_ = (hold_ms == HOLD_AUTO)
+                       ? (cat->kind == ContentKind::EMOTION
+                              ? DEFAULT_EMOTION_HOLD_MS
+                              : (float)variant->duration_ms)
+                       : hold_ms;
+        holding_ = true;
+    }
+
+    ESP_LOGI(TAG, "Show %s/%s (%ums, hold=%dms)",
+             cat->key, variant->id, variant->duration_ms,
+             holding_ ? (int)hold_ms_ : -1);
 }
 
-void SceneManager::showEmotion(const char* categoryKey, const char* variantId) {
-    showScene(categoryKey, variantId);
+void SceneManager::showEmotion(const char* categoryKey, const char* variantId,
+                               float hold_ms) {
+    showScene(categoryKey, variantId, hold_ms);
     scene_active_ = false;
 }
 
 void SceneManager::exitScene() {
     scene_active_ = false;
     idle_active_ = true;
+    holding_ = false;
     idle_timer_ms_ = 0;
     idle_interval_ms_ = 3000.0f + (float)(rand() % 3000);
+
+    // Each scene ends on its own duration — don't freeze on its last frame for
+    // the whole idle gap. Drop to the (looping, animated) resting face until
+    // tickIdle rotates in the next idle animation.
+    const CategoryDef* normal = findCategory("normal");
+    if (normal && normal->variant_count > 0) {
+        current_category_ = normal;
+        current_variant_  = pickVariant("normal");
+        elapsed_ms_ = 0;
+    }
 }
 
 const VariantDef* SceneManager::pickVariant(const char* categoryKey) {
@@ -245,7 +275,12 @@ void SceneManager::update(GfxEngine& gfx, float dt_ms) {
     ColorContext colors = resolveColors();
     current_variant_->render(gfx, t, colors);
 
-    if (!should_loop && raw >= 1.0f) {
+    // Return to the idle rotation when an explicitly held scene/emotion has run
+    // out its window (emotions used to loop forever). Idle-driven content is not
+    // `holding_`; non-looping idle scenes still fall back on the raw>=1 finish.
+    if (holding_) {
+        if (elapsed_ms_ >= hold_ms_) exitScene();
+    } else if (!should_loop && raw >= 1.0f) {
         exitScene();
     }
 }

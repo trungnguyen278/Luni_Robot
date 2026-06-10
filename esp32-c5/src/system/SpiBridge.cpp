@@ -1,4 +1,5 @@
 #include "SpiBridge.hpp"
+#include "config/ServerConfig.hpp"
 #include "esp_log.h"
 #include <cstring>
 
@@ -61,7 +62,7 @@ bool SpiBridge::init(const Config& cfg)
         return false;
     }
 
-    dl_audio_sb_ = xStreamBufferCreate(48 * 1024, 1);
+    dl_audio_sb_ = xStreamBufferCreate(server_cfg::SPI_DL_AUDIO_BUFFER_SIZE, 1);
     if (!dl_audio_sb_) {
         ESP_LOGE(TAG, "DL audio stream buffer create failed");
         return false;

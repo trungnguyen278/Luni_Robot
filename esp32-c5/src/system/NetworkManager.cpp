@@ -25,6 +25,7 @@ bool NetworkManager::init(const Config& cfg)
 {
     cfg_ = cfg;
     wifi_credentials_exist_ = !cfg_.wifi_ssid.empty();
+    device_token_exists_ = !cfg_.device_token.empty();
 
     ESP_LOGI(TAG, "init: ws=%s mac=%s",
              cfg_.ws_url.c_str(), getDLuniceEfuseID());
@@ -38,6 +39,9 @@ bool NetworkManager::init(const Config& cfg)
     ws_->init();
     ws_->setDeviceInfo(getDLuniceEfuseID(), cfg_.device_token.c_str(),
                        app_meta::APP_VERSION, app_meta::DLuniCE_MODEL);
+    ESP_LOGI(TAG, "auth config: mac=%s token=%s",
+             getDLuniceEfuseID(),
+             cfg_.device_token.empty() ? "<empty>" : "<set>");
     ota_->init(StateManager::instance());
     sync_->init();
 
@@ -122,6 +126,7 @@ void NetworkManager::setupWebSocket()
 
     ws_->onAuthResult([this](bool success, int close_code) {
         if (success) {
+            ws_auth_failed_ = false;
             ESP_LOGI(TAG, "WS authenticated");
             sendDeviceInfo();
             startHeartbeat();
@@ -136,6 +141,8 @@ void NetworkManager::setupWebSocket()
                 esp_timer_start_periodic(log_flush_timer_,
                     server_cfg::LOG_FLUSH_INTERVAL_MS * 1000);
             }
+        } else {
+            ws_auth_failed_ = true;
         }
     });
 
@@ -296,6 +303,16 @@ void NetworkManager::transition(state::ConnectionState to, state::ConnectFailRea
     StateManager::instance().setConnectionState(to, reason);
 }
 
+void NetworkManager::scanForProvisioning()
+{
+    if (!wifi_) return;
+    wifi_->ensureStaStarted();
+    auto nets = wifi_->scanNetworks();
+    if (!nets.empty()) last_scan_ = std::move(nets);
+    ESP_LOGI(TAG, "Provisioning scan: %u networks cached",
+             (unsigned)last_scan_.size());
+}
+
 void NetworkManager::connectionTaskEntry(void* arg)
 {
     static_cast<NetworkManager*>(arg)->runConnectionStateMachine();
@@ -308,10 +325,15 @@ void NetworkManager::runConnectionStateMachine()
     while (started_) {
         switch (conn_state_) {
         case state::ConnectionState::OFFLINE:
-            if (wifi_credentials_exist_) {
+            // Provisioning is required when WiFi creds are missing OR the device
+            // token is missing (e.g. paired to WiFi but never registered with the
+            // server). Without the token, WS auth would fail, so go straight to
+            // BLE instead of looping WiFi→auth-fail→retry.
+            if (wifi_credentials_exist_ && device_token_exists_) {
                 transition(state::ConnectionState::WIFI_CONNECTING);
                 wifi_->connectWithCredentials(cfg_.wifi_ssid.c_str(), cfg_.wifi_pass.c_str());
             } else {
+                scanForProvisioning();
                 transition(state::ConnectionState::BLE_PROVISIONING);
             }
             break;
@@ -330,6 +352,7 @@ void NetworkManager::runConnectionStateMachine()
             if (connected) {
                 transition(state::ConnectionState::WIFI_CONNECTED);
             } else if (!was_online_) {
+                scanForProvisioning();
                 transition(state::ConnectionState::BLE_PROVISIONING,
                            state::ConnectFailReason::WIFI_TIMEOUT);
             } else {
@@ -350,6 +373,7 @@ void NetworkManager::runConnectionStateMachine()
                 break;
             }
 
+            ws_auth_failed_ = false;
             esp_err_t err = ws_->connect(cfg_.ws_url.c_str());
             if (err != ESP_OK) {
                 transition(state::ConnectionState::RECONNECTING,
@@ -357,11 +381,25 @@ void NetworkManager::runConnectionStateMachine()
                 break;
             }
 
-            // Wait for auth to complete
+            // Wait for auth to complete. Once the WS handshake completes (the
+            // auth message is being sent), enter WS_AUTHENTICATING so the valid
+            // transition path WS_CONNECTING(3) -> WS_AUTHENTICATING(4) -> ONLINE(5)
+            // is followed. Skipping state 4 makes StateManager reject 3 -> 5 and
+            // leaves the UI stuck on "server error" even after auth succeeds.
+            bool saw_ws_connected = false;
+            bool announced_authenticating = false;
             for (int ms = 0; ms < 15000 && started_; ms += 200) {
                 vTaskDelay(pdMS_TO_TICKS(200));
                 if (ws_->isAuthenticated()) break;
-                if (!ws_->isConnected()) break;
+                if (ws_auth_failed_) break;
+                if (ws_->isConnected()) {
+                    saw_ws_connected = true;
+                    if (!announced_authenticating) {
+                        announced_authenticating = true;
+                        transition(state::ConnectionState::WS_AUTHENTICATING);
+                    }
+                }
+                if (saw_ws_connected && !ws_->isConnected()) break;
             }
 
             if (ws_->isAuthenticated()) {
@@ -419,6 +457,7 @@ void NetworkManager::runConnectionStateMachine()
             } else if (policy.fallback_to_ble) {
                 ESP_LOGW(TAG, "Max retries reached, falling back to BLE");
                 reconnect_attempts_ = 0;
+                scanForProvisioning();
                 transition(state::ConnectionState::BLE_PROVISIONING, last_fail_);
             } else {
                 ESP_LOGW(TAG, "Max retries reached, going offline");

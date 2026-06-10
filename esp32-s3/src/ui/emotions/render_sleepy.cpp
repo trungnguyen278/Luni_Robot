@@ -31,14 +31,14 @@ static void render_sleepy_yawn(GfxEngine& gfx, float t, const ColorContext& colo
     }
 }
 
-// sleepy-nod: drowsy nodding, eyes drift down and back up slowly
+// sleepy-nod: head dips then snaps back up (sawtooth nod)
 static void render_sleepy_nod(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float nod = sinf(t * TAU * 0.5f);
-    float dy = nod * 14.0f;
-    float lidClose = clamp((nod + 1.0f) / 2.0f, 0.0f, 1.0f);
-    int16_t h = (int16_t)lerp(8.0f, (float)EYE_H * 0.6f, 1.0f - lidClose);
-    gfx.drawEye(LX, (int16_t)(CY + 20 + dy), EYE_W, h, 12, 0, colors.eye);
-    gfx.drawEye(RX, (int16_t)(CY + 20 + dy), EYE_W, h, 12, 0, colors.eye);
+    float phase = fmodf(t * 2.0f, 1.0f);
+    float droopY = phase < 0.85f ? lerp(8.0f, 32.0f, phase / 0.85f)
+                                 : lerp(32.0f, 8.0f, (phase - 0.85f) / 0.15f);
+    int16_t h = (int16_t)lerp(20.0f, 6.0f, droopY / 32.0f);
+    gfx.drawEye(LX, (int16_t)(CY + droopY), EYE_W, h, 12, 0, colors.eye);
+    gfx.drawEye(RX, (int16_t)(CY + droopY), EYE_W, h, 12, 0, colors.eye);
 }
 
 // sleepy-blink-slow: very slow heavy blinks with long close duration

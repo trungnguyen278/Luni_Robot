@@ -161,7 +161,7 @@ static void render_notification(GfxEngine& gfx, float t, const ColorContext& col
 
     /* --- Eyes ----------------------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (phaseIn(ph.name, "pulse1", "pulse2")) {
@@ -172,7 +172,7 @@ static void render_notification(GfxEngine& gfx, float t, const ColorContext& col
 }
 
 const VariantDef NOTIFICATION_VARIANTS[] = {
-    {"notification-main", "Notification", 12000, TONE_NONE, render_notification},
+    {"notif-cards", "Card stack", 12000, TONE_NONE, render_notification},
 };
 
 extern const CategoryDef CAT_NOTIFICATION = {

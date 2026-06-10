@@ -57,6 +57,7 @@ public:
     static constexpr uint16_t CHR_COMMIT         = 0x0004;
     static constexpr uint16_t CHR_USER_ID       = 0x0005;
     static constexpr uint16_t CHR_DEV_TOKEN     = 0x0008;
+    static constexpr uint16_t CHR_WIFI_SCAN     = 0x0009;
     static constexpr uint16_t CHR_DEVICE_INFO   = 0x0006;
     static constexpr uint16_t CHR_DIAG_INFO     = 0x0007;
     static constexpr uint16_t CHR_AUTH_UNLOCK   = 0x0010;

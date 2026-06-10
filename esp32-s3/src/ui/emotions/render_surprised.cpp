@@ -45,39 +45,30 @@ static void render_surprised_exclaim(GfxEngine& gfx, float t, const ColorContext
     }
 }
 
-// surprised-flash: rapid eye size pulse + flash lines radiating out
+// surprised-flash: single pop pulse + 5 flash lines bursting up top
 static void render_surprised_flash(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float pulse_v = 1.0f + sinf(t * TAU * 4.0f) * 0.15f;
-    int16_t r = (int16_t)((float)(EYE_W / 2) * 1.2f * pulse_v);
+    float s = pulse(t, 0.2f, 0.18f);
+    int16_t r = (int16_t)((float)(EYE_W / 2) * (1.0f + s * 0.4f));
     gfx.fillCircle(LX, CY, r, colors.eye);
     gfx.fillCircle(RX, CY, r, colors.eye);
 
-    // Flash lines radiating from center
-    for (int i = 0; i < 8; i++) {
-        float a = (float)i * (TAU / 8.0f) + t * TAU * 2.0f;
-        float inner = 55.0f;
-        float outer = 55.0f + sinf(t * TAU * 3.0f + (float)i) * 12.0f + 12.0f;
-        int16_t x0 = (int16_t)(SCX + cosf(a) * inner);
-        int16_t y0 = (int16_t)(CY + sinf(a) * inner);
-        int16_t x1 = (int16_t)(SCX + cosf(a) * outer);
-        int16_t y1 = (int16_t)(CY + sinf(a) * outer);
-        gfx.drawLine(x0, y0, x1, y1, colors.accent, 3, 200);
+    uint8_t a = (uint8_t)(fmaxf(0.0f, 1.0f - (t - 0.1f) / 0.35f) * 255.0f);
+    for (int i = -2; i <= 2; i++) {
+        gfx.drawLine((int16_t)(SCREEN_W / 2 + i * 16), STATUS_H + 8,
+                     (int16_t)(SCREEN_W / 2 + i * 24), STATUS_H - 4,
+                     colors.accent, 3, a);
     }
 }
 
-// surprised-mild: less extreme pop, raised brow lines
+// surprised-mild: one gentle grow-then-shrink pop with glints
 static void render_surprised_mild(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float s = 1.0f + sinf(t * TAU * 0.5f) * 0.02f;
-    int16_t w = (int16_t)((float)EYE_W * 1.02f * s);
-    int16_t h = (int16_t)((float)EYE_H * 1.02f * s);
-    gfx.drawEye(LX, CY, w, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY, w, h, EYE_RX, 0, colors.eye);
-
-    // Raised brow lines
-    float lift = sinf(t * TAU * 0.5f) * 3.0f;
-    int16_t by = (int16_t)(CY - 56 + lift);
-    gfx.drawLine(LX - 26, by, LX + 26, (int16_t)(by - 4), colors.eye, 5);
-    gfx.drawLine(RX - 26, (int16_t)(by - 4), RX + 26, by, colors.eye, 5);
+    float s = (t < 0.35f) ? ease::out(t / 0.35f)
+                          : 1.0f - ease::in((t - 0.35f) / 0.65f);
+    int16_t sz = (int16_t)((float)(EYE_W / 2) * (1.0f + s * 0.22f));
+    gfx.fillCircle(LX, CY, sz, colors.eye);
+    gfx.fillCircle(RX, CY, sz, colors.eye);
+    gfx.fillCircle(LX - 6, CY - 10, 5, colors.bg);
+    gfx.fillCircle(RX - 6, CY - 10, 5, colors.bg);
 }
 
 // --- Category registration ---

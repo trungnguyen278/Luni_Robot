@@ -56,8 +56,21 @@ class SceneManager {
 public:
     SceneManager() = default;
 
-    void showScene(const char* categoryKey, const char* variantId = nullptr);
-    void showEmotion(const char* categoryKey, const char* variantId = nullptr);
+    // Hold-window sentinels for showScene/showEmotion `hold_ms`:
+    //   HOLD_AUTO   → window picked from content kind (one play for a scene,
+    //                 DEFAULT_EMOTION_HOLD_MS for an emotion), then return to idle.
+    //   HOLD_STICKY → stay until the caller explicitly swaps it out. Use for
+    //                 interaction-bound faces (listening/thinking/error) whose
+    //                 lifetime is owned by a state, not a timer.
+    //   >= 0        → explicit window in milliseconds.
+    static constexpr float HOLD_AUTO   = -1.0f;
+    static constexpr float HOLD_STICKY = -2.0f;
+    static constexpr float DEFAULT_EMOTION_HOLD_MS = 6000.0f;
+
+    void showScene(const char* categoryKey, const char* variantId = nullptr,
+                   float hold_ms = HOLD_AUTO);
+    void showEmotion(const char* categoryKey, const char* variantId = nullptr,
+                     float hold_ms = HOLD_AUTO);
     void exitScene();
 
     bool isSceneActive() const { return scene_active_; }
@@ -92,6 +105,12 @@ private:
     float elapsed_ms_ = 0;
     bool scene_active_ = false;
     bool idle_active_ = true;
+
+    // Explicitly shown content (showScene/showEmotion) with a finite lifetime:
+    // when `holding_`, update() returns to the idle rotation once elapsed_ms_
+    // reaches `hold_ms_`. Idle-driven content leaves these false.
+    bool  holding_ = false;
+    float hold_ms_ = 0.0f;
 
     // Recency filter (variants)
     static constexpr int RECENT_SIZE = 6;

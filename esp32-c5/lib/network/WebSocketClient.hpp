@@ -59,7 +59,7 @@ private:
     static void txTaskEntry(void* arg);
     void txLoop();
 
-    esp_err_t authenticate();
+    esp_err_t sendAuthMessage();
 
     esp_websocket_client_handle_t client_ = nullptr;
     std::string url_;

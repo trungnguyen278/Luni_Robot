@@ -163,7 +163,7 @@ static void render_night_fall(GfxEngine& gfx, float t, const ColorContext& color
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   colors.eye, colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "sunset", "moon")) {

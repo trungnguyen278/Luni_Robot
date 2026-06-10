@@ -48,7 +48,12 @@ void UartBridge::start()
     if (started_) return;
     started_ = true;
 
-    xTaskCreatePinnedToCore(&UartBridge::rxTaskEntry, "UartBridge", 3072, this, 3, &rx_task_, 0);
+    // 8 KB, not 3 KB: rxLoop dispatches status/device callbacks synchronously,
+    // and those run the full state fan-out on THIS stack — StateManager notify →
+    // DisplayManager.showEmotion (pickVariant + ESP_LOGI) + AudioManager handlers.
+    // That chain (esp. nested ESP_LOGI vprintf) overflowed a 3 KB stack on
+    // SET_EMOTION. Keep heavy work off this task if it grows further.
+    xTaskCreatePinnedToCore(&UartBridge::rxTaskEntry, "UartBridge", 8192, this, 3, &rx_task_, 0);
     ESP_LOGI(TAG, "UartBridge started");
 }
 

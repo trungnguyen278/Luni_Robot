@@ -121,6 +121,12 @@ namespace Camera {
     static constexpr int D5    = 18;  // Y7
     static constexpr int D6    = 17;  // Y8
     static constexpr int D7    = 16;  // Y9
+    // 20MHz is the OV2640-recommended XCLK for JPEG. NOTE: 10MHz was tested and
+    // produced byte-identical "NO-SOI - JPEG start marker missing" failures, so
+    // the capture problem is NOT clock/DMA-overflow — frames sync but the DVP
+    // data bus (D0-D7) returns garbage. Suspect wiring/signal integrity (this is
+    // a hand-wired DevKitC-1, not a camera-carrier board). See CameraManager
+    // probeBus() diagnostic.
     static constexpr int XCLK_FREQ_HZ = 20000000;  // 20MHz
 }
 

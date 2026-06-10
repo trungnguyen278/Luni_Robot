@@ -37,6 +37,7 @@ enum ChrIdx {
     IDX_ADMIN_AUTH,
     IDX_LOG_LEVEL,
     IDX_ADMIN_SECRET,
+    IDX_WIFI_SCAN,
     IDX_COUNT
 };
 
@@ -59,6 +60,7 @@ static ble_uuid16_t chr_uuid_cmd   = BLE_UUID16_INIT(0x0011);
 static ble_uuid16_t chr_uuid_admin = BLE_UUID16_INIT(0x0012);
 static ble_uuid16_t chr_uuid_log   = BLE_UUID16_INIT(0x0013);
 static ble_uuid16_t chr_uuid_sec   = BLE_UUID16_INIT(0x0014);
+static ble_uuid16_t chr_uuid_wifi  = BLE_UUID16_INIT(0x0009);
 
 #define RW_FLAGS  (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE)
 #define RWN_FLAGS (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY)
@@ -80,6 +82,7 @@ static const struct ble_gatt_chr_def gatt_chars[] = {
     { .uuid = &chr_uuid_admin.u, .access_cb = gatt_chr_access, .arg = (void*)IDX_ADMIN_AUTH,    .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_ADMIN_AUTH] },
     { .uuid = &chr_uuid_log.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_LOG_LEVEL,     .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_LOG_LEVEL] },
     { .uuid = &chr_uuid_sec.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_ADMIN_SECRET,  .flags = W_FLAGS,  .val_handle = &chr_val_handles[IDX_ADMIN_SECRET] },
+    { .uuid = &chr_uuid_wifi.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_WIFI_SCAN,     .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_WIFI_SCAN] },
     { 0 }
 };
 
@@ -339,6 +342,34 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             return 0;
         }
 
+        case IDX_WIFI_SCAN: {
+            // Real WiFi networks scanned at boot, served as a JSON array so the
+            // app can replace its placeholder list. Requires Level 1 (post-PIN).
+            if (level < BluetoothService::AccessLevel::LEVEL_1)
+                return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+
+            // Cap entries so the value stays within the ATT max (512 bytes).
+            constexpr size_t kMaxNetworks = 12;
+            response = "[";
+            size_t count = 0;
+            for (const auto& net : self->wifi_networks_) {
+                if (count >= kMaxNetworks) break;
+                if (net.ssid.empty()) continue;
+                if (count > 0) response += ',';
+                response += "{\"ssid\":\"";
+                for (char c : net.ssid) {       // minimal JSON string escaping
+                    if (c == '"' || c == '\\') response += '\\';
+                    response += c;
+                }
+                response += "\",\"rssi\":";
+                response += std::to_string(net.rssi);
+                response += '}';
+                ++count;
+            }
+            response += "]";
+            break;
+        }
+
         default:
             return BLE_ATT_ERR_UNLIKELY;
         }
@@ -514,8 +545,10 @@ void BluetoothService::factoryReset()
 {
     nvs_handle_t h;
     if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_erase_key(h, "wifi_ssid");
-        nvs_erase_key(h, "wifi_password");
+        nvs_erase_key(h, "ssid");
+        nvs_erase_key(h, "pass");
+        nvs_erase_key(h, "ws_url");
+        nvs_erase_key(h, "user_id");
         nvs_erase_key(h, "device_token");
         nvs_erase_key(h, "admin_secret");
         nvs_commit(h);

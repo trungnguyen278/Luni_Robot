@@ -339,10 +339,11 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
     {
     case state::InteractionState::TRIGGERED:
     case state::InteractionState::LISTENING:
-        playEmotion("listening");
+        // State-bound: persist until the interaction state changes.
+        playEmotion("listening", SceneManager::HOLD_STICKY);
         break;
     case state::InteractionState::PROCESSING:
-        playEmotion("thinking");
+        playEmotion("thinking", SceneManager::HOLD_STICKY);
         break;
     case state::InteractionState::SPEAKING:
         break;
@@ -350,7 +351,8 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
         break;
     case state::InteractionState::IDLE:
     default:
-        playEmotion("normal");
+        // Resting: show normal briefly, then drift into the idle rotation.
+        playEmotion("normal", SceneManager::HOLD_AUTO);
         break;
     }
 }
@@ -359,43 +361,51 @@ void DisplayManager::handleConnectivity(state::ConnectionState s)
 {
     if (booting_.load()) return;
     text_active_ = false;
+    // Non-ONLINE connectivity states are PERSISTENT conditions, not momentary
+    // events: they must stay on screen until connectivity actually changes.
+    // Using HOLD_AUTO here let the scene's finite window expire and drift back
+    // into the idle rotation — so e.g. with the C5 unpowered (never sends a
+    // status update) the robot showed the idle face as if all was well, masking
+    // that it was offline. HOLD_STICKY keeps the status scene until the next
+    // setConnectionState() swaps it out.
     switch (s)
     {
     case state::ConnectionState::OFFLINE:
-        scene_mgr_.showScene("network", "network-offline");
+        scene_mgr_.showScene("network", "network-offline", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WIFI_CONNECTING:
-        scene_mgr_.showScene("network", "network-wifi-scan");
+        scene_mgr_.showScene("network", "network-wifi-scan", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WIFI_CONNECTED:
-        scene_mgr_.showScene("network", "network-wifi-connect");
+        scene_mgr_.showScene("network", "network-wifi-connect", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WS_CONNECTING:
     case state::ConnectionState::WS_AUTHENTICATING:
-        scene_mgr_.showScene("network", "network-server-error");
+        scene_mgr_.showScene("network", "network-server-error", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::ONLINE:
-        scene_mgr_.showEmotion("normal");
+        // Connected & resting → normal, then hand off to the idle rotation.
+        scene_mgr_.showEmotion("normal", nullptr, SceneManager::HOLD_AUTO);
         break;
 
     case state::ConnectionState::RECONNECTING:
-        scene_mgr_.showScene("network", "network-wifi-retry");
+        scene_mgr_.showScene("network", "network-wifi-retry", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::BLE_PROVISIONING:
-        scene_mgr_.showScene("network", "network-bt-scan");
+        scene_mgr_.showScene("network", "network-bt-scan", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WS_ERROR:
-        scene_mgr_.showScene("network", "network-server-error");
+        scene_mgr_.showScene("network", "network-server-error", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::BLE_CONNECTED:
-        scene_mgr_.showScene("network", "network-bt-paired");
+        scene_mgr_.showScene("network", "network-bt-paired", SceneManager::HOLD_STICKY);
         break;
     }
 }
@@ -413,11 +423,12 @@ void DisplayManager::handleSystem(state::SystemState s)
         break;
 
     case state::SystemState::ERROR:
-        playEmotion("error");
+        // System-bound: hold until the system state recovers.
+        playEmotion("error", SceneManager::HOLD_STICKY);
         break;
 
     case state::SystemState::MAINTENANCE:
-        playEmotion("loading");
+        playEmotion("loading", SceneManager::HOLD_STICKY);
         break;
     }
 }
@@ -547,10 +558,10 @@ void DisplayManager::handleOtaStatus(state::OtaState ota_state, uint8_t progress
 
 // ----------------------------------------------------------------------------
 // Internal asset playback
-void DisplayManager::playEmotion(const std::string &name, int x, int y)
+void DisplayManager::playEmotion(const std::string &name, float hold_ms)
 {
     text_active_ = false;
-    scene_mgr_.showEmotion(name.c_str());
+    scene_mgr_.showEmotion(name.c_str(), nullptr, hold_ms);
 }
 
 void DisplayManager::playText(const std::string &text, int x, int y, uint16_t color, int scale)
