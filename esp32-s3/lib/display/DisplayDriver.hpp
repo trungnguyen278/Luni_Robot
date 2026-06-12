@@ -87,9 +87,18 @@ private:
     // Backlight PWM init helper
     void initBacklightPwm();
 
+    // Lazily allocate the persistent internal-DMA bounce buffer used by
+    // writePixels (the source framebuffer lives in PSRAM). Returns false if no
+    // internal DMA RAM could be reserved.
+    bool ensureDmaBounce();
+
 private:
     Config cfg_;
     spi_device_handle_t spi_dev = nullptr;
+
+    // Internal DMA-capable staging buffer for writePixels (PSRAM -> SPI).
+    uint8_t *dma_bounce_ = nullptr;
+    size_t dma_bounce_sz_ = 0;
 
     uint16_t width_ = 240;
     uint16_t height_ = 320;

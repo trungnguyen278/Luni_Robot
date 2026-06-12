@@ -50,6 +50,9 @@ public:
     void sendText(const char* json, size_t len);
     void sendText(const char* json) { sendText(json, strlen(json)); }
     void sendBinary(const uint8_t* data, size_t len);
+    // Send a complete binary payload (e.g. a camera JPEG) as one WS frame,
+    // bypassing the audio TX batching. See WebSocketClient::sendBinaryWhole.
+    esp_err_t sendBinaryWhole(const uint8_t* data, size_t len);
     void waitTxDrain(uint32_t timeout_ms = 500);
     size_t getWsTxFreeSpace() const;
 

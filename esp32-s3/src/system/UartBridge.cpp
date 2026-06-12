@@ -3,6 +3,10 @@
 
 static const char* TAG = "UartBridge";
 
+// Delay between image chunks (ms). Matches the C5's ~1 chunk/RTT WS-forward rate
+// so its 16 KB UART ring never overflows. See sendImage() for the full rationale.
+static constexpr uint32_t CHUNK_PACING_MS = 100;
+
 UartBridge::~UartBridge()
 {
     stop();
@@ -146,7 +150,15 @@ bool UartBridge::sendImage(const uint8_t* jpeg, size_t len, uint16_t width, uint
             return false;
 
         seq++;
-        if ((seq & 0x07) == 0) vTaskDelay(1);  // yield so control frames aren't starved
+        // Pace the burst to the rate the C5 can actually forward each chunk over
+        // WS (~1 chunk per network RTT; ~100ms over the Cloudflare tunnel). The C5
+        // has no heap to buffer a whole image and its 16 KB UART ring overflowed
+        // when we dumped all ~112 chunks at line rate, losing the tail (incl. the
+        // FLAG_LAST chunk) so the frame never completed. The JPEG lives here in S3
+        // PSRAM, so we throttle the producer instead. No real time cost: the WS
+        // link is the bottleneck (~2.5 KB/s) regardless. TODO: drop once the C5
+        // WS send is de-Nagled / batched and can keep up at line rate.
+        vTaskDelay(pdMS_TO_TICKS(CHUNK_PACING_MS));
     }
     ESP_LOGI(TAG, "Image sent: %zu bytes in %u chunks", len, (unsigned)seq);
     return true;

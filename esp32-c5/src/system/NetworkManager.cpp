@@ -191,6 +191,12 @@ void NetworkManager::sendBinary(const uint8_t* data, size_t len)
     if (ws_ && ws_connected_) ws_->sendBinary(data, len);
 }
 
+esp_err_t NetworkManager::sendBinaryWhole(const uint8_t* data, size_t len)
+{
+    if (ws_ && ws_connected_) return ws_->sendBinaryWhole(data, len);
+    return ESP_FAIL;
+}
+
 void NetworkManager::waitTxDrain(uint32_t timeout_ms)
 {
     if (ws_) ws_->waitTxDrain(timeout_ms);

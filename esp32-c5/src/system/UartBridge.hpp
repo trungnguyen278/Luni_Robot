@@ -24,6 +24,10 @@ public:
     using LogEntryCb = std::function<void(const uint8_t* data, size_t len)>;
     // Fired when a full camera JPEG has been reassembled from IMAGE_CHUNK frames.
     using ImageCb = std::function<void(const uint8_t* jpeg, size_t len)>;
+    // Fired per IMAGE_CHUNK frame so the consumer can stream it on (e.g. to the
+    // server) without the C5 ever buffering the whole image. `payload` is the raw
+    // UART IMAGE_CHUNK payload: [seq:2 LE][flags:1][data...].
+    using ImageChunkCb = std::function<void(const uint8_t* payload, uint8_t len)>;
 
     UartBridge() = default;
     ~UartBridge();
@@ -46,6 +50,9 @@ public:
     void onControlCmd(ControlCmdCb cb) { control_cb_ = std::move(cb); }
     void onLogEntry(LogEntryCb cb) { log_cb_ = std::move(cb); }
     void onImageComplete(ImageCb cb) { image_cb_ = std::move(cb); }
+    // When set, IMAGE_CHUNK frames are streamed out per-chunk via this callback
+    // and NOT reassembled on the C5 (takes precedence over onImageComplete).
+    void onImageChunk(ImageChunkCb cb) { image_chunk_cb_ = std::move(cb); }
 
 private:
     bool sendFrame(uart_proto::MsgType type, const uint8_t* payload, uint8_t len);
@@ -63,6 +70,7 @@ private:
     ControlCmdCb control_cb_;
     LogEntryCb log_cb_;
     ImageCb     image_cb_;
+    ImageChunkCb image_chunk_cb_;
 
     uint8_t* img_buf_   = nullptr;
     size_t   img_total_ = 0;

@@ -3,6 +3,7 @@
 #include "DisplayDriver.hpp"
 #include "Font8x8.hpp"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
@@ -38,6 +39,12 @@ DisplayDriver::DisplayDriver() = default;
 
 DisplayDriver::~DisplayDriver()
 {
+    if (dma_bounce_)
+    {
+        heap_caps_free(dma_bounce_);
+        dma_bounce_ = nullptr;
+        dma_bounce_sz_ = 0;
+    }
     if (spi_dev)
     {
         spi_bus_remove_device(spi_dev);
@@ -257,23 +264,57 @@ void DisplayDriver::setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1
     gpio_set_level((gpio_num_t)cfg_.pin_dc, 1);
 }
 
+bool DisplayDriver::ensureDmaBounce()
+{
+    if (dma_bounce_)
+        return true;
+
+    // The source framebuffer lives in PSRAM (see GfxEngine), which the SPI
+    // master cannot DMA from directly: it would allocate an internal bounce
+    // buffer per transaction and abort with ESP_ERR_NO_MEM once the camera has
+    // claimed the internal DMA RAM. So we own one persistent internal-DMA
+    // buffer and copy chunks through it. Stay under the ESP32-S3 32768-byte
+    // per-transaction limit and degrade gracefully when internal RAM is tight.
+    static const size_t kSizes[] = {16384, 8192, 4096, 2048};
+    for (size_t s : kSizes) {
+        dma_bounce_ = (uint8_t *)heap_caps_malloc(s, MALLOC_CAP_DMA);
+        if (dma_bounce_) {
+            dma_bounce_sz_ = s;
+            ESP_LOGI(TAG, "DMA bounce buffer: %u bytes (internal free=%u)",
+                     (unsigned)s,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            return true;
+        }
+    }
+    ESP_LOGE(TAG, "DMA bounce alloc failed (internal free=%u)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return false;
+}
+
 void DisplayDriver::writePixels(const uint16_t *buffer, size_t len_bytes)
 {
     if (!initialized || !buffer || len_bytes == 0)
         return;
 
-    // ESP32-S3 SPI hardware max: 2^18 bits = 32768 bytes per transaction
-    static constexpr size_t MAX_CHUNK = 32000;
-    const uint8_t *ptr = (const uint8_t *)buffer;
+    if (!ensureDmaBounce())
+        return;
+
+    const uint8_t *src = (const uint8_t *)buffer;
     size_t remaining = len_bytes;
 
     while (remaining > 0) {
-        size_t chunk = (remaining > MAX_CHUNK) ? MAX_CHUNK : remaining;
+        size_t chunk = (remaining > dma_bounce_sz_) ? dma_bounce_sz_ : remaining;
+        memcpy(dma_bounce_, src, chunk);
+
         spi_transaction_t t = {};
         t.length = chunk * 8;
-        t.tx_buffer = ptr;
-        ESP_ERROR_CHECK(spi_device_transmit(spi_dev, &t));
-        ptr += chunk;
+        t.tx_buffer = dma_bounce_;
+        esp_err_t err = spi_device_transmit(spi_dev, &t);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "writePixels SPI transmit failed: %s", esp_err_to_name(err));
+            return;
+        }
+        src += chunk;
         remaining -= chunk;
     }
 }

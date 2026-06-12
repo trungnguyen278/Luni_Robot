@@ -195,6 +195,27 @@ esp_err_t WebSocketClient::sendBinary(const uint8_t* data, size_t len)
     return (sent == len) ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t WebSocketClient::sendBinaryWhole(const uint8_t* data, size_t len)
+{
+    if (!client_ || !connected_ || !data || len == 0) return ESP_FAIL;
+
+    // Send directly as a single WS frame instead of going through tx_buffer_,
+    // whose batching would chop the image into 2048-byte frames. The esp
+    // websocket client serializes sends with its own recursive lock, so this is
+    // safe to call alongside the TX task's send_bin().
+    int sent = esp_websocket_client_send_bin(
+        client_, (const char*)data, len, pdMS_TO_TICKS(1000));
+    if (sent < 0) {
+        ESP_LOGW(TAG, "sendBinaryWhole failed (len=%zu)", len);
+        return ESP_FAIL;
+    }
+    if ((size_t)sent != len) {
+        ESP_LOGW(TAG, "sendBinaryWhole partial: %d/%zu", sent, len);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 esp_err_t WebSocketClient::sendAudioFrame(uint16_t seq, const uint8_t* opus_data, size_t opus_len)
 {
     if (!opus_data || opus_len == 0) return ESP_ERR_INVALID_ARG;

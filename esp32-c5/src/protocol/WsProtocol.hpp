@@ -51,7 +51,13 @@ struct AudioFrameHeader {
 static constexpr uint8_t AUDIO_UPLINK   = 0xAA;
 static constexpr uint8_t AUDIO_DOWNLINK = 0xAB;
 // Camera image uplink (device → server): first byte tag, then raw JPEG bytes.
+// One whole-image frame — only usable for images small enough for the C5 to hold.
 static constexpr uint8_t IMAGE_UPLINK   = 0xAC;
+// Camera image CHUNK uplink (device → server): the C5 streams a JPEG one chunk
+// per WS frame so it never buffers the whole image (no PSRAM). The server
+// reassembles. Frame: [0xAD][seq:2 LE][flags:1][data] — mirrors the UART
+// IMAGE_CHUNK payload (FIRST data begins [total:4 LE][w:2][h:2], then JPEG).
+static constexpr uint8_t IMAGE_CHUNK_UPLINK = 0xAD;
 
 // JSON message builder helpers
 cJSON* createMessage(MsgType type, const char* id = nullptr);

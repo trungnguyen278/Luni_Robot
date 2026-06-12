@@ -349,16 +349,40 @@ bool DeviceProfile::setup(AppController& app)
         net_ptr->sendText(reinterpret_cast<const char*>(data), len);
     });
 
-    // Forward a reassembled camera JPEG to the server. Tag the first byte with
-    // the binary-frame direction convention (0xAA=audio uplink, 0xAB=audio
-    // downlink, 0xAC=image uplink) so the server can route it. Then raw JPEG.
-    uart_bridge->onImageComplete([net_ptr](const uint8_t* jpeg, size_t len) {
-        uint8_t* buf = (uint8_t*)malloc(len + 1);
-        if (!buf) { ESP_LOGE(TAG, "image fwd malloc failed"); return; }
-        buf[0] = ws::IMAGE_UPLINK;   // 0xAC
-        memcpy(buf + 1, jpeg, len);
-        net_ptr->sendBinary(buf, len + 1);
-        free(buf);
+    // Stream each camera JPEG chunk to the server as its own WS frame, tagged
+    // 0xAD (image-chunk uplink). The C5 has no PSRAM and can't hold a whole
+    // higher-res JPEG (a 38KB malloc failed), so we forward chunk-by-chunk and
+    // let the server reassemble. Each chunk MUST be one WS frame (sendBinary's
+    // batching would merge/split them and corrupt the stream), hence
+    // sendBinaryWhole. payload = [seq:2][flags:1][data]; we just prepend the tag.
+    uart_bridge->onImageChunk([net_ptr](const uint8_t* payload, uint8_t len) {
+        namespace im = uart_proto::image;
+        const uint16_t seq   = (uint16_t)(payload[0] | (payload[1] << 8));
+        const uint8_t  flags = payload[2];
+
+        uint8_t buf[1 + uart_proto::MAX_PAYLOAD];
+        buf[0] = ws::IMAGE_CHUNK_UPLINK;   // 0xAD
+        memcpy(buf + 1, payload, len);
+        const esp_err_t err = net_ptr->sendBinaryWhole(buf, len + 1);
+
+        // Diagnostics: count chunks/bytes per image, flag any send failure or
+        // sequence gap (a gap means UART chunks were dropped — likely RX starved
+        // while a WS send blocked). Logged at FIRST/LAST so it's not too chatty.
+        static uint32_t s_count = 0, s_bytes = 0, s_fail = 0;
+        static uint16_t s_expect = 0;
+        if (flags & im::FLAG_FIRST) { s_count = 0; s_bytes = 0; s_fail = 0; s_expect = seq; }
+        if (seq != s_expect) {
+            ESP_LOGW(TAG, "img chunk seq gap: got %u expected %u", seq, s_expect);
+            s_expect = seq;
+        }
+        s_expect++;
+        s_count++;
+        s_bytes += len + 1;
+        if (err != ESP_OK) { s_fail++; }
+        if (flags & im::FLAG_LAST) {
+            ESP_LOGI(TAG, "img streamed: %u chunks, %u WS bytes, %u send-fails",
+                     (unsigned)s_count, (unsigned)s_bytes, (unsigned)s_fail);
+        }
     });
 
     // =========================================================

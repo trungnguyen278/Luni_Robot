@@ -31,8 +31,13 @@ public:
 
 private:
     bool      ready_   = false;
-    // Software-encoded JPEG buffer (malloc'd by frame2jpg, owned by us). The raw
-    // RGB565 camera_fb_t is returned to the driver immediately after encoding.
+    // Points to the JPEG bytes returned by captureJpeg(). In HW-JPEG mode it
+    // aliases fb_->buf (zero-copy, no free); in RGB565 mode it's a frame2jpg
+    // malloc we own (freed in releaseFrame).
     uint8_t*  jpg_     = nullptr;
     size_t    jpg_len_ = 0;
+    // Retained camera frame buffer for HW-JPEG mode (returned to the driver in
+    // releaseFrame). Stored as void* so the header stays free of esp_camera.h.
+    // nullptr in RGB565 mode. (camera_fb_t* under the hood.)
+    void*     fb_      = nullptr;
 };

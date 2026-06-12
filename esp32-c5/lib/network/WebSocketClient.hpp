@@ -30,6 +30,12 @@ public:
     esp_err_t sendBinary(const uint8_t* data, size_t len);
     esp_err_t sendAudioFrame(uint16_t seq, const uint8_t* opus_data, size_t opus_len);
 
+    // Send a complete binary payload as exactly ONE WebSocket frame, bypassing
+    // the audio TX batch buffer. Required for camera images: the server expects
+    // the whole 0xAC+JPEG in a single frame, but the byte-stream batching used
+    // for audio would split it across 2048-byte frames and corrupt it.
+    esp_err_t sendBinaryWhole(const uint8_t* data, size_t len);
+
     // TX buffer management
     void waitTxDrain(uint32_t timeout_ms = 500);
     size_t getTxFreeSpace() const;

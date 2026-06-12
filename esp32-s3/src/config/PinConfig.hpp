@@ -121,13 +121,14 @@ namespace Camera {
     static constexpr int D5    = 18;  // Y7
     static constexpr int D6    = 17;  // Y8
     static constexpr int D7    = 16;  // Y9
-    // 20MHz is the OV2640-recommended XCLK for JPEG. NOTE: 10MHz was tested and
-    // produced byte-identical "NO-SOI - JPEG start marker missing" failures, so
-    // the capture problem is NOT clock/DMA-overflow — frames sync but the DVP
-    // data bus (D0-D7) returns garbage. Suspect wiring/signal integrity (this is
-    // a hand-wired DevKitC-1, not a camera-carrier board). See CameraManager
-    // probeBus() diagnostic.
-    static constexpr int XCLK_FREQ_HZ = 20000000;  // 20MHz
+    // 10MHz XCLK (was 20MHz). Halving the clock halves the DVP data rate, giving
+    // the no-PSRAM-DMA fallback path (Octal PSRAM, see CameraConfig) time to drain
+    // QVGA lines without "EV-VSYNC-OVF". Capture is slower but we only need <=1Hz.
+    // NOTE: the earlier 10MHz-vs-20MHz "NO-SOI" test was in JPEG mode (broken HW
+    // encoder) — clock-independent there; this is the RGB565 path, where XCLK
+    // does set PCLK. If frames still overflow, try 8MHz; if they go dark, the data
+    // bus (D0-D7) integrity is suspect (hand-wired DevKitC-1).
+    static constexpr int XCLK_FREQ_HZ = 10000000;  // 10MHz
 }
 
 // =============================================================================

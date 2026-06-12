@@ -123,6 +123,20 @@ bool CameraManager::captureJpeg(const uint8_t** out, size_t* out_len,
     // free it in releaseFrame(). Return the camera frame buffer straight away.
     const uint16_t fw = (uint16_t)fb->width;
     const uint16_t fh = (uint16_t)fb->height;
+
+    // The OV2640 + S3 DMA delivers RGB565 little-endian (low byte first), but
+    // frame2jpg's RGB565->RGB888 path expects the red bits in the FIRST byte
+    // (big-endian). Without swapping, green straddles the wrong byte and frames
+    // come out magenta/pink with green fringing. Swap each 16-bit pixel in place
+    // before encoding — the buffer is ours until esp_camera_fb_return below.
+    // (This is the same little-endian convention GfxEngine swaps for the ST7789.)
+    uint8_t* px = fb->buf;
+    for (size_t i = 0; i + 1 < fb->len; i += 2) {
+        const uint8_t t = px[i];
+        px[i] = px[i + 1];
+        px[i + 1] = t;
+    }
+
     uint8_t* jpg = nullptr;
     size_t   jlen = 0;
     const bool ok = frame2jpg(fb, CameraConfig::SW_JPEG_QUALITY, &jpg, &jlen);

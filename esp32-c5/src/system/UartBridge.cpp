@@ -22,7 +22,13 @@ bool UartBridge::init(const Config& cfg)
     uart_cfg.flow_ctrl  = UART_HW_FLOWCTRL_DISABLE;
     uart_cfg.source_clk = UART_SCLK_DEFAULT;
 
-    esp_err_t err = uart_driver_install(cfg_.uart_num, 512, 256, 0, nullptr, 0);
+    // RX ring stays 16 KB: the C5 has no spare heap to hold a whole image here —
+    // a 40 KB ring dropped the largest free block to ~22 KB and broke the mbedTLS
+    // handshake (esp-aes alloc fail). Instead the burst is paced on the S3 side,
+    // which buffers the JPEG in its 8 MB PSRAM and feeds chunks at the rate the
+    // C5 can forward over WS (~1 chunk/RTT, Nagle-limited). With pacing the ring
+    // never fills, so 16 KB is plenty. TX stays small (status only).
+    esp_err_t err = uart_driver_install(cfg_.uart_num, 16384, 256, 0, nullptr, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "UART driver install failed: %s", esp_err_to_name(err));
         return false;
@@ -50,7 +56,9 @@ void UartBridge::start()
     if (started_) return;
     started_ = true;
 
-    xTaskCreatePinnedToCore(&UartBridge::rxTaskEntry, "UartBridge", 3072, this, 3, &rx_task_, 0);
+    // 4 KB: rxLoop now carries a bulk read buffer AND runs the per-chunk WS send
+    // (image_chunk_cb_ -> sendBinaryWhole) synchronously on this stack.
+    xTaskCreatePinnedToCore(&UartBridge::rxTaskEntry, "UartBridge", 4096, this, 3, &rx_task_, 0);
     ESP_LOGI(TAG, "UartBridge started");
 }
 
@@ -118,13 +126,18 @@ void UartBridge::rxLoop()
     ESP_LOGI(TAG, "RX task started");
 
     uart_proto::FrameParser parser;
-    uint8_t byte;
+    // Bulk read: pulling one byte per uart_read_bytes call (~46k calls/s at
+    // 460800 baud) couldn't keep the RX FIFO drained during an image burst.
+    // Drain up to a chunk at a time, then feed the parser byte-by-byte.
+    uint8_t buf[256];
 
     while (started_) {
-        int len = uart_read_bytes(cfg_.uart_num, &byte, 1, pdMS_TO_TICKS(50));
-        if (len <= 0) continue;
+        int n = uart_read_bytes(cfg_.uart_num, buf, sizeof(buf), pdMS_TO_TICKS(20));
+        if (n <= 0) continue;
 
-        if (parser.feed(byte)) {
+        for (int b = 0; b < n; ++b) {
+            if (!parser.feed(buf[b])) continue;
+
             uint8_t type = parser.getType();
             const uint8_t* payload = parser.getPayload();
             uint8_t payload_len = parser.getPayloadLen();
@@ -151,9 +164,16 @@ void UartBridge::rxLoop()
     vTaskDelete(nullptr);
 }
 
-// Reassemble a JPEG from IMAGE_CHUNK frames; fire image_cb_ on the last chunk.
+// Stream a JPEG from IMAGE_CHUNK frames. Default path: forward each chunk on
+// (image_chunk_cb_) so the C5 never buffers the whole image. Legacy fallback:
+// reassemble into img_buf_ and fire image_cb_ on the last chunk.
 void UartBridge::handleImageChunk(const uint8_t* p, uint8_t len)
 {
+    if (image_chunk_cb_) {
+        image_chunk_cb_(p, len);
+        return;
+    }
+
     namespace im = uart_proto::image;
     uint16_t seq   = (uint16_t)(p[0] | (p[1] << 8));
     uint8_t  flags = p[2];

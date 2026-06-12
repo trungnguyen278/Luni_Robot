@@ -11,14 +11,16 @@
 // =============================================================================
 namespace CameraConfig {
 
-// QQVGA (160x120) = enum value 1 (NOT 2 — that's QCIF). This board's PSRAM is
-// Octal @ 80MHz so esp32-camera can't DMA frames to PSRAM ("PSRAM DMA mode
-// disabled") and falls back to small internal line buffers. At anything above
-// QQVGA those can't drain a frame before the next VSYNC -> "EV-VSYNC-OVF" +
-// timeout. QQVGA's lower data rate fits the fallback path (verified: a clean
-// RGB565 QQVGA frame captured at 20MHz XCLK with fb_count=1). Raise resolution
-// only if camera-to-PSRAM DMA gets re-enabled (needs a Quad-PSRAM board).
-static constexpr int FRAME_SIZE          = 1;    // QQVGA (160x120)
+// Frame size = esp32-camera framesize_t enum value:
+//   1=QQVGA(160x120) · 2=QCIF(176x144) · 3=HQVGA(240x176) · 5=QVGA(320x240)
+// This board's PSRAM is Octal @ 80MHz so esp32-camera can't DMA frames to PSRAM
+// ("PSRAM DMA mode disabled") and falls back to small internal line buffers. At
+// 20MHz XCLK anything above QQVGA overran them ("EV-VSYNC-OVF"). We now capture
+// for robot/free-space detection (resolution matters, frame rate <=1Hz is fine),
+// so we trade speed for size: QVGA + a HALVED XCLK (10MHz, see PinConfig) so the
+// fallback has time to drain each line. If EV-VSYNC-OVF / fb_get timeouts return,
+// step DOWN this ladder (or drop XCLK to 8MHz): 5 QVGA -> 3 HQVGA -> 2 QCIF -> 1 QQVGA.
+static constexpr int FRAME_SIZE          = 5;    // QVGA (320x240)
 static constexpr int JPEG_QUALITY        = 12;   // 0..63, lower = better/bigger
 // MUST be 1, not 2. With the "PSRAM DMA mode disabled" fallback, fb_count=2 makes
 // esp32-camera's DMA sizing allocate a frame buffer SMALLER than one frame (saw
@@ -33,6 +35,8 @@ static constexpr int CAPTURE_INTERVAL_MS = 0;    // 0 = on-demand only (no perio
 // is clean (verified). So we grab RGB565 and JPEG-encode in software on the S3
 // (frame2jpg) — see CameraManager. This quality is the frame2jpg scale: 0..100,
 // HIGHER = better/bigger (NOT the esp_camera 0..63 scale of JPEG_QUALITY above).
-static constexpr int SW_JPEG_QUALITY     = 80;
+// 85 keeps a QVGA frame well under the C5's 64KB image cap (UartBridge) — raise
+// toward 92 for crisper detection if the encoded size stays comfortably below 64KB.
+static constexpr int SW_JPEG_QUALITY     = 90;
 
 } // namespace CameraConfig
