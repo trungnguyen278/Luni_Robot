@@ -14,9 +14,9 @@ if os.name == 'nt':
 import opuslib
 
 SAMPLE_RATE = 16000
-FRAME_SIZE = 320  # 20ms
+FRAME_SIZE = 960  # 60ms @ 16kHz — matches firmware AudioConfig
 
-def test_opus(wav_path, bitrate=64000):
+def test_opus(wav_path, bitrate=24000):
     # Load WAV
     with wave.open(wav_path, 'r') as wf:
         sr = wf.getframerate()
@@ -39,7 +39,7 @@ def test_opus(wav_path, bitrate=64000):
     print(f"Input: {len(data)} samples, {len(data)/SAMPLE_RATE:.1f}s")
 
     # Encode
-    encoder = opuslib.Encoder(SAMPLE_RATE, 1, opuslib.APPLICATION_AUDIO)
+    encoder = opuslib.Encoder(SAMPLE_RATE, 1, opuslib.APPLICATION_VOIP)
     encoder.bitrate = bitrate
     encoder.complexity = 10
 
@@ -89,5 +89,5 @@ def test_opus(wav_path, bitrate=64000):
 
 if __name__ == "__main__":
     wav_file = sys.argv[1] if len(sys.argv) > 1 else "test_sine_440hz.wav"
-    bitrate = int(sys.argv[2]) if len(sys.argv) > 2 else 64000
+    bitrate = int(sys.argv[2]) if len(sys.argv) > 2 else 24000
     test_opus(wav_file, bitrate)

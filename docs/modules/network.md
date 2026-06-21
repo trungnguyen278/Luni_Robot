@@ -26,7 +26,7 @@ server → { "type":"auth_result", "payload":{ "status":"ok" } }   # timeout 5s
 ### Frames
 
 - **Text**: JSON message (`WsProtocol.hpp` map `type` string ↔ `MsgType` enum). Device gửi: `device_info`, `state_update`, `heartbeat`, `log`, `ota_progress`, `error`. Nhận: `set_volume/brightness/emotion/scene`, `reboot`, `ota_available`, `sync_data`, `tts_play`, `audio_stop`, `config_update`, `interaction_msg`, `ack`.
-- **Binary**: Opus audio, header 5 byte `[direction:1][seq:2 LE][len:2 LE]` (0xAA uplink, 0xAB downlink).
+- **Binary**: Opus audio 16 kHz mono VOIP 60 ms. Uplink: mỗi WS message = `[0xAA][len:2 LE][opus]...` (batch tag 0xAA). Downlink: stream `[len:2 LE][opus]...` không tag. Camera: 0xAC (nguyên ảnh) / 0xAD (chunk).
 
 `WsMessageHandler` dispatch message đến, relay command sang S3 qua UART `DEVICE_CMD`.
 

@@ -32,8 +32,11 @@ Colab, chính là cơ chế ESPHome dùng.
 - Bảng faph dựng sẵn của microWakeWord ra `nan` → notebook **tự tính lại** recall + false-accepts/giờ (mục 7).
 - Frontend pymicro-features cố định **10ms hop / 30ms window / 40 kênh / 16kHz** → firmware phải để `STRIDE_MS=10`.
 
-**Còn lại để chạy trên thiết bị** (chưa làm — xem mục 3–4 bên dưới): thêm `esp-tflite-micro`, viết inference
-trong `WakeWordDetector.cpp`, nối mic-tap `feed()`, bật `-DLUNI_ENABLE_WAKEWORD`.
+**Trạng thái trên thiết bị: ĐÃ TÍCH HỢP (2026-06).** `esp-tflite-micro` đã thêm vào
+`src/idf_component.yml`; inference + microfrontend viết xong trong `lib/wakeword/WakeWordDetector.cpp`;
+mic-tap always-on nối ở `AudioManager` + `DeviceProfile` (section 4c); `-DLUNI_ENABLE_WAKEWORD`
+đã bật trong `platformio.ini`. **Không còn nút bấm trên mạch → wake word là trigger thoại duy nhất.**
+Còn lại: **flash + tinh chỉnh `DETECT_THRESHOLD` trên phần cứng thật** (xem mục 7) — chưa test on-device.
 
 ---
 
@@ -55,37 +58,38 @@ trong `WakeWordDetector.cpp`, nối mic-tap `feed()`, bật `-DLUNI_ENABLE_WAKEW
 xxd -i hi_luni.tflite > esp32-s3/lib/wakeword/model_hi_luni.h
 ```
 
-Cập nhật ngưỡng trong `esp32-s3/src/config/WakeWordConfig.hpp` theo manifest
-(`DETECT_THRESHOLD`, `WINDOW_MS`, `STRIDE_MS`).
+Cập nhật ngưỡng trong `esp32-s3/lib/wakeword/WakeWordConfig.hpp` theo manifest
+(`DETECT_THRESHOLD`, `WINDOW_MS`, `STRIDE_MS`). (File config đã chuyển từ `src/config/`
+vào `lib/wakeword/` cùng model + detector để lib tự chứa — không include ngược vào `src/`.)
 
-## 3. Tích hợp inference (TODO trong `WakeWordDetector.cpp`)
+## 3. Tích hợp inference — ĐÃ LÀM (`lib/wakeword/WakeWordDetector.cpp`)
 
-1. Thêm component vào `esp32-s3/src/idf_component.yml`:
-   ```yaml
-   esp-tflite-micro: "*"
-   ```
-2. Trong `WakeWordDetector::init()` (nhánh `#ifdef LUNI_ENABLE_WAKEWORD`):
-   - nạp model (`tflite::GetModel(model_hi_luni)`), op resolver, interpreter,
-     **tensor arena trong PSRAM**.
-3. `feed(pcm16k, n)`:
-   - dồn mẫu, dựng **spectrogram 40 kênh** (cửa sổ `WINDOW_MS`, hop `STRIDE_MS`),
-   - chạy model mỗi stride; nếu `prob > DETECT_THRESHOLD` và đã qua `REFRACTORY_MS`
-     → gọi `cb_()`.
+Bám đúng pipeline microWakeWord của ESPHome để model train trên Colab chạy y hệt on-device:
 
-## 4. Nối mic vào detector (điểm còn lại)
+1. Component `esp-tflite-micro: "*"` (`src/idf_component.yml`) — **bundle sẵn** audio
+   microfrontend (`tensorflow/lite/experimental/microfrontend/lib`) + op resource-variable
+   cho model streaming.
+2. `init()`: `FrontendConfig` (16 kHz, 30 ms/10 ms, 40 kênh, band 125–7500, noise-reduction
+   + PCAN + log-scale = hằng số microWakeWord), `tflite::GetModel(g_hi_luni_model)`,
+   `MicroMutableOpResolver<20>` (CallOnce, VarHandle, Reshape, ReadVariable, StridedSlice,
+   Concatenation, AssignVariable, Conv2D, Mul, Add, Mean, FullyConnected, Logistic, Quantize,
+   DepthwiseConv2D, AveragePool2D, MaxPool2D, Pad, Pack, SplitV), `MicroResourceVariables::Create(...,20)`,
+   tensor arena **64 KB trong PSRAM**; đọc `stride = input->dims[1]` runtime.
+3. `feed(pcm16k, n)`: dồn mẫu → `FrontendProcessSamples` (mỗi 10 ms → 1 frame 40 kênh) →
+   quantize int8 `((v*256)+333)/666 − 128` → ghép `stride` frame → `Invoke` → prob uint8 →
+   cửa sổ trượt `MOVING_AVG_FRAMES` (`sum > cutoff*N`) + refractory `REFRACTORY_MS` → `cb_()`.
+   Tự reset khi feed gián đoạn > 200 ms (lúc listening/speaking).
 
-Mic được `AudioManager` đọc ở 16 kHz. Thêm một "tap": trong vòng đọc mic, gọi
-`s_wakeword.feed(pcm, samples)` song song với đường Opus. (Detector chạy nhẹ; có
-thể đặt ở Core 1 cùng audio hoặc Core 0.)
+## 4. Nối mic vào detector — ĐÃ LÀM (always-on)
 
-## 5. Bật
+`AudioManager::setWakeWordTap(cb)` cài tap + bật **mic always-on**. `micReadLoop` (Core 1):
+IDLE → `startCapture` (idempotent) + `wake_tap_(pcm,n)` (bỏ qua khi `speaking` để TTS không
+tự kích); LISTENING → uplink như cũ; `pauseListening`/`stopListening` không tắt mic khi
+always-on. `DeviceProfile` 4c cài tap gọi `s_wakeword.feed` sau khi `init()` OK.
 
-Thêm vào `esp32-s3/platformio.ini`:
-```ini
-build_flags =
-    ...
-    -DLUNI_ENABLE_WAKEWORD
-```
+## 5. Bật — ĐÃ BẬT
+
+`-DLUNI_ENABLE_WAKEWORD` đã có trong `esp32-s3/platformio.ini` (cạnh `-DLUNI_ENABLE_CAMERA`).
 
 ## Luồng khi phát hiện
 

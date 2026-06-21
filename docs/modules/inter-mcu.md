@@ -16,7 +16,9 @@ Giải pháp: mỗi SPI payload chứa **trọn các opus frame**:
 ```
 [frame_count:1] [len:2 LE][opus]  [len:2 LE][opus] ... [padding]
 ```
-Mỗi opus frame có header 2-byte length. Frame không vừa transaction → giữ header lại (`pending_header_`) cho transaction sau. Kết quả: drop 1 payload = mất vài frame trọn vẹn → Opus PLC xử lý (gap ~20ms), alignment luôn đúng, không cần resync.
+Mỗi opus frame có header 2-byte length. Frame không vừa transaction → giữ header lại (`pending_header_`) cho transaction sau. Kết quả: drop 1 payload = mất vài frame trọn vẹn → Opus PLC xử lý (gap ~60ms/frame), alignment luôn đúng, không cần resync.
+
+Audio contract: **16 kHz mono, Opus VOIP, 60 ms frames, 24 kbps, constrained VBR** (`AudioConfig.hpp`) — mỗi frame encode ≤ 240B để `[len:2][opus]` lọt 1 payload SPI. Phía WS: uplink batch có tag `0xAA` đầu message; downlink là stream `[len:2 LE][opus]` không tag (xem `Luni_Cloud/server/app/utils/audio.py`).
 
 ## UART — control / status / sync (variable-length)
 
