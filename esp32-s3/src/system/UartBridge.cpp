@@ -186,11 +186,13 @@ void UartBridge::rxLoop()
             uint8_t payload_len = parser.getPayloadLen();
 
             if (type == (uint8_t)uart_proto::MsgType::STATUS_UPDATE &&
-                payload_len >= sizeof(uart_proto::StatusPayload)) {
-                auto* sp = reinterpret_cast<const uart_proto::StatusPayload*>(payload);
+                payload_len >= 4) {
+                // 4-byte frames come from pre-fail_reason C5 firmware; the
+                // reason then defaults to NONE.
+                uint8_t fail_reason = (payload_len >= 5) ? payload[4] : 0;
                 if (status_cb_) {
-                    status_cb_(sp->interaction, sp->connection,
-                               sp->system_state, sp->emotion);
+                    status_cb_(payload[0], payload[1],
+                               payload[2], payload[3], fail_reason);
                 }
             } else if (type == (uint8_t)uart_proto::MsgType::CONTROL_CMD &&
                        payload_len >= 1) {

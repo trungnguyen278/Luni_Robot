@@ -45,6 +45,14 @@ public:
     std::string getIp() const;
     std::string getSsid() const { return sta_ssid; }
 
+    // Raw wifi_err_reason_t from the last STA_DISCONNECTED event (0 = none yet).
+    // Lets NetworkManager map a connect failure to the right ConnectFailReason
+    // (wrong password vs AP not found vs DHCP) instead of always WIFI_TIMEOUT.
+    int lastDisconnectReason() const { return last_disconnect_reason_; }
+    // True once the link layer associated (STA_CONNECTED) for the current
+    // attempt — if we then time out without an IP, the failure is DHCP, not auth.
+    bool wasAssociated() const { return associated_; }
+
     // Scan
     std::vector<WifiInfo> scanNetworks();
     void ensureStaStarted();
@@ -71,6 +79,11 @@ private:
 
     bool connected = false;
     bool wifi_started = false;
+
+    // Updated from the WiFi event handler (other task context); plain ints are
+    // fine here — single writer, read after the connect window closes.
+    volatile int  last_disconnect_reason_ = 0;
+    volatile bool associated_ = false;
 
     esp_netif_t* sta_netif = nullptr;
 

@@ -22,6 +22,20 @@ namespace CameraConfig {
 // step DOWN this ladder (or drop XCLK to 8MHz): 5 QVGA -> 3 HQVGA -> 2 QCIF -> 1 QQVGA.
 static constexpr int FRAME_SIZE          = 5;    // QVGA (320x240)
 static constexpr int JPEG_QUALITY        = 12;   // 0..63, lower = better/bigger
+
+// Capture mode. true = OV2640 outputs JPEG directly (hardware encoder): correct
+// colors (no RGB565 conversion at all), smaller files, no SW-encode CPU. The old
+// "broken encoder / NO-SOI" verdict was actually an XCLK issue (16MHz fails,
+// 10/20MHz work — espressif/esp32-camera#657); our XCLK is 10MHz. If NO-SOI
+// returns, flip to false to fall back to RGB565 + software JPEG.
+static constexpr bool USE_HW_JPEG = true;
+
+// RGB565-fallback color fix (only used when USE_HW_JPEG == false). The right combo
+// is board-specific (esp32-camera#422/#676 = byte endianness, #379 = R/B order).
+// A byte-swap alone came out magenta, so R/B swap is on too. Flip either + reflash
+// if color is still off.
+static constexpr bool RGB565_SWAP_BYTES = true;   // high/low byte (endianness)
+static constexpr bool RGB565_SWAP_RB    = true;   // red <-> blue (BGR fix)
 // MUST be 1, not 2. With the "PSRAM DMA mode disabled" fallback, fb_count=2 makes
 // esp32-camera's DMA sizing allocate a frame buffer SMALLER than one frame (saw
 // 32768 < 38400 for QQVGA RGB565) -> it can't hold a full frame -> EV-VSYNC-OVF +

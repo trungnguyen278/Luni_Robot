@@ -45,7 +45,8 @@ static void render_boot_poweron(GfxEngine& gfx, float t, const ColorContext& col
 }
 
 // ─── boot-credits ──────────────────────────────────────────────────
-// NTT monogram fades in → sweep arc → name typewriter → role → tagline.
+// Brand-clean Luni splash (QĐ-13): no personal/company name on screen.
+// "L" mark fades in → sweep arc → "Luni" typewriter → subtitle → version.
 // Everything uses colors.eye (cyan) — no accent color switching.
 static void render_boot_credits(GfxEngine& gfx, float t, const ColorContext& colors) {
     uint16_t c = colors.eye;
@@ -59,46 +60,46 @@ static void render_boot_credits(GfxEngine& gfx, float t, const ColorContext& col
     int16_t mY = STATUS_H + 56;
     uint8_t monoOp = (uint8_t)(ease::out(monoIn) * 255.0f);
 
-    // NTT monogram — frame + text, both fade in together
+    // Luni "L" mark — frame + letter, both fade in together
     if (monoIn > 0.01f) {
         gfx.pushAlpha(monoOp);
         gfx.strokeRoundedRect(SCX - 28, mY - 28, 56, 56, 12, c, 2);
-        gfx.drawText("NTT", SCX, mY - 5, c, 2,
+        gfx.drawText("L", SCX, mY - 5, c, 2,
                      GfxEngine::TextAlign::CENTER);
         gfx.popAlpha();
     }
 
-    // Sweep arc around monogram
+    // Sweep arc around the mark
     if (sweep > 0.02f) {
         float sweepAngle = sweep * TAU;
         float startA = -PI / 2.0f;
         gfx.drawArc(SCX, mY, 36, startA, startA + sweepAngle, c, 2);
     }
 
-    // Name typewriter
+    // Wordmark typewriter
     if (nameP > 0.0f) {
-        static const char NAME[] = "NGUYEN THANH TRUNG";
+        static const char NAME[] = "Luni";
         int total = (int)strlen(NAME);
         int len = (int)(nameP * total + 0.0001f);
         if (len > total) len = total;
-        char buf[20];
+        char buf[8];
         memcpy(buf, NAME, len);
         buf[len] = '\0';
-        gfx.drawText(buf, SCX, mY + 56, c, 1,
+        gfx.drawText(buf, SCX, mY + 56, c, 2,
                      GfxEngine::TextAlign::CENTER);
     }
 
-    // Role line
+    // Subtitle line
     if (roleP > 0.0f) {
         uint8_t rOp = (uint8_t)(ease::out(roleP) * 230.0f);
-        gfx.drawText("design \xB7 firmware \xB7 hw", SCX, mY + 74, c, 1,
+        gfx.drawText("AI COMPANION", SCX, mY + 80, c, 1,
                      GfxEngine::TextAlign::CENTER, rOp);
     }
 
-    // Bottom tagline
+    // Bottom version tag
     if (taglineP > 0.0f) {
         uint8_t tOp = (uint8_t)(ease::out(taglineP) * 153.0f);
-        gfx.drawText("one-person build", SCX, SCREEN_H - 14, c, 1,
+        gfx.drawText("v3.0", SCX, SCREEN_H - 14, c, 1,
                      GfxEngine::TextAlign::CENTER, tOp);
     }
 }
@@ -142,7 +143,7 @@ static void render_boot_checks_personal(GfxEngine& gfx, float t, const ColorCont
         }
     }
 
-    gfx.drawText("v2.0", SCX, SCREEN_H - 8, c, 1,
+    gfx.drawText("v3.0", SCX, SCREEN_H - 8, c, 1,
                  GfxEngine::TextAlign::CENTER, 140);
 }
 
@@ -154,10 +155,10 @@ static void render_boot_ready_personal(GfxEngine& gfx, float t, const ColorConte
     float fill = clamp(t / 0.7f, 0.0f, 1.0f);
     float stampT = clamp((t - 0.75f) / 0.15f, 0.0f, 1.0f);
 
-    // Small NTT monogram at top
+    // Small Luni "L" mark at top
     int16_t markY = STATUS_H + 38;
     gfx.strokeRoundedRect(SCX - 12, markY - 12, 24, 24, 5, c, 1);
-    gfx.drawText("NTT", SCX, markY - 1, c, 1,
+    gfx.drawText("L", SCX, markY - 1, c, 1,
                  GfxEngine::TextAlign::CENTER, 242);
 
     // Progress bar

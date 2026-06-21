@@ -1,5 +1,6 @@
 #include "MotionManager.hpp"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <cmath>
 
 static const char* TAG = "MotionManager";
@@ -7,7 +8,11 @@ using namespace motion_cfg;
 
 MotionManager::~MotionManager()
 {
-    stop();
+    stop();  // joins the Motion + IMU tasks before we touch shared resources
+    if (queue_) {
+        vQueueDelete(queue_);
+        queue_ = nullptr;
+    }
     if (bus_) {
         i2c_del_master_bus(bus_);
         bus_ = nullptr;
@@ -46,6 +51,7 @@ bool MotionManager::init(const Config& cfg)
     bool imu_ok = imu_.init(bus_, cfg.imu_addr, cfg.scl_hz);
     if (!imu_ok) ESP_LOGW(TAG, "MPU6050 init failed (IMU disabled)");
 
+    if (queue_) vQueueDelete(queue_);  // re-init: drop the old queue first
     queue_ = xQueueCreate(8, sizeof(Cmd));
     return pca_ok;  // servos are the must-have; IMU optional
 }
@@ -54,23 +60,64 @@ void MotionManager::start()
 {
     if (running_.load() || !queue_) return;
     running_ = true;
-    xTaskCreatePinnedToCore(taskEntry, "Motion", 4096, this, 4, &task_, 1);
-    // Low-rate IMU sampler on Core 0 (away from audio on Core 1).
-    if (imu_.isReady())
-        xTaskCreatePinnedToCore(imuTaskEntry, "Imu", 3072, this, 3, &imu_task_, 0);
+    // ESP32-C5 is single-core: pin to core 0 (the only core). Priorities 4/3 keep
+    // these BELOW the WS TX (6) and SPI slave (4) so network/audio never starve.
+    TaskHandle_t h = nullptr;
+    xTaskCreatePinnedToCore(taskEntry, "Motion", 4096, this, 4, &h, 0);
+    task_.store(h);
+    // Low-rate IMU sampler (~1 Hz). Priority 3 — yields to everything important.
+    if (imu_.isReady()) {
+        TaskHandle_t ih = nullptr;
+        xTaskCreatePinnedToCore(imuTaskEntry, "Imu", 3072, this, 3, &ih, 0);
+        imu_task_.store(ih);
+    }
     ESP_LOGI(TAG, "MotionManager started");
 }
 
 void MotionManager::stop()
 {
+    if (!running_.load()) return;
     running_ = false;
+    cancel_.store(true);  // make any in-flight canned sequence bail immediately
+
+    // Join: wait for both tasks to actually exit (they null their own handle
+    // before vTaskDelete) before the dtor frees the I2C bus / queue they touch.
+    // Budget > the IMU task's ~1 s sample delay; bounded so a wedged task can't
+    // hang shutdown forever.
+    for (int i = 0; i < 100 && (task_.load() || imu_task_.load()); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(20));  // up to ~2 s
+    }
+    if (task_.load() || imu_task_.load()) {
+        ESP_LOGW(TAG, "stop(): motion task(s) did not exit in time");
+    }
 }
 
 void MotionManager::post(uart_proto::MotionAction action, uint8_t p0, uint8_t p1)
 {
     if (!queue_) return;
+
+    // STOP / HOME are emergency/priority commands: signal the running sequence
+    // to bail (cancel_) and flush anything queued behind so they don't have to
+    // wait out a long walk before stopping. A robot moving next to a child must
+    // honour STOP within a phase, not after the whole canned sequence finishes.
+    using uart_proto::MotionAction;
+    if (action == MotionAction::STOP || action == MotionAction::HOME) {
+        cancel_.store(true);
+        xQueueReset(queue_);
+    }
+
     Cmd c{ (uint8_t)action, p0, p1 };
-    xQueueSend(queue_, &c, 0);
+    if (xQueueSend(queue_, &c, 0) != pdTRUE) {
+        // Queue full (a sequence is mid-flight and 8 commands already wait).
+        // Without this the drop was silent and the app still claimed "sent".
+        ESP_LOGW(TAG, "motion queue full — dropped action 0x%02X", (uint8_t)action);
+    }
+}
+
+bool MotionManager::dwell(int ms)
+{
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    return !aborting();
 }
 
 void MotionManager::taskEntry(void* arg)
@@ -83,9 +130,24 @@ void MotionManager::loop()
     Cmd c;
     while (running_.load()) {
         if (xQueueReceive(queue_, &c, pdMS_TO_TICKS(200)) == pdTRUE) {
+            // Fresh command starts un-cancelled. A STOP/HOME that pre-empted the
+            // previous sequence set cancel_; that sequence has already bailed by
+            // the time we get here, so clearing it now is safe.
+            cancel_.store(false);
+            last_motion_us_ = esp_timer_get_time();
             dispatch(c);
+        } else {
+            // Idle tick (no command). Drop holding torque once we've been still
+            // long enough, so the servos stop buzzing/heating and draw less.
+            if (servos_energized_ && pca_.isReady() &&
+                (esp_timer_get_time() - last_motion_us_) >
+                    (int64_t)motion_cfg::RELAX_IDLE_MS * 1000) {
+                ESP_LOGD(TAG, "idle %dms — relaxing servos", motion_cfg::RELAX_IDLE_MS);
+                relax();
+            }
         }
     }
+    task_.store(nullptr);  // signal stop()'s join that this task has exited
     vTaskDelete(nullptr);
 }
 
@@ -116,11 +178,18 @@ uint16_t MotionManager::angleToPulse(const ServoCal& s, uint8_t angle_deg) const
     return (uint16_t)(s.min_us + (uint32_t)(s.max_us - s.min_us) * a / 180);
 }
 
+void MotionManager::markEnergized()
+{
+    servos_energized_ = true;
+    last_motion_us_ = esp_timer_get_time();
+}
+
 void MotionManager::setJoint(Joint joint, uint8_t angle_deg)
 {
     if (joint >= JOINT_COUNT || !pca_.isReady()) return;
     const ServoCal& s = SERVOS[joint];
     pca_.setChannelPulseUs(s.channel, angleToPulse(s, angle_deg));
+    markEnergized();
 }
 
 void MotionManager::home()
@@ -128,11 +197,13 @@ void MotionManager::home()
     if (!pca_.isReady()) return;
     for (uint8_t j = 0; j < JOINT_COUNT; ++j)
         pca_.setChannelPulseUs(SERVOS[j].channel, SERVOS[j].neutral_us);
+    markEnergized();
 }
 
 void MotionManager::relax()
 {
     pca_.allOff();
+    servos_energized_ = false;
 }
 
 // ---- IMU low-rate sampler (Core 0) -----------------------------------------
@@ -178,6 +249,7 @@ void MotionManager::imuLoop()
         }
         vTaskDelay(period);
     }
+    imu_task_.store(nullptr);  // signal stop()'s join that this task has exited
     vTaskDelete(nullptr);
 }
 
@@ -203,57 +275,61 @@ void MotionManager::walk(bool forward, uint8_t steps)
 {
     if (!pca_.isReady()) return;
     if (steps == 0) steps = 2;
-    const int amp = 25;     // degrees
-    const int dwell = 180;  // ms per phase
+    if (steps > MAX_WALK_STEPS) steps = MAX_WALK_STEPS;  // bound walk duration
+    const int amp = 25;        // degrees
+    const int dwell_ms = 180;  // ms per phase
     const int dir = forward ? 1 : -1;
 
-    for (uint8_t i = 0; i < steps && running_.load(); ++i) {
+    for (uint8_t i = 0; i < steps; ++i) {
+        if (aborting()) break;
         setJoint(ANKLE_L, 90 + amp);
         setJoint(ANKLE_R, 90 + amp);
-        vTaskDelay(pdMS_TO_TICKS(dwell));
+        if (!dwell(dwell_ms)) break;
         setJoint(LEG_R, (uint8_t)(90 + dir * amp));
-        vTaskDelay(pdMS_TO_TICKS(dwell));
+        if (!dwell(dwell_ms)) break;
 
         setJoint(ANKLE_L, 90 - amp);
         setJoint(ANKLE_R, 90 - amp);
-        vTaskDelay(pdMS_TO_TICKS(dwell));
+        if (!dwell(dwell_ms)) break;
         setJoint(LEG_L, (uint8_t)(90 + dir * amp));
-        vTaskDelay(pdMS_TO_TICKS(dwell));
+        if (!dwell(dwell_ms)) break;
 
         setJoint(LEG_L, 90);
         setJoint(LEG_R, 90);
     }
-    home();
+    // Don't yank back to home if a STOP pre-empted us — let the queued STOP
+    // (relax/detach) take it from here.
+    if (!aborting()) home();
 }
 
 void MotionManager::turn(bool left)
 {
-    if (!pca_.isReady()) return;
-    const int amp = 30, dwell = 200;
+    if (!pca_.isReady() || aborting()) return;
+    const int amp = 30, dwell_ms = 200;
     setJoint(LEG_L, (uint8_t)(left ? 90 + amp : 90 - amp));
     setJoint(LEG_R, (uint8_t)(left ? 90 + amp : 90 - amp));
-    vTaskDelay(pdMS_TO_TICKS(dwell));
-    home();
+    if (!dwell(dwell_ms)) return;
+    if (!aborting()) home();
 }
 
 void MotionManager::gesture(uint8_t id)
 {
-    if (!pca_.isReady()) return;
+    if (!pca_.isReady() || aborting()) return;
     switch (id) {
     case 0:  // wave right arm
-        for (int i = 0; i < 3 && running_.load(); ++i) {
-            setJoint(ARM_R, 150); vTaskDelay(pdMS_TO_TICKS(200));
-            setJoint(ARM_R, 110); vTaskDelay(pdMS_TO_TICKS(200));
+        for (int i = 0; i < 3 && !aborting(); ++i) {
+            setJoint(ARM_R, 150); if (!dwell(200)) break;
+            setJoint(ARM_R, 110); if (!dwell(200)) break;
         }
         break;
     case 1:  // raise both arms (cheer)
-        for (int i = 0; i < 2 && running_.load(); ++i) {
-            setJoint(ARM_L, 160); setJoint(ARM_R, 160); vTaskDelay(pdMS_TO_TICKS(220));
-            setJoint(ARM_L, 100); setJoint(ARM_R, 100); vTaskDelay(pdMS_TO_TICKS(220));
+        for (int i = 0; i < 2 && !aborting(); ++i) {
+            setJoint(ARM_L, 160); setJoint(ARM_R, 160); if (!dwell(220)) break;
+            setJoint(ARM_L, 100); setJoint(ARM_R, 100); if (!dwell(220)) break;
         }
         break;
     default:
         break;
     }
-    home();
+    if (!aborting()) home();
 }

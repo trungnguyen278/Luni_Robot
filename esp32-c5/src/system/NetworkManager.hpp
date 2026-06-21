@@ -58,6 +58,13 @@ public:
 
     // State updates forwarded to server
     void sendStateUpdate(const state::StateEvent& event);
+    // Emotion update with the full 45-key string (not the lossy numeric enum).
+    // Sent explicitly by the emotion handler; the generic sendStateUpdate path
+    // skips EMOTION so the app/web only ever see the string form.
+    void sendEmotionUpdate(const char* key);
+    // OTA download/flash progress → server (percent + phase). Lets the cloud
+    // advance OTAHistory and show progress in the app.
+    void sendOtaProgress(uint8_t percent, const char* phase);
     void sendAudioUplink(const uint8_t* opus_data, size_t len);
 
     // Speaking session tracking
@@ -76,6 +83,7 @@ public:
     WebSocketClient* getWsClient() { return ws_.get(); }
     OtaManager* getOtaManager() { return ota_.get(); }
     DataSyncManager* getDataSync() { return sync_.get(); }
+    UartBridge* getUartBridge() { return uart_bridge_; }
 
 private:
     void setupWifi();
@@ -92,11 +100,21 @@ private:
     // BLE_PROVISIONING so the app gets the freshest list.
     void scanForProvisioning();
 
+    // Map the WifiService's last disconnect reason to a ConnectFailReason so the
+    // retry policy table (wrong-password vs AP-not-found vs DHCP) is actually
+    // used instead of every WiFi failure collapsing to WIFI_TIMEOUT.
+    state::ConnectFailReason classifyWifiFailure() const;
+
     // Heartbeat
     static void heartbeatTimerCb(void* arg);
     void startHeartbeat();
     void stopHeartbeat();
     void sendHeartbeat();
+
+    // Interaction watchdog: keeps a voice turn from getting stuck if the
+    // server never answers or the TTS stream stalls (see checkInteraction).
+    static void interactionWatchdogCb(void* arg);
+    void checkInteraction();
 
     // Log flush
     static void logFlushTimerCb(void* arg);
@@ -123,6 +141,12 @@ private:
     // Timers
     esp_timer_handle_t heartbeat_timer_ = nullptr;
     esp_timer_handle_t log_flush_timer_ = nullptr;
+    esp_timer_handle_t interaction_wd_timer_ = nullptr;
+
+    // Interaction watchdog bookkeeping (ms since boot, esp_timer clock)
+    std::atomic<uint32_t> inter_state_since_ms_{0};
+    std::atomic<uint32_t> last_downlink_ms_{0};
+    int inter_wd_sub_id_ = -1;
 
     TaskHandle_t conn_task_ = nullptr;
 
@@ -130,4 +154,8 @@ private:
     std::atomic<bool> ws_connected_{false};
     std::atomic<bool> ws_auth_failed_{false};
     std::atomic<bool> speaking_session_active_{false};
+    // Sticky per-message drop flag for the audio downlink: once any fragment
+    // of a WS binary message is dropped, the rest of that message must be
+    // dropped too or the [2B len][opus] stream loses alignment.
+    bool dl_msg_dropping_ = false;
 };

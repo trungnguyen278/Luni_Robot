@@ -68,7 +68,16 @@ public:
     // Exposed controls
     // Update battery percentage overlay (255 hides it).
     void setBatteryPercent(uint8_t p);
-    
+
+    // --- Privacy indicators (top status bar) ---
+    // Mic privacy state (QĐ-10): shows a mic icon on the status bar —
+    // red+slash when muted, bright when listening, faint otherwise — so the
+    // always-on mic is never invisible.
+    void setMicMuted(bool muted);
+    // Camera capture in progress (QĐ-10): shows a red REC dot so a photo can
+    // never be taken silently ("spy camera"). Driven by the camera task.
+    void setCapturing(bool on);
+
 
     // ======= OTA Update UI =======
     // Show OTA update screen and reset progress state.
@@ -161,6 +170,12 @@ private:
 
     // battery
     uint8_t battery_percent = 255;
+
+    // privacy indicators (status bar). Cross-task: written by the UART/camera
+    // tasks, read by the render task — atomic so the read is always coherent.
+    std::atomic<bool> mic_muted_{false};
+    std::atomic<bool> capturing_{false};
+    std::atomic<bool> mic_listening_{false};  // set from handleInteraction
 
     // text playback state (mutually exclusive with animation)
     bool text_active_ = false;

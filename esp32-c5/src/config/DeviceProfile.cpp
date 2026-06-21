@@ -2,12 +2,16 @@
 #include "AppController.hpp"
 
 #include "system/NetworkManager.hpp"
+#include "system/OtaManager.hpp"
 #include "system/SpiBridge.hpp"
 #include "system/UartBridge.hpp"
 #include "protocol/WsProtocol.hpp"
 #include "system/BluetoothService.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
+#include "system/MotionManager.hpp"
+#include "system/PowerManager.hpp"
+#include "Power.hpp"
 
 #include "config/PinConfig.hpp"
 
@@ -15,6 +19,7 @@
 #include "WifiService.hpp"
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <utility>
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -31,11 +36,27 @@ static const char* TAG = "DeviceProfile";
 // program lifetime after DeviceProfile::setup() returns.
 static TouchInput s_userButton;
 
-// ---- Voice-turn triggers (shared by the button and the legacy UART path) ----
+// Mic privacy-mute button (QĐ-10). File-scope (lives past setup()). The mic is on
+// the S3; this button toggles a flag and pushes SET_MIC_MUTE to the S3 over UART.
+static TouchInput s_muteButton;
+static bool       s_mic_muted = false;
+
+// Servo + IMU motion controller (I2C moved here from the S3). File-scope so it
+// persists after setup(). g_motion (declared in MotionManager.hpp) points at it
+// so WsMessageHandler can drive servos directly from a WS MOTION command.
+static MotionManager s_motion;
+MotionManager* g_motion = nullptr;
+
+// Battery monitor (ADC moved here from the S3, which had no free ADC pin).
+// File-scope so the sampling timer keeps running after setup() returns.
+static std::unique_ptr<PowerManager> s_power;
+
+// ---- Voice-turn triggers (shared by the local button and the UART path) ----
 // Begin a listening turn: tell the server, reset downlink, and flip interaction
 // state to LISTENING. The state change is auto-pushed to S3 over UART (see
 // AppController::onInteractionStateChanged) so S3 opens its microphone.
-static void triggerListenStart(NetworkManager* net, SpiBridge* spi)
+static void triggerListenStart(NetworkManager* net, SpiBridge* spi,
+                               state::InputSource src = state::InputSource::BUTTON)
 {
     if (!net) return;
     // Mirror the old S3 guard: only start a turn when actually online.
@@ -47,16 +68,25 @@ static void triggerListenStart(NetworkManager* net, SpiBridge* spi)
     if (spi) spi->resetDownlink();
     net->sendText("START");
     StateManager::instance().setInteractionState(
-        state::InteractionState::LISTENING, state::InputSource::BUTTON);
+        state::InteractionState::LISTENING, src);
 }
 
+// End the listening turn: the server now runs STT+LLM+TTS, so the turn enters
+// PROCESSING — NOT IDLE. The downlink gate (NetworkManager::onBinary) only
+// accepts TTS while PROCESSING/SPEAKING; going IDLE here made it drop the
+// whole reply. NetworkManager's watchdog returns PROCESSING to IDLE if the
+// server never answers.
 static void triggerListenEnd(NetworkManager* net)
 {
     if (!net) return;
+    if (StateManager::instance().getInteractionState() !=
+        state::InteractionState::LISTENING) {
+        return;  // no turn in progress (e.g. END after an ignored START)
+    }
     net->waitTxDrain(1000);
     net->sendText("END");
     StateManager::instance().setInteractionState(
-        state::InteractionState::IDLE, state::InputSource::BUTTON);
+        state::InteractionState::PROCESSING, state::InputSource::SYSTEM);
 }
 
 static bool shouldEraseNvs()
@@ -67,19 +97,36 @@ static bool shouldEraseNvs()
     gpio_config_t io_conf = {};
     io_conf.pin_bit_mask = 1ULL << pin;
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;   // idle HIGH; a real button pulls to GND
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     gpio_config(&io_conf);
 
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    bool pressed = gpio_get_level((gpio_num_t)pin) == 0;
-    if (pressed) {
-        ESP_LOGW(TAG, "NVS reset button detected (GPIO%d LOW)", pin);
+    // Fast path: not held → return immediately (don't slow every boot).
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (gpio_get_level((gpio_num_t)pin) != 0) {
+        gpio_reset_pin((gpio_num_t)pin);
+        return false;
     }
 
+    // GUARD (R-DA-RBT-009): a single LOW read used to wipe WiFi creds + device
+    // token — catastrophic if GPIO9 floats (no button/pull on the real HW) or
+    // glitches at boot. Require a SUSTAINED hold: any HIGH sample aborts. Only a
+    // deliberate ~3s press erases NVS. Set NVS_RESET_BTN=-1 to disable outright.
+    constexpr int HOLD_MS = 3000;
+    constexpr int STEP_MS = 100;
+    for (int waited = 0; waited < HOLD_MS; waited += STEP_MS) {
+        vTaskDelay(pdMS_TO_TICKS(STEP_MS));
+        if (gpio_get_level((gpio_num_t)pin) != 0) {
+            ESP_LOGW(TAG, "NVS reset aborted: GPIO%d released after %dms (need %dms hold)",
+                     pin, waited, HOLD_MS);
+            gpio_reset_pin((gpio_num_t)pin);
+            return false;
+        }
+    }
+
+    ESP_LOGW(TAG, "NVS reset CONFIRMED: GPIO%d held LOW for %dms", pin, HOLD_MS);
     gpio_reset_pin((gpio_num_t)pin);
-    return pressed;
+    return true;
 }
 
 namespace user_cfg {
@@ -289,12 +336,24 @@ bool DeviceProfile::setup(AppController& app)
     SpiBridge* spi_ptr = spi_bridge.get();
     uart_bridge->onControlCmd([net_ptr, spi_ptr](uart_proto::ControlCmd cmd, const uint8_t* data, size_t len) {
         switch (cmd) {
-        case uart_proto::ControlCmd::START:
-            // Legacy path (button now lives on C5 — see s_userButton below).
-            triggerListenStart(net_ptr, spi_ptr);
+        case uart_proto::ControlCmd::START: {
+            // S3-triggered turn (wake word, or a button wired on the S3).
+            // Payload[0] = InputSource; legacy senders send no payload → BUTTON.
+            auto src = state::InputSource::BUTTON;
+            if (len >= 1 && data[0] < (uint8_t)state::InputSource::UNKNOWN) {
+                src = (state::InputSource)data[0];
+            }
+            triggerListenStart(net_ptr, spi_ptr, src);
             break;
+        }
         case uart_proto::ControlCmd::END:
             triggerListenEnd(net_ptr);
+            break;
+        case uart_proto::ControlCmd::SPEAK_DONE:
+            // S3 finished draining TTS on the speaker → the turn is over.
+            net_ptr->endSpeakingSession();
+            StateManager::instance().setInteractionState(
+                state::InteractionState::IDLE, state::InputSource::SYSTEM);
             break;
         case uart_proto::ControlCmd::SET_VOLUME:
             if (len >= 1) {
@@ -341,7 +400,31 @@ bool DeviceProfile::setup(AppController& app)
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)StateManager::instance().getSystemState(),
-            (uint8_t)e);
+            (uint8_t)e,
+            (uint8_t)StateManager::instance().getLastFailReason());
+    });
+
+    // OTA: relay state changes + download progress to S3 so its OTA screen
+    // (progress bar / verifying / flashing) actually runs, and report the same
+    // phase/percent to the server so the cloud can advance OTAHistory.
+    OtaManager* ota_mgr = network_mgr->getOtaManager();
+    StateManager::instance().subscribeOta([uart_ptr, net_ptr, ota_mgr](state::OtaState s) {
+        uint8_t pct = ota_mgr ? ota_mgr->getProgress() : 0;
+        uart_ptr->sendOtaStatus((uint8_t)s, pct);
+        net_ptr->sendOtaProgress(pct, state::otaPhaseName(s));
+    });
+    if (ota_mgr) {
+        ota_mgr->onProgress([uart_ptr, net_ptr](uint8_t pct) {
+            uart_ptr->sendOtaStatus((uint8_t)state::OtaState::DOWNLOADING, pct);
+            net_ptr->sendOtaProgress(pct, state::otaPhaseName(state::OtaState::DOWNLOADING));
+        });
+    }
+
+    // Report every state change to the server (`state_update`); the server
+    // caches it in Redis/DB (`last_state`) for the app. Drops harmlessly while
+    // offline (sendText guards on ws_connected_).
+    StateManager::instance().subscribeAll([net_ptr](const state::StateEvent& e) {
+        net_ptr->sendStateUpdate(e);
     });
 
     // Forward LOG_ENTRY from S3 to server via WS
@@ -386,6 +469,79 @@ bool DeviceProfile::setup(AppController& app)
     });
 
     // =========================================================
+    // 4c. MOTION (PCA9685 servos + MPU6050 IMU on I2C) — moved from S3
+    // =========================================================
+    // The C5 now owns the I2C motion bus. It drives servos directly on a WS
+    // MOTION command (WsMessageHandler::handleMotion → g_motion->post), and
+    // reports IMU events (e.g. fall) straight to the server — no UART hop.
+    {
+        MotionManager::Config mcfg{
+            .sda         = PinConfig::I2C::SDA,
+            .scl         = PinConfig::I2C::SCL,
+            .i2c_port    = PinConfig::I2C::PORT,
+            .scl_hz      = (uint32_t)PinConfig::I2C::FREQ_HZ,
+            .pca_addr    = (uint8_t)PinConfig::I2C::PCA9685_ADDR,
+            .imu_addr    = (uint8_t)PinConfig::I2C::MPU6050_ADDR,
+            .pwm_freq_hz = PinConfig::I2C::PWM_FREQ_HZ,
+        };
+        if (s_motion.init(mcfg)) {
+            // IMU events → server as a small JSON log entry (same shape the S3
+            // used to forward; now sent directly from the MCU that owns the IMU).
+            s_motion.setImuEventCb([net_ptr](const char* evt, float pitch, float roll) {
+                char buf[96];
+                int n = snprintf(buf, sizeof(buf),
+                    "{\"type\":\"imu\",\"evt\":\"%s\",\"pitch\":%.0f,\"roll\":%.0f}",
+                    evt, pitch, roll);
+                if (n > 0) net_ptr->sendText(buf, (size_t)n);
+            });
+            s_motion.start();
+            g_motion = &s_motion;   // publish to WsMessageHandler
+            ESP_LOGI(TAG, "MotionManager OK (servos%s)",
+                     s_motion.imuReady() ? " + IMU" : ", no IMU");
+        } else {
+            ESP_LOGW(TAG, "MotionManager init failed (servos unavailable)");
+        }
+    }
+
+    // =========================================================
+    // 4d. POWER / BATTERY (ADC) — moved from S3 (no free ADC pin there)
+    // =========================================================
+    // The C5 reads the battery on ADC1 (GPIO1) and REPORTS %+state to the S3 over
+    // UART (status-bar icon) and to the server. If no divider is wired the driver
+    // reads floating → reports 255 → S3 hides the icon (never a fake %).
+    if (PinConfig::Battery::ADC_CHANNEL >= 0) {
+        auto power_drv = std::make_unique<Power>(
+            (adc_channel_t)PinConfig::Battery::ADC_CHANNEL,
+            (gpio_num_t)PinConfig::Battery::CHG_STATUS,
+            (gpio_num_t)PinConfig::Battery::CHG_FULL,
+            PinConfig::Battery::R1, PinConfig::Battery::R2);
+
+        PowerManager::Config pcfg{};
+        s_power = std::make_unique<PowerManager>(std::move(power_drv), pcfg);
+        if (s_power->init()) {
+            s_power->setReportCb([uart_ptr, net_ptr](uint8_t percent, state::PowerState st) {
+                // → S3 for the status-bar battery icon.
+                uint8_t payload[2] = { percent, (uint8_t)st };
+                uart_ptr->sendDeviceCmd(uart_proto::ControlCmd::SET_BATTERY, payload, 2);
+                // → server (small JSON, like IMU events).
+                char buf[64];
+                int n = snprintf(buf, sizeof(buf),
+                    "{\"type\":\"battery\",\"pct\":%u,\"state\":%u}",
+                    percent, (unsigned)st);
+                if (n > 0) net_ptr->sendText(buf, (size_t)n);
+            });
+            s_power->start();
+            ESP_LOGI(TAG, "PowerManager OK (battery ADC on GPIO%d)",
+                     PinConfig::Battery::ADC_GPIO);
+        } else {
+            ESP_LOGW(TAG, "PowerManager init failed");
+            s_power.reset();
+        }
+    } else {
+        ESP_LOGI(TAG, "Battery ADC disabled (Battery::ADC_CHANNEL=-1)");
+    }
+
+    // =========================================================
     // 4b. USER PUSH-TO-TALK BUTTON (moved from S3)
     // =========================================================
     // net_ptr / spi_ptr stay valid after attachModules (objects live in
@@ -407,6 +563,35 @@ bool DeviceProfile::setup(AppController& app)
             ESP_LOGI(TAG, "User button ready on GPIO%d (push-to-talk)", PinConfig::USER_BUTTON);
         } else {
             ESP_LOGW(TAG, "User button init failed (non-fatal)");
+        }
+    }
+
+    // =========================================================
+    // 4c. MIC PRIVACY-MUTE BUTTON (QĐ-10)
+    // =========================================================
+    // The always-on mic (wake word) lives on the S3, but the S3-CAM board has no
+    // free GPIO — the C5 does. Each PRESS toggles mute and pushes SET_MIC_MUTE to
+    // the S3, which cuts its I2S input + shows the status-bar mic icon. uart_ptr
+    // stays valid after attachModules (the object lives in AppController).
+    if (PinConfig::MUTE_BUTTON >= 0) {
+        TouchInput::Config mute_cfg{
+            .pin = (gpio_num_t)PinConfig::MUTE_BUTTON,
+            .active_low = true,
+            .long_press_ms = 1500,
+            .debounce_ms = 40,
+        };
+        if (s_muteButton.init(mute_cfg)) {
+            s_muteButton.onEvent([uart_ptr](TouchInput::Event e) {
+                if (e != TouchInput::Event::PRESS) return;   // toggle on press only
+                s_mic_muted = !s_mic_muted;
+                uint8_t payload = s_mic_muted ? 1 : 0;
+                uart_ptr->sendDeviceCmd(uart_proto::ControlCmd::SET_MIC_MUTE, &payload, 1);
+                ESP_LOGI(TAG, "Mic %s (privacy mute button)", s_mic_muted ? "MUTED" : "LIVE");
+            });
+            s_muteButton.start();
+            ESP_LOGI(TAG, "Mic-mute button ready on GPIO%d", PinConfig::MUTE_BUTTON);
+        } else {
+            ESP_LOGW(TAG, "Mic-mute button init failed (non-fatal)");
         }
     }
 

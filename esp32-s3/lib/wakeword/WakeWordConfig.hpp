@@ -6,6 +6,9 @@
 // native 16 kHz mic stream (see AudioConfig — no downsampling needed).
 // The model itself ("Hi Luni") is trained for FREE on Colab and embedded as a
 // C array — see docs/WAKEWORD.md. Enable with -DLUNI_ENABLE_WAKEWORD.
+//
+// Co-located with the model + detector in lib/wakeword so the wake-word unit is
+// self-contained (a lib component must not include back into src/).
 // =============================================================================
 namespace WakeWordConfig {
 

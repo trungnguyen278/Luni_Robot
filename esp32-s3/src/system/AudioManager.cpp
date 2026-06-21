@@ -32,6 +32,24 @@ void AudioManager::setVolume(uint8_t percent)
     }
 }
 
+void AudioManager::setMicMuted(bool muted)
+{
+    mic_muted_ = muted;
+    // Cut the I2S input itself: readPcm() returns 0 while muted, so the wake-word
+    // tap gets no audio AND no listening turn can stream uplink — a verifiable
+    // hardware-level privacy mute, not just a UI flag (QĐ-10).
+    if (input) input->setMuted(muted);
+    ESP_LOGI(TAG, "Mic %s (privacy mute)", muted ? "MUTED" : "live");
+}
+
+void AudioManager::setWakeWordTap(WakeTapCb cb)
+{
+    wake_tap_ = std::move(cb);
+    mic_always_on = (bool)wake_tap_;
+    ESP_LOGI(TAG, "Wake-word tap %s (mic always-on=%d)",
+             wake_tap_ ? "installed" : "cleared", (int)mic_always_on.load());
+}
+
 // === Init / Start / Stop ===
 
 bool AudioManager::init()
@@ -48,7 +66,9 @@ bool AudioManager::init()
         return false;
     }
 
-    sb_mic_pcm     = xStreamBufferCreate(4 * 1024, 1);
+    // 8KB = 256ms of mic PCM: must absorb one 60ms encode + worst-case 100ms
+    // SPI flow-control wait in MicStream without dropping samples.
+    sb_mic_pcm     = xStreamBufferCreate(8 * 1024, 1);
     sb_spk_pcm     = xStreamBufferCreate(16 * 1024, 1);
     sb_spk_encoded = xStreamBufferCreate(64 * 1024, 1);
 
@@ -128,7 +148,10 @@ void AudioManager::pauseListening()
 {
     if (!listening) return;
     ESP_LOGI(TAG, "Pause listening");
-    input->stopCapture();
+    // The turn moved to PROCESSING: stop uplink. Keep the mic capturing when a
+    // wake-word tap is installed so "Hi Luni" still works while we wait.
+    listening = false;
+    if (!mic_always_on) input->stopCapture();
 }
 
 void AudioManager::stopListening()
@@ -136,7 +159,7 @@ void AudioManager::stopListening()
     if (!listening) return;
     ESP_LOGI(TAG, "Stop listening");
     listening = false;
-    input->stopCapture();
+    if (!mic_always_on) input->stopCapture();  // always-on mic stays up for wake word
     if (sb_mic_pcm) xStreamBufferReset(sb_mic_pcm);
     if (codec) codec->reset();
 }
@@ -195,7 +218,18 @@ void AudioManager::micReadLoop()
 
     while (started) {
         if (!listening) {
-            vTaskDelay(pdMS_TO_TICKS(100));
+            // Power-save: with no wake-word tap, the mic stays off until a turn.
+            if (!mic_always_on) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+            // Always-on mic for wake word: keep capturing and feed the detector
+            // while idle. Skip while speaking so the robot's own TTS coming back
+            // through the mic can't self-trigger "Hi Luni".
+            input->startCapture();  // idempotent
+            size_t s = input->readPcm(pcm_buf, PCM_FRAME);
+            if (s == 0) { vTaskDelay(1); continue; }
+            if (!speaking && wake_tap_) wake_tap_(pcm_buf, s);
             continue;
         }
 

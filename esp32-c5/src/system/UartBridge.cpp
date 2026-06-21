@@ -82,13 +82,15 @@ bool UartBridge::sendFrame(uart_proto::MsgType type, const uint8_t* payload, uin
 }
 
 bool UartBridge::sendStatusUpdate(uint8_t interaction, uint8_t connectivity,
-                                   uint8_t system_state, uint8_t emotion)
+                                   uint8_t system_state, uint8_t emotion,
+                                   uint8_t fail_reason)
 {
     uart_proto::StatusPayload sp;
     sp.interaction   = interaction;
     sp.connection    = connectivity;
     sp.system_state  = system_state;
     sp.emotion       = emotion;
+    sp.fail_reason   = fail_reason;
     return sendFrame(uart_proto::MsgType::STATUS_UPDATE, (const uint8_t*)&sp, sizeof(sp));
 }
 

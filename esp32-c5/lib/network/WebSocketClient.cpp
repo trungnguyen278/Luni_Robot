@@ -21,6 +21,9 @@ void WebSocketClient::init()
     if (!tx_buffer_) {
         tx_buffer_ = xStreamBufferCreate(server_cfg::WS_TX_BUFFER_SIZE, 1);
     }
+    if (!text_queue_) {
+        text_queue_ = xQueueCreate(server_cfg::WS_TEXT_QUEUE_DEPTH, sizeof(TxTextItem));
+    }
     if (!auth_event_) {
         auth_event_ = xEventGroupCreate();
     }
@@ -32,6 +35,7 @@ esp_err_t WebSocketClient::connect(const char* url)
 
     url_ = url;
     authenticated_ = false;
+    auth_rejected_ = false;
     last_close_code_ = 0;
 
     if (client_) {
@@ -86,12 +90,19 @@ esp_err_t WebSocketClient::connect(const char* url)
                     server_cfg::WS_TX_TASK_STACK_SIZE, this, 6, &tx_task_);
     }
 
+    if (!text_task_) {
+        run_text_task_ = true;
+        xTaskCreate(&WebSocketClient::textTaskEntry, "ws_txt",
+                    server_cfg::WS_TXT_TASK_STACK_SIZE, this, 6, &text_task_);
+    }
+
     return ESP_OK;
 }
 
 void WebSocketClient::disconnect()
 {
     run_tx_task_ = false;
+    run_text_task_ = false;
 
     if (client_) {
         ESP_LOGI(TAG, "Disconnecting WebSocket");
@@ -108,9 +119,19 @@ void WebSocketClient::disconnect()
         vTaskDelay(pdMS_TO_TICKS(100));
         tx_task_ = nullptr;
     }
+    // The ws_txt task self-deletes once run_text_task_ is false; the delay above
+    // gives it time to exit before we free leftover items below.
+    text_task_ = nullptr;
 
     if (tx_buffer_) {
         xStreamBufferReset(tx_buffer_);
+    }
+
+    // Drop any queued text so a reconnect doesn't replay stale frames (and so
+    // their heap copies don't leak). Safe: the drain task has already stopped.
+    if (text_queue_) {
+        TxTextItem item;
+        while (xQueueReceive(text_queue_, &item, 0) == pdTRUE) free(item.data);
     }
 
     if (state_cb_) state_cb_(false);
@@ -162,10 +183,31 @@ esp_err_t WebSocketClient::sendAuthMessage()
 esp_err_t WebSocketClient::sendText(const char* json, size_t len)
 {
     if (!client_ || !connected_) return ESP_FAIL;
+    // Never send inline: that blocks the caller (heartbeat/watchdog/log-flush all
+    // run on the shared esp_timer task) for up to 1s. Hand off to the ws_txt task.
+    return enqueueText(json, len);
+}
 
-    int sent = esp_websocket_client_send_text(client_, json, len, pdMS_TO_TICKS(1000));
-    if (sent != (int)len) {
-        ESP_LOGW(TAG, "sendText incomplete: %d/%zu", sent, len);
+esp_err_t WebSocketClient::enqueueText(const char* json, size_t len)
+{
+    if (!text_queue_ || !json || len == 0) return ESP_FAIL;
+    if (len > server_cfg::WS_TEXT_MAX_LEN) {
+        ESP_LOGW(TAG, "sendText too large (%zu), dropping", len);
+        return ESP_FAIL;
+    }
+
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) return ESP_ERR_NO_MEM;
+    memcpy(copy, json, len);
+    copy[len] = '\0';
+
+    TxTextItem item{ copy, (uint16_t)len };
+    // Non-blocking: if the queue is full, drop this frame rather than stall the
+    // producing task. Losing a heartbeat/state update is recoverable; blocking
+    // the esp_timer task is not.
+    if (xQueueSend(text_queue_, &item, 0) != pdTRUE) {
+        free(copy);
+        ESP_LOGW(TAG, "text TX queue full, dropping frame (len=%zu)", len);
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -285,6 +327,12 @@ void WebSocketClient::txLoop()
 
     int consecutive_failures = 0;
 
+    // Every batch from tx_buffer_ is mic audio (the only producer is the SPI
+    // AUDIO_UPLINK relay). Tag each WS message with 0xAA so the server can
+    // route binary frames unambiguously — without the tag, an Opus frame whose
+    // length byte happens to be 0xAD was misrouted as a camera image chunk.
+    constexpr uint8_t WS_AUDIO_UPLINK_TAG = 0xAA;
+
     while (run_tx_task_) {
         if (!connected_ || !client_ || !tx_buffer_) {
             if (tx_buffer_ && !connected_) {
@@ -294,11 +342,13 @@ void WebSocketClient::txLoop()
             continue;
         }
 
-        size_t batch_len = xStreamBufferReceive(tx_buffer_, buf, BATCH_BUF_SIZE, pdMS_TO_TICKS(20));
+        size_t batch_len = xStreamBufferReceive(tx_buffer_, buf + 1, BATCH_BUF_SIZE - 1, pdMS_TO_TICKS(20));
         if (batch_len == 0) continue;
 
         if (!connected_ || !client_) continue;
 
+        buf[0] = WS_AUDIO_UPLINK_TAG;
+        batch_len += 1;
         int sent = esp_websocket_client_send_bin(client_, (const char*)buf, batch_len, pdMS_TO_TICKS(200));
         if (sent < 0) {
             consecutive_failures++;
@@ -317,6 +367,39 @@ void WebSocketClient::txLoop()
 
     free(buf);
     ESP_LOGI(TAG, "TX task stopped");
+    vTaskDelete(nullptr);
+}
+
+// === Text TX Task ===
+
+void WebSocketClient::textTaskEntry(void* arg)
+{
+    static_cast<WebSocketClient*>(arg)->textLoop();
+}
+
+void WebSocketClient::textLoop()
+{
+    ESP_LOGI(TAG, "Text TX task started");
+
+    while (run_text_task_) {
+        TxTextItem item;
+        if (xQueueReceive(text_queue_, &item, pdMS_TO_TICKS(100)) != pdTRUE) continue;
+
+        if (connected_ && client_) {
+            int sent = esp_websocket_client_send_text(
+                client_, item.data, item.len, pdMS_TO_TICKS(1000));
+            if (sent != (int)item.len) {
+                ESP_LOGW(TAG, "text TX incomplete: %d/%u", sent, item.len);
+            }
+        }
+        free(item.data);
+    }
+
+    // Drain on shutdown so queued copies don't leak.
+    TxTextItem item;
+    while (xQueueReceive(text_queue_, &item, 0) == pdTRUE) free(item.data);
+
+    ESP_LOGI(TAG, "Text TX task stopped");
     vTaskDelete(nullptr);
 }
 
@@ -348,7 +431,15 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
     case WEBSOCKET_EVENT_DATA:
         if (!data) break;
 
-        if (data->op_code == 0x1) {  // TEXT
+        // Continuation frames (op_code 0x0) inherit the opcode of the
+        // message they continue; chunked reads of one large frame keep the
+        // original opcode. Track it so fragmented binary keeps flowing to
+        // binary_cb_ with correct offset/total info.
+        if (data->op_code == 0x1 || data->op_code == 0x2) {
+            last_data_opcode_ = data->op_code;
+        }
+
+        if (last_data_opcode_ == 0x1 && (data->op_code == 0x1 || data->op_code == 0x0)) {  // TEXT
             // Check if this is auth_result
             if (!authenticated_) {
                 ws::ParsedMessage msg = ws::parseMessage(
@@ -368,6 +459,10 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
                             reason = reason_item->valuestring;
                         }
                         ESP_LOGW(TAG, "Authentication rejected: %s", reason);
+                        // Server-side rejection (bad/revoked token), not a
+                        // transport drop — flag it so NetworkManager falls back
+                        // to BLE instead of retrying a doomed handshake forever.
+                        auth_rejected_ = true;
                         if (auth_event_) xEventGroupSetBits(auth_event_, AUTH_FAIL_BIT);
                         if (auth_cb_) auth_cb_(false, last_close_code_);
                     }
@@ -380,9 +475,11 @@ void WebSocketClient::eventHandler(esp_event_base_t base, int32_t event_id,
             if (text_cb_) {
                 text_cb_((const char*)data->data_ptr, data->data_len);
             }
-        } else if (data->op_code == 0x2) {  // BINARY
+        } else if (last_data_opcode_ == 0x2 &&
+                   (data->op_code == 0x2 || data->op_code == 0x0)) {  // BINARY
             if (binary_cb_) {
-                binary_cb_((const uint8_t*)data->data_ptr, data->data_len);
+                binary_cb_((const uint8_t*)data->data_ptr, data->data_len,
+                           data->payload_offset, data->payload_len);
             }
         }
         break;

@@ -38,7 +38,8 @@ public:
 
     // Send status update to S3 (non-blocking)
     bool sendStatusUpdate(uint8_t interaction, uint8_t connectivity,
-                          uint8_t system_state, uint8_t emotion);
+                          uint8_t system_state, uint8_t emotion,
+                          uint8_t fail_reason = 0);
 
     // Send new message types to S3
     bool sendSyncData(const uint8_t* data, size_t len);

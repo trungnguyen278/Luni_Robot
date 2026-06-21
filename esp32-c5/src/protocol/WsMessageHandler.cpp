@@ -4,7 +4,9 @@
 #include "system/OtaManager.hpp"
 #include "system/DataSyncManager.hpp"
 #include "system/UartBridge.hpp"
+#include "system/MotionManager.hpp"
 #include "UartProtocol.hpp"
+#include "Version.hpp"
 
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -96,23 +98,39 @@ void WsMessageHandler::handleSetEmotion(cJSON* payload, NetworkManager* net)
 
     ESP_LOGI(TAG, "SET_EMOTION: %s", emotion->valuestring);
 
-    // Map emotion string to enum
+    // Map emotion string to enum — covers every EmotionState value; the
+    // remaining server emotion keys (45 total) fall back to NEUTRAL here but
+    // keep full fidelity on the S3 via the forwarded key string below.
+    static const struct { const char* key; state::EmotionState v; } kEmotionMap[] = {
+        { "neutral",     state::EmotionState::NEUTRAL     },
+        { "happy",       state::EmotionState::HAPPY       },
+        { "sad",         state::EmotionState::SAD         },
+        { "angry",       state::EmotionState::ANGRY       },
+        { "confused",    state::EmotionState::CONFUSED    },
+        { "excited",     state::EmotionState::EXCITED     },
+        { "calm",        state::EmotionState::CALM        },
+        { "thinking",    state::EmotionState::THINKING    },
+        { "disgusted",   state::EmotionState::DISGUSTED   },
+        { "nervous",     state::EmotionState::NERVOUS     },
+        { "embarrassed", state::EmotionState::EMBARRASSED },
+        { "curious",     state::EmotionState::CURIOUS     },
+        { "annoyed",     state::EmotionState::ANNOYED     },
+        { "cool",        state::EmotionState::COOL        },
+        { "suspicious",  state::EmotionState::SUSPICIOUS  },
+        { "determined",  state::EmotionState::DETERMINED  },
+    };
     state::EmotionState emo = state::EmotionState::NEUTRAL;
     const char* e = emotion->valuestring;
-    if (strcmp(e, "happy") == 0)       emo = state::EmotionState::HAPPY;
-    else if (strcmp(e, "sad") == 0)    emo = state::EmotionState::SAD;
-    else if (strcmp(e, "angry") == 0)  emo = state::EmotionState::ANGRY;
-    else if (strcmp(e, "confused") == 0) emo = state::EmotionState::CONFUSED;
-    else if (strcmp(e, "excited") == 0)  emo = state::EmotionState::EXCITED;
-    else if (strcmp(e, "calm") == 0)     emo = state::EmotionState::CALM;
-    else if (strcmp(e, "thinking") == 0) emo = state::EmotionState::THINKING;
-    else if (strcmp(e, "disgusted") == 0) emo = state::EmotionState::DISGUSTED;
-    else if (strcmp(e, "nervous") == 0)   emo = state::EmotionState::NERVOUS;
-    else if (strcmp(e, "curious") == 0)   emo = state::EmotionState::CURIOUS;
-    else if (strcmp(e, "annoyed") == 0)   emo = state::EmotionState::ANNOYED;
-    else if (strcmp(e, "cool") == 0)      emo = state::EmotionState::COOL;
+    for (const auto& m : kEmotionMap) {
+        if (strcmp(e, m.key) == 0) { emo = m.v; break; }
+    }
 
     StateManager::instance().setEmotionState(emo);
+
+    // Tell the app/web the real emotion (full 45-key string). setEmotionState
+    // above fires a numeric state_update that NetworkManager now skips, so this
+    // is the single emotion signal that reaches clients.
+    if (net) net->sendEmotionUpdate(e);
 
     // Forward the FULL emotion key string to S3 so it can render any of the 45
     // emotion categories (the enum above only covers C5's own state tracking and
@@ -135,9 +153,27 @@ void WsMessageHandler::handleSetEmotion(cJSON* payload, NetworkManager* net)
 void WsMessageHandler::handleSetScene(cJSON* payload, NetworkManager* net)
 {
     if (!payload) return;
-    ESP_LOGI(TAG, "SET_SCENE");
-    // Relay scene command to S3 via UART DEVICE_CMD
-    // S3 SceneManager will handle it
+    cJSON* scene = cJSON_GetObjectItem(payload, "scene");
+    if (!scene || !cJSON_IsString(scene)) return;
+
+    const char* s = scene->valuestring;
+    ESP_LOGI(TAG, "SET_SCENE: %s", s);
+
+    // Relay the scene key to the S3 via UART DEVICE_CMD (mirrors SET_EMOTION).
+    // The S3's onDeviceCmd maps it to SceneManager::showScene(key); an unknown
+    // key now logs a warning there instead of failing silently.
+    size_t slen = strlen(s);
+    if (slen > 0 && slen < uart_proto::MAX_PAYLOAD - 1) {
+        uint8_t cmd_payload[uart_proto::MAX_PAYLOAD];
+        cmd_payload[0] = (uint8_t)uart_proto::ControlCmd::SET_SCENE;
+        memcpy(&cmd_payload[1], s, slen);
+        uint8_t frame[uart_proto::MAX_FRAME_SIZE];
+        size_t flen = uart_proto::buildFrame(frame, uart_proto::MsgType::DEVICE_CMD,
+                                             cmd_payload, (uint8_t)(slen + 1));
+        if (flen > 0) {
+            uart_write_bytes(UART_NUM_1, frame, flen);
+        }
+    }
 }
 
 void WsMessageHandler::handleReboot(cJSON* payload, NetworkManager* net)
@@ -161,6 +197,17 @@ void WsMessageHandler::handleOtaAvailable(cJSON* payload, NetworkManager* net)
         return;
     }
 
+    // Wrong-chip guard: this MCU only flashes images built for its own model.
+    // The S3 has separate firmware and no direct OTA path yet — flashing an
+    // S3 image onto the C5 partition would brick it. A missing `model` field
+    // means a legacy server, which only ever ships C5 images, so allow it.
+    cJSON* model = cJSON_GetObjectItem(payload, "model");
+    if (cJSON_IsString(model) && strcmp(model->valuestring, app_meta::DLuniCE_MODEL) != 0) {
+        ESP_LOGW(TAG, "OTA_AVAILABLE: model mismatch (got=%s, self=%s) — ignoring",
+                 model->valuestring, app_meta::DLuniCE_MODEL);
+        return;
+    }
+
     ESP_LOGI(TAG, "OTA_AVAILABLE: v%s size=%d", version->valuestring, size->valueint);
 
     OtaManager* ota = net->getOtaManager();
@@ -177,6 +224,11 @@ void WsMessageHandler::handleSyncData(cJSON* payload, NetworkManager* net)
     DataSyncManager* sync = net->getDataSync();
     if (sync) {
         sync->handleSyncData(payload);
+        // Relay the parsed time/weather/lunar/location on to the S3. Without
+        // this the sync stopped here at the C5 and the S3's clock/weather/moon
+        // scenes never got real data (S8-03/S9-05).
+        UartBridge* uart = net->getUartBridge();
+        if (uart) sync->relayToS3(*uart);
     }
 }
 
@@ -206,14 +258,34 @@ void WsMessageHandler::handleConfigUpdate(cJSON* payload, NetworkManager* net)
     cJSON* value = cJSON_GetObjectItem(payload, "value");
     if (!key || !value || !cJSON_IsString(key)) return;
 
-    ESP_LOGI(TAG, "CONFIG_UPDATE: %s", key->valuestring);
+    const char* k = key->valuestring;
+
+    // Allowlist of keys the server may write into the "storage" NVS namespace.
+    // That namespace ALSO holds credentials (ssid/pass/ws_url/user_id/
+    // device_token/admin_secret — see AppController commit). Without this gate a
+    // compromised or MITM server could send config_update{key:"pass"} /
+    // {"device_token"} / {"ws_url"} and silently rewrite credentials to hijack
+    // or brick the robot. Restrict writes to non-credential, user-tunable keys.
+    static const char* const kAllowedKeys[] = {
+        "volume", "brightness", "log_level",
+    };
+    bool allowed = false;
+    for (const char* ak : kAllowedKeys) {
+        if (strcmp(k, ak) == 0) { allowed = true; break; }
+    }
+    if (!allowed) {
+        ESP_LOGW(TAG, "CONFIG_UPDATE: key '%s' not allowed — ignoring", k);
+        return;
+    }
+
+    ESP_LOGI(TAG, "CONFIG_UPDATE: %s", k);
 
     nvs_handle_t h;
     if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
         if (cJSON_IsString(value)) {
-            nvs_set_str(h, key->valuestring, value->valuestring);
+            nvs_set_str(h, k, value->valuestring);
         } else if (cJSON_IsNumber(value)) {
-            nvs_set_u8(h, key->valuestring, (uint8_t)value->valueint);
+            nvs_set_u8(h, k, (uint8_t)value->valueint);
         }
         nvs_commit(h);
         nvs_close(h);
@@ -264,12 +336,14 @@ void WsMessageHandler::handleMotion(cJSON* payload, NetworkManager* net)
 
     ESP_LOGI(TAG, "MOTION action=%d p0=%d p1=%d", (int)action, p0, p1);
 
-    uint8_t cmd_payload[] = { (uint8_t)uart_proto::ControlCmd::MOTION_CMD,
-                              (uint8_t)action, p0, p1 };
-    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
-    size_t len = uart_proto::buildFrame(frame, uart_proto::MsgType::DEVICE_CMD,
-                                        cmd_payload, sizeof(cmd_payload));
-    if (len > 0) uart_write_bytes(UART_NUM_1, frame, len);
+    // Servos live on the C5 now (I2C moved here from the S3). Drive them
+    // directly — no UART round-trip to the S3. post() is non-blocking; the
+    // MotionManager task does the I2C work.
+    if (g_motion) {
+        g_motion->post(action, p0, p1);
+    } else {
+        ESP_LOGW(TAG, "MOTION dropped: MotionManager not ready");
+    }
 }
 
 void WsMessageHandler::handleCameraCapture(cJSON* payload, NetworkManager* net)

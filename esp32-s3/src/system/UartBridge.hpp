@@ -20,7 +20,8 @@ public:
     };
 
     using StatusUpdateCb = std::function<void(uint8_t interaction, uint8_t connectivity,
-                                               uint8_t system_state, uint8_t emotion)>;
+                                               uint8_t system_state, uint8_t emotion,
+                                               uint8_t fail_reason)>;
     using ControlCmdCb = std::function<void(uart_proto::ControlCmd cmd, const uint8_t* data, size_t len)>;
     using SyncDataCb = std::function<void(const uint8_t* data, size_t len)>;
     using OtaStatusCb = std::function<void(uint8_t state, uint8_t progress)>;

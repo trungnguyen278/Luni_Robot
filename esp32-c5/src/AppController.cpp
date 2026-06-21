@@ -18,11 +18,12 @@ struct AppMessage {
         APP_EVENT
     } type;
 
-    state::InteractionState interaction_state;
-    state::InputSource      interaction_source;
-    state::ConnectionState  connection_state;
-    state::SystemState      system_state;
-    event::AppEvent         app_event;
+    state::InteractionState  interaction_state;
+    state::InputSource       interaction_source;
+    state::ConnectionState   connection_state;
+    state::ConnectFailReason fail_reason;
+    state::SystemState       system_state;
+    event::AppEvent          app_event;
 };
 
 AppController& AppController::instance()
@@ -78,9 +79,10 @@ bool AppController::init()
         });
 
     sub_conn_id = sm.subscribeConnection(
-        [this](state::ConnectionState s, state::ConnectFailReason) {
+        [this](state::ConnectionState s, state::ConnectFailReason reason) {
             AppMessage msg{}; msg.type = AppMessage::Type::CONNECTION;
             msg.connection_state = s;
+            msg.fail_reason = reason;
             if (app_queue) xQueueSend(app_queue, &msg, 0);
         });
 
@@ -167,7 +169,8 @@ void AppController::sendStatusHeartbeat()
         (uint8_t)sm.getInteractionState(),
         (uint8_t)sm.getConnectionState(),
         (uint8_t)sm.getSystemState(),
-        (uint8_t)sm.getEmotionState());
+        (uint8_t)sm.getEmotionState(),
+        (uint8_t)sm.getLastFailReason());
 }
 
 void AppController::processQueue()
@@ -182,7 +185,7 @@ void AppController::processQueue()
                 onInteractionStateChanged(msg.interaction_state, msg.interaction_source);
                 break;
             case AppMessage::Type::CONNECTION:
-                onConnectionStateChanged(msg.connection_state);
+                onConnectionStateChanged(msg.connection_state, msg.fail_reason);
                 break;
             case AppMessage::Type::SYSTEM:
                 onSystemStateChanged(msg.system_state);
@@ -215,13 +218,15 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
             (uint8_t)s,
             (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)StateManager::instance().getSystemState(),
-            (uint8_t)StateManager::instance().getEmotionState());
+            (uint8_t)StateManager::instance().getEmotionState(),
+            (uint8_t)StateManager::instance().getLastFailReason());
     }
 }
 
-void AppController::onConnectionStateChanged(state::ConnectionState s)
+void AppController::onConnectionStateChanged(state::ConnectionState s,
+                                             state::ConnectFailReason reason)
 {
-    ESP_LOGI(TAG, "Connection: %d", (int)s);
+    ESP_LOGI(TAG, "Connection: %d (reason=%d)", (int)s, (int)reason);
 
     if (s == state::ConnectionState::BLE_PROVISIONING) {
         startBleProvisioning();
@@ -234,7 +239,8 @@ void AppController::onConnectionStateChanged(state::ConnectionState s)
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)s,
             (uint8_t)StateManager::instance().getSystemState(),
-            (uint8_t)StateManager::instance().getEmotionState());
+            (uint8_t)StateManager::instance().getEmotionState(),
+            (uint8_t)reason);
     }
 }
 
@@ -320,6 +326,7 @@ void AppController::onSystemStateChanged(state::SystemState s)
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)s,
-            (uint8_t)StateManager::instance().getEmotionState());
+            (uint8_t)StateManager::instance().getEmotionState(),
+            (uint8_t)StateManager::instance().getLastFailReason());
     }
 }

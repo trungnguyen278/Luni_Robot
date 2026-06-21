@@ -42,6 +42,8 @@ namespace image {
 
 // Control command sub-types
 enum class ControlCmd : uint8_t {
+    // START payload (optional): [src:1] = state::InputSource of the trigger
+    // (BUTTON / WAKEWORD). No payload = legacy sender → treat as BUTTON.
     START          = 0x01,
     END            = 0x02,
     SET_VOLUME     = 0x03,
@@ -59,6 +61,22 @@ enum class ControlCmd : uint8_t {
 
     BOOT_DONE      = 0x30,
     BLE_PIN        = 0x31,
+
+    // S3 -> C5: TTS playback fully drained on the speaker. C5 ends the
+    // speaking session and returns the interaction state to IDLE. Without
+    // this the C5 only recovers via its no-data watchdog.
+    SPEAK_DONE     = 0x32,
+
+    // Battery status. C5 -> S3 DEVICE_CMD (battery ADC moved to the C5). Payload:
+    // [percent:1 (255 = no battery / hide)][power_state:1 = state::PowerState].
+    SET_BATTERY    = 0x33,
+
+    // Mic privacy mute. C5 -> S3 DEVICE_CMD. Payload: [muted:1 (1 = mute the
+    // always-on mic, 0 = live)]. The mute toggle button lives on the C5 (it has
+    // free GPIO; the pin-starved S3-CAM does not), but the mic itself is on the
+    // S3 — so the C5 pushes the new state here. The S3 cuts the I2S input (wake
+    // word + uplink go silent) and shows the status-bar mic icon (QĐ-10).
+    SET_MIC_MUTE   = 0x34,
 
     // Motion (servo robot). Sent C5 -> S3 as a DEVICE_CMD sub-type.
     // Payload: [action:1][param:0-3]  (see MotionAction).
@@ -81,18 +99,30 @@ enum class MotionAction : uint8_t {
     SET_JOINT  = 0x07,  // param[0] = joint index, param[1] = angle (0-180)
 };
 
-// Status payload (same as SPI)
+// Status payload (same as SPI). `fail_reason` (state::ConnectFailReason) was
+// appended later: receivers must accept 4-byte legacy frames and default it
+// to 0 (NONE) so a mixed-firmware pair degrades gracefully.
 struct StatusPayload {
     uint8_t interaction;
     uint8_t connection;
     uint8_t system_state;
     uint8_t emotion;
+    uint8_t fail_reason;
 };
 
-// CRC-8 (XOR)
+// Real CRC-8 (poly 0x07, init 0x00) — replaces the old XOR "checksum". XOR was
+// commutative (byte reorders went undetected) and let same-bit-position flips in
+// two different bytes cancel out; a real CRC catches both, at the same 1-byte
+// footer cost. Bitwise form (no static table) so it is portable and byte-for-
+// byte identical on both MCUs — both firmware trees carry a matching copy.
 inline uint8_t crc8(const uint8_t* data, size_t len) {
-    uint8_t crc = 0;
-    for (size_t i = 0; i < len; ++i) crc ^= data[i];
+    uint8_t crc = 0x00;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; ++b)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07)
+                               : (uint8_t)(crc << 1);
+    }
     return crc;
 }
 

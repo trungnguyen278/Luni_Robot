@@ -118,6 +118,19 @@ cJSON* createStateUpdate(const char* category, uint8_t old_val, uint8_t new_val)
     return root;
 }
 
+cJSON* createStateUpdateStr(const char* category, const char* new_val)
+{
+    cJSON* root = createMessage(MsgType::STATE_UPDATE);
+    if (!root) return nullptr;
+
+    cJSON* payload = cJSON_AddObjectToObject(root, "payload");
+    if (payload) {
+        cJSON_AddStringToObject(payload, "category", category);
+        cJSON_AddStringToObject(payload, "new", new_val ? new_val : "");
+    }
+    return root;
+}
+
 cJSON* createHeartbeat(uint32_t uptime, uint32_t free_heap, int8_t rssi)
 {
     cJSON* root = createMessage(MsgType::HEARTBEAT);

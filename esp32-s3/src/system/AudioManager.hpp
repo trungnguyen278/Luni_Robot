@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <atomic>
+#include <functional>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/stream_buffer.h"
@@ -43,6 +44,21 @@ public:
     // Control
     void setVolume(uint8_t percent);
 
+    // Privacy mute for the always-on mic (QĐ-10). When muted the I2S input
+    // returns no samples → the wake word can't trigger and nothing is streamed
+    // uplink. Toggled by the physical button on the C5 (SET_MIC_MUTE over UART);
+    // the mic itself lives here on the S3.
+    void setMicMuted(bool muted);
+    bool isMicMuted() const { return mic_muted_.load(); }
+
+    // Wake word: install a tap fed with raw 16 kHz mic PCM while the robot is
+    // idle (not listening, not speaking). Installing a tap also makes the mic
+    // always-on so the detector can hear the wake word; without a tap the mic
+    // only runs during a listening turn (power-save). `cb` runs on the MicRead
+    // task (Core 1) — keep it light.
+    using WakeTapCb = std::function<void(const int16_t*, size_t)>;
+    void setWakeWordTap(WakeTapCb cb);
+
     // Audio actions
     void startListening(state::InputSource src);
     void pauseListening();
@@ -70,6 +86,9 @@ private:
     std::atomic<bool> started{false};
     std::atomic<bool> listening{false};
     std::atomic<bool> speaking{false};
+    std::atomic<bool> mic_always_on{false};   // set when a wake-word tap is installed
+    std::atomic<bool> mic_muted_{false};      // privacy mute (QĐ-10); input returns no PCM
+    WakeTapCb         wake_tap_;
     state::InputSource current_source = state::InputSource::UNKNOWN;
 
     // Components

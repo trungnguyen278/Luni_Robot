@@ -130,11 +130,7 @@ void DataSyncManager::relayToS3(UartBridge& uart)
     pos += city_len;
     buf[pos++] = '\0';
 
-    uint8_t frame[uart_proto::MAX_FRAME_SIZE];
-    size_t frame_len = uart_proto::buildFrame(
-        frame, uart_proto::MsgType::SYNC_DATA, buf, (uint8_t)pos);
-
-    if (frame_len > 0) {
-        uart_write_bytes(UART_NUM_1, frame, frame_len);
-    }
+    // Send through the bridge's one framing+write path (no hardcoded UART_NUM_1,
+    // no duplicate buildFrame). sendSyncData wraps this in a SYNC_DATA frame.
+    uart.sendSyncData(buf, pos);
 }

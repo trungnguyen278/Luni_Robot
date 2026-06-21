@@ -22,10 +22,18 @@ public:
 
     bool init();
     void feed(const int16_t* pcm16k, size_t samples);   // mic audio, 16kHz mono
+    // Drop accumulated spectrogram + probability state. Call when the mic feed
+    // pauses (listening/speaking) so the next idle window starts clean and a
+    // stale partial frame can't cause a false trigger.
+    void reset();
     void onDetected(DetectCb cb) { cb_ = std::move(cb); }
     bool isReady() const { return ready_; }
 
 private:
     bool     ready_ = false;
     DetectCb cb_;
+    // Opaque TFLite-Micro + microfrontend state (only allocated when built with
+    // LUNI_ENABLE_WAKEWORD); kept out of the header to avoid leaking TFLM into
+    // every TU that includes this.
+    void*    impl_ = nullptr;
 };

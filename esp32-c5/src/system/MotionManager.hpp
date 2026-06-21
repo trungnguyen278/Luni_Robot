@@ -57,6 +57,11 @@ public:
     bool imuReady() const { return imu_.isReady(); }
     bool servosReady() const { return pca_.isReady(); }
 
+    // Hard ceiling on a single walk command's step count. An app/server bug or
+    // a malicious payload could send steps=255 → ~183 s of uninterruptible
+    // walking; cap it so a STOP is never more than a few seconds away.
+    static constexpr uint8_t MAX_WALK_STEPS = 20;
+
 private:
     struct Cmd { uint8_t action; uint8_t p0; uint8_t p1; };
 
@@ -72,6 +77,12 @@ private:
     void turn(bool left);
     void gesture(uint8_t id);
 
+    // True once a STOP/HOME has pre-empted the running sequence (or on shutdown)
+    // — the canned sequences poll this between phases and bail immediately.
+    bool aborting() const { return cancel_.load() || !running_.load(); }
+    // vTaskDelay that returns false if the move should abort partway through.
+    bool dwell(int ms);
+
     uint16_t angleToPulse(const motion_cfg::ServoCal& s, uint8_t angle_deg) const;
 
     i2c_master_bus_handle_t bus_ = nullptr;
@@ -80,9 +91,20 @@ private:
     Config  cfg_{};
 
     QueueHandle_t queue_ = nullptr;
-    TaskHandle_t  task_  = nullptr;
-    TaskHandle_t  imu_task_ = nullptr;
+    // Task handles are nulled by the tasks themselves right before vTaskDelete so
+    // stop() can join (wait for) them before the dtor frees the I2C bus they use.
+    std::atomic<TaskHandle_t> task_{nullptr};
+    std::atomic<TaskHandle_t> imu_task_{nullptr};
     std::atomic<bool> running_{false};
+
+    // Auto-relax bookkeeping: drop holding torque after RELAX_IDLE_MS of no
+    // motion. `servos_energized_` avoids re-issuing allOff every idle tick.
+    int64_t last_motion_us_ = 0;
+    bool    servos_energized_ = false;
+    void    markEnergized();   // call whenever a servo pulse is driven
+    // Set by post(STOP/HOME) to pre-empt a running canned sequence; cleared
+    // before each newly dequeued command in loop().
+    std::atomic<bool> cancel_{false};
 
     // IMU latest-sample snapshot (guarded) + fall detection
     portMUX_TYPE      imu_mux_ = portMUX_INITIALIZER_UNLOCKED;
@@ -93,3 +115,8 @@ private:
     int               fall_count_ = 0;
     ImuEventCb        imu_cb_;
 };
+
+// The single MotionManager instance lives in DeviceProfile.cpp (C5). Set there
+// after init; WsMessageHandler uses it to drive servos directly from a WS MOTION
+// command (no UART round-trip to the S3). nullptr until motion is ready.
+extern MotionManager* g_motion;

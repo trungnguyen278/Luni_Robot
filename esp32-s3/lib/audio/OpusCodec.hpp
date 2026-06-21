@@ -10,7 +10,7 @@ struct OpusDecoder;
 
 // Opus codec implementation for Luni V2
 // Replaces ADPCM with much better audio quality at similar bitrates.
-// Frame size: 320 samples (20ms @ 16kHz), variable-length output.
+// Frame size: AudioConfig::FRAME_SAMPLES (FRAME_MS @ 16kHz), variable-length output.
 //
 // Encoding: PCM frames -> Opus frames (prefixed with 2-byte LE length)
 // Decoding: Opus frames (length-prefixed) -> PCM frames
@@ -37,8 +37,8 @@ public:
     void setBitrate(int bitrate_bps);
 
 private:
-    static constexpr size_t FRAME_SAMPLES     = AudioConfig::FRAME_SAMPLES;    // 320 @16k
-    static constexpr size_t MAX_ENCODED_BYTES = AudioConfig::MAX_ENCODED_BYTES; // 256
+    static constexpr size_t FRAME_SAMPLES     = AudioConfig::FRAME_SAMPLES;
+    static constexpr size_t MAX_ENCODED_BYTES = AudioConfig::MAX_ENCODED_BYTES;
     static constexpr int    DEFAULT_BITRATE   = AudioConfig::OPUS_BITRATE;     // 24 kbps
 
     OpusEncoder* encoder_ = nullptr;

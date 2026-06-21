@@ -13,7 +13,14 @@ SceneManager& SceneManager::instance() { return s_instance; }
 void SceneManager::showScene(const char* categoryKey, const char* variantId,
                              float hold_ms) {
     const CategoryDef* cat = findCategory(categoryKey);
-    if (!cat || cat->variant_count == 0) return;
+    if (!cat || cat->variant_count == 0) {
+        // Previously a silent return — a server/app set_scene (or set_emotion)
+        // with a key that has no asset just vanished with no trace, making
+        // "robot face didn't change" impossible to debug (R-DA-RBT-006).
+        ESP_LOGW(TAG, "showScene: unknown/empty category '%s' — nothing rendered",
+                 categoryKey ? categoryKey : "(null)");
+        return;
+    }
 
     const VariantDef* variant = nullptr;
     if (variantId) {
@@ -25,7 +32,11 @@ void SceneManager::showScene(const char* categoryKey, const char* variantId,
         }
     }
     if (!variant) variant = pickVariant(categoryKey);
-    if (!variant) return;
+    if (!variant) {
+        ESP_LOGW(TAG, "showScene: no variant for '%s'/'%s' — nothing rendered",
+                 cat->key, variantId ? variantId : "(auto)");
+        return;
+    }
 
     current_category_ = cat;
     current_variant_ = variant;
@@ -83,6 +94,13 @@ const VariantDef* SceneManager::pickVariant(const char* categoryKey) {
     if (strcmp(categoryKey, "moon") == 0) {
         const VariantDef* mv = pickMoonVariant();
         if (mv) return mv;
+    }
+
+    // Weather is never random either — it shows the actual synced condition.
+    // (Falls through to random only when unsynced / unknown.) (S11-02)
+    if (strcmp(categoryKey, "weather") == 0) {
+        const VariantDef* wv = pickWeatherVariant();
+        if (wv) return wv;
     }
 
     const CategoryDef* cat = findCategory(categoryKey);
@@ -158,6 +176,34 @@ const VariantDef* SceneManager::pickMoonVariant() {
     return &cat->variants[idx % cat->variant_count];
 }
 
+const VariantDef* SceneManager::pickWeatherVariant() {
+    const CategoryDef* cat = findCategory("weather");
+    if (!cat || cat->variant_count == 0) return nullptr;
+
+    // Map the server weather-condition enum (DataSyncManager::conditionToEnum)
+    // to a weather variant id. 0 / unknown → nullptr so the caller can fall
+    // back to a random pick (REQUIREMENTS §6.7: show the real sky).
+    const char* id = nullptr;
+    switch (scene_data_.weather_condition) {
+        case 1:  id = "weather-window"; break;  // clear / sunny
+        case 2:                                  // partly cloudy
+        case 3:  id = "weather-cloudy"; break;  // cloudy
+        case 4:                                  // rain
+        case 5:  id = "weather-rainy";  break;  // heavy rain
+        case 6:  id = "weather-storm";  break;  // thunderstorm
+        case 7:  id = "weather-snow";   break;  // snow
+        case 8:                                  // fog
+        case 10: id = "weather-fog";    break;  // haze
+        case 9:  id = "weather-windy";  break;  // windy
+        default: return nullptr;                 // unknown / not synced
+    }
+
+    for (uint8_t i = 0; i < cat->variant_count; i++) {
+        if (strcmp(cat->variants[i].id, id) == 0) return &cat->variants[i];
+    }
+    return nullptr;
+}
+
 bool SceneManager::isCategoryRecent(const char* key) const {
     for (int i = 0; i < RECENT_CAT_SIZE; i++) {
         if (recent_cats_[i] && strcmp(recent_cats_[i], key) == 0)
@@ -190,6 +236,10 @@ const CategoryDef* SceneManager::pickIdleCategory() {
         const auto& cat = ALL_CATEGORIES[i];
         if (isIdleExcluded(cat.key)) continue;
         if (cat.kind == ContentKind::STATUS) continue;
+        // REQUIREMENTS §9: scenes (clock/weather/moon/call/alarm…) are picked
+        // EXPLICITLY by the host on a real event — they never enter the random
+        // idle pool, where they'd show fake/empty data (S11-04).
+        if (cat.kind == ContentKind::SCENE) continue;
         if (isCategoryRecent(cat.key)) continue;
         candidates[count++] = &cat;
     }
@@ -199,6 +249,7 @@ const CategoryDef* SceneManager::pickIdleCategory() {
             const auto& cat = ALL_CATEGORIES[i];
             if (isIdleExcluded(cat.key)) continue;
             if (cat.kind == ContentKind::STATUS) continue;
+            if (cat.kind == ContentKind::SCENE) continue;
             candidates[count++] = &cat;
         }
     }

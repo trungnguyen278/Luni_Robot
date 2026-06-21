@@ -45,12 +45,13 @@ bool CameraManager::init()
 
     camera_config_t cfg = {};
     applyBoardConfig(cfg);
-    // Capture RAW RGB565, not JPEG: this module's hardware JPEG encoder is broken
-    // (NO-SOI), but raw RGB565 frames are clean. captureJpeg() encodes to JPEG in
-    // software (frame2jpg).
-    cfg.pixel_format = PIXFORMAT_RGB565;
+    // Two capture modes (CameraConfig::USE_HW_JPEG):
+    //  - HW JPEG: the OV2640 outputs JPEG directly → correct colors, small files,
+    //    no SW encode. Preferred. (NO-SOI was an XCLK issue, not a dead encoder.)
+    //  - RGB565: raw frames + software frame2jpg in captureJpeg() (fallback).
+    cfg.pixel_format = CameraConfig::USE_HW_JPEG ? PIXFORMAT_JPEG : PIXFORMAT_RGB565;
     cfg.frame_size   = (framesize_t)CameraConfig::FRAME_SIZE;
-    cfg.jpeg_quality = CameraConfig::JPEG_QUALITY;   // unused in RGB565 mode
+    cfg.jpeg_quality = CameraConfig::JPEG_QUALITY;   // HW-JPEG only (0..63)
     cfg.fb_count     = CameraConfig::FB_COUNT;
     cfg.fb_location  = CAMERA_FB_IN_PSRAM;
     cfg.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
@@ -82,7 +83,8 @@ bool CameraManager::init()
         if (fb) esp_camera_fb_return(fb);
     }
 
-    ESP_LOGI(TAG, "Camera ready (RGB565 QQVGA -> SW JPEG) PSRAM free=%u",
+    ESP_LOGI(TAG, "Camera ready (%s) PSRAM free=%u",
+             CameraConfig::USE_HW_JPEG ? "HW JPEG" : "RGB565 -> SW JPEG",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return true;
 }
@@ -118,39 +120,65 @@ bool CameraManager::captureJpeg(const uint8_t** out, size_t* out_len,
         }
     }
 
-    // Encode the raw RGB565 frame to JPEG in software (the hardware JPEG encoder
-    // on this OV2640 is broken). frame2jpg malloc's the output; we own it now and
-    // free it in releaseFrame(). Return the camera frame buffer straight away.
     const uint16_t fw = (uint16_t)fb->width;
     const uint16_t fh = (uint16_t)fb->height;
 
-    // The OV2640 + S3 DMA delivers RGB565 little-endian (low byte first), but
-    // frame2jpg's RGB565->RGB888 path expects the red bits in the FIRST byte
-    // (big-endian). Without swapping, green straddles the wrong byte and frames
-    // come out magenta/pink with green fringing. Swap each 16-bit pixel in place
-    // before encoding — the buffer is ours until esp_camera_fb_return below.
-    // (This is the same little-endian convention GfxEngine swaps for the ST7789.)
-    uint8_t* px = fb->buf;
-    for (size_t i = 0; i + 1 < fb->len; i += 2) {
-        const uint8_t t = px[i];
-        px[i] = px[i + 1];
-        px[i + 1] = t;
+    if (CameraConfig::USE_HW_JPEG) {
+        // Sensor already produced a JPEG — no color conversion, correct colors.
+        // The OV2640 occasionally emits a frame with no SOI (0xFFD8) marker; reject
+        // and retry a few frames rather than ship a corrupt JPEG. Retain the fb
+        // (zero-copy) and hand its buffer out; releaseFrame() returns it.
+        int tries = 0;
+        while (fb && !(fb->len >= 2 && fb->buf[0] == 0xFF && fb->buf[1] == 0xD8)) {
+            ESP_LOGW(TAG, "JPEG NO-SOI (len=%u), retry %d", (unsigned)fb->len, tries);
+            esp_camera_fb_return(fb);
+            if (++tries > 5) { fb = nullptr; break; }
+            fb = esp_camera_fb_get();
+        }
+        if (!fb) {
+            ESP_LOGW(TAG, "HW JPEG capture failed (NO-SOI)");
+            return false;
+        }
+        fb_ = fb;                  // owned until releaseFrame()
+        jpg_ = fb->buf;
+        jpg_len_ = fb->len;
+        ESP_LOGI(TAG, "captured HW-JPEG %u bytes (%ux%u)", (unsigned)fb->len, fw, fh);
+    } else {
+        // Raw RGB565 → software JPEG. Fix color in place before encoding: the
+        // OV2640/S3 byte order and R/B order don't match frame2jpg's RGB565 reader
+        // (esp32-camera#422/#676 endianness, #379 R/B). Both fixes are config-gated
+        // so the right combo can be found empirically. Buffer is ours until return.
+        uint8_t* px = fb->buf;
+        for (size_t i = 0; i + 1 < fb->len; i += 2) {
+            uint16_t v = (uint16_t)(px[i] | (px[i + 1] << 8));   // native (assume LE)
+            if (CameraConfig::RGB565_SWAP_RB) {
+                const uint16_t r = (v >> 11) & 0x1F;
+                const uint16_t b = v & 0x1F;
+                v = (uint16_t)((b << 11) | (v & 0x07E0) | r);    // swap 5-bit R/B
+            }
+            if (CameraConfig::RGB565_SWAP_BYTES) {               // emit big-endian
+                px[i]     = (uint8_t)(v >> 8);
+                px[i + 1] = (uint8_t)(v & 0xFF);
+            } else {
+                px[i]     = (uint8_t)(v & 0xFF);
+                px[i + 1] = (uint8_t)(v >> 8);
+            }
+        }
+
+        uint8_t* jpg = nullptr;
+        size_t   jlen = 0;
+        const bool ok = frame2jpg(fb, CameraConfig::SW_JPEG_QUALITY, &jpg, &jlen);
+        esp_camera_fb_return(fb);
+
+        if (!ok || !jpg || jlen < 2) {
+            ESP_LOGW(TAG, "frame2jpg failed (ok=%d len=%u)", ok ? 1 : 0, (unsigned)jlen);
+            if (jpg) free(jpg);
+            return false;
+        }
+        jpg_ = jpg;
+        jpg_len_ = jlen;
+        ESP_LOGI(TAG, "captured SW-JPEG %u bytes (%ux%u)", (unsigned)jlen, fw, fh);
     }
-
-    uint8_t* jpg = nullptr;
-    size_t   jlen = 0;
-    const bool ok = frame2jpg(fb, CameraConfig::SW_JPEG_QUALITY, &jpg, &jlen);
-    esp_camera_fb_return(fb);
-
-    if (!ok || !jpg || jlen < 2) {
-        ESP_LOGW(TAG, "frame2jpg failed (ok=%d len=%u)", ok ? 1 : 0, (unsigned)jlen);
-        if (jpg) free(jpg);
-        return false;
-    }
-
-    jpg_ = jpg;
-    jpg_len_ = jlen;
-    ESP_LOGI(TAG, "captured JPEG %u bytes (%ux%u)", (unsigned)jlen, fw, fh);
 
     if (out) *out = jpg_;
     if (out_len) *out_len = jpg_len_;
@@ -161,11 +189,16 @@ bool CameraManager::captureJpeg(const uint8_t** out, size_t* out_len,
 
 void CameraManager::releaseFrame()
 {
-    if (jpg_) {
+    if (fb_) {
+        // HW-JPEG: jpg_ aliased fb_->buf — give the frame buffer back, don't free.
+        esp_camera_fb_return((camera_fb_t*)fb_);
+        fb_ = nullptr;
+    } else if (jpg_) {
+        // RGB565: jpg_ is our frame2jpg malloc.
         free(jpg_);
-        jpg_ = nullptr;
-        jpg_len_ = 0;
     }
+    jpg_ = nullptr;
+    jpg_len_ = 0;
 }
 
 #else  // LUNI_ENABLE_CAMERA not defined — compile no-op stubs.

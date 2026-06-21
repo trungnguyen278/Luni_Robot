@@ -66,9 +66,12 @@ public:
     // x0, y0: top-left; x1, y1: bottom-right (inclusive)
     void setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 
-    // Write raw pixel buffer to current window (used after setWindow)
-    // buffer: RGB565 pixels, len_bytes: size in bytes (width * height * 2)
-    void writePixels(const uint16_t *buffer, size_t len_bytes);
+    // Write raw pixel buffer to current window (used after setWindow).
+    // buffer: RGB565 pixels, len_bytes: size in bytes (width * height * 2).
+    // swap_bytes: byte-swap each 16-bit pixel to ST7789 (big-endian) order while
+    // copying through the DMA bounce buffer — folds the endian swap into the copy
+    // that has to happen anyway, instead of a separate full-frame pass over PSRAM.
+    void writePixels(const uint16_t *buffer, size_t len_bytes, bool swap_bytes = false);
 
     // Display rotation (0, 1, 2, 3 = 0°, 90°, 180°, 270°)
     // With automatic offset adjustment for ST7789 panels with physical offset

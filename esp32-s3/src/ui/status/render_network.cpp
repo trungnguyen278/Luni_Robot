@@ -282,6 +282,7 @@ const VariantDef NETWORK_VARIANTS[] = {
     {"network-offline",       "Offline",     2400, TONE_RED,    render_offline},
     {"network-bt-scan",      "BLE pairing", 2200, TONE_PURPLE, render_ble_pair},
     {"network-bt-paired",     "Bluetooth on",2600, TONE_PURPLE, render_bt_paired},
+    {"network-ws-connect",    "Connecting srv",2400, TONE_CYAN, render_ws_connect},
     {"network-server-error",  "Server down", 2400, TONE_RED,    render_server_error},
 };
 

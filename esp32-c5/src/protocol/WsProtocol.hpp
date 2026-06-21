@@ -66,6 +66,10 @@ cJSON* createAuthMessage(const char* mac, const char* device_token,
 cJSON* createDeviceInfo(const char* mac, const char* fw_version,
                         const char* model, const char* name);
 cJSON* createStateUpdate(const char* category, uint8_t old_val, uint8_t new_val);
+// String-valued variant: emotion carries a 45-key string, not the lossy 16-value
+// C5 enum, so the app/web get the real emotion in `new` (same shape as the
+// numeric form). `old` is omitted — no consumer reads it.
+cJSON* createStateUpdateStr(const char* category, const char* new_val);
 cJSON* createHeartbeat(uint32_t uptime, uint32_t free_heap, int8_t rssi);
 cJSON* createLog(const char* level, const char* tag, const char* message);
 cJSON* createOtaProgress(uint8_t percent, const char* phase);

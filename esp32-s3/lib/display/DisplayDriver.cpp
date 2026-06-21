@@ -291,7 +291,7 @@ bool DisplayDriver::ensureDmaBounce()
     return false;
 }
 
-void DisplayDriver::writePixels(const uint16_t *buffer, size_t len_bytes)
+void DisplayDriver::writePixels(const uint16_t *buffer, size_t len_bytes, bool swap_bytes)
 {
     if (!initialized || !buffer || len_bytes == 0)
         return;
@@ -304,7 +304,19 @@ void DisplayDriver::writePixels(const uint16_t *buffer, size_t len_bytes)
 
     while (remaining > 0) {
         size_t chunk = (remaining > dma_bounce_sz_) ? dma_bounce_sz_ : remaining;
-        memcpy(dma_bounce_, src, chunk);
+        if (swap_bytes) {
+            // Endian-swap during the (already-required) PSRAM -> DMA copy. chunk
+            // is always even (len_bytes = pixels*2, bounce size is a power of 2).
+            const uint16_t *s16 = (const uint16_t *)src;
+            uint16_t *d16 = (uint16_t *)dma_bounce_;
+            size_t n = chunk / 2;
+            for (size_t i = 0; i < n; ++i) {
+                uint16_t v = s16[i];
+                d16[i] = (uint16_t)((v >> 8) | (v << 8));
+            }
+        } else {
+            memcpy(dma_bounce_, src, chunk);
+        }
 
         spi_transaction_t t = {};
         t.length = chunk * 8;

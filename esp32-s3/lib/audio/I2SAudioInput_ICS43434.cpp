@@ -1,4 +1,5 @@
 #include "I2SAudioInput_ICS43434.hpp"
+#include "AudioConfig.hpp"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include <cstring>
@@ -56,6 +57,9 @@ bool I2SAudioInput_ICS43434::startCapture()
 {
     if (!initialized_ || capturing_) return capturing_;
 
+    dc_x1_ = 0;
+    dc_y1_ = 0;
+
     esp_err_t err = i2s_channel_enable(rx_chan_);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable RX channel: %s", esp_err_to_name(err));
@@ -110,9 +114,19 @@ size_t I2SAudioInput_ICS43434::readPcm(int16_t* buffer, size_t max_samples)
 
     size_t samples = bytes_read / sizeof(int32_t);
 
-    // Convert 32-bit to 16-bit: ICS43434 outputs 24-bit left-aligned in 32-bit
+    // Convert 32-bit to 16-bit: ICS43434 outputs 24-bit left-aligned in 32-bit.
+    // MIC_GAIN_SHIFT < 16 applies digital gain; then a one-pole DC blocker
+    // (fc ~13Hz) removes the MEMS DC offset so Opus VOIP doesn't waste bits
+    // on it; saturate last to avoid wrap on clip.
+    constexpr int32_t DC_R_Q15 = 32604;  // 0.995 in Q15
     for (size_t i = 0; i < samples; ++i) {
-        buffer[i] = (int16_t)(raw_buf[i] >> 16);
+        int32_t x = raw_buf[i] >> AudioConfig::MIC_GAIN_SHIFT;
+        int32_t y = x - dc_x1_ + (int32_t)(((int64_t)DC_R_Q15 * dc_y1_) >> 15);
+        dc_x1_ = x;
+        dc_y1_ = y;
+        if (y > INT16_MAX)      y = INT16_MAX;
+        else if (y < INT16_MIN) y = INT16_MIN;
+        buffer[i] = (int16_t)y;
     }
 
     return samples;

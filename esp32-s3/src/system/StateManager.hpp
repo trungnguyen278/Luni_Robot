@@ -22,7 +22,8 @@ public:
 
     // Setters
     void setInteractionState(state::InteractionState s, state::InputSource src = state::InputSource::UNKNOWN);
-    void setConnectionState(state::ConnectionState s);
+    void setConnectionState(state::ConnectionState s,
+                            state::ConnectFailReason reason = state::ConnectFailReason::NONE);
     void setSystemState(state::SystemState s);
     void setPowerState(state::PowerState s);
     void setEmotionState(state::EmotionState s);
@@ -32,6 +33,7 @@ public:
     state::InteractionState  getInteractionState();
     state::InputSource       getInteractionSource();
     state::ConnectionState getConnectionState();
+    state::ConnectFailReason getLastFailReason();
     state::SystemState       getSystemState();
     state::PowerState        getPowerState();
     state::EmotionState      getEmotionState();
@@ -63,6 +65,7 @@ private:
     state::InteractionState  interaction_state  = state::InteractionState::IDLE;
     state::InputSource       interaction_source = state::InputSource::UNKNOWN;
     state::ConnectionState connectivity_state = state::ConnectionState::OFFLINE;
+    state::ConnectFailReason fail_reason        = state::ConnectFailReason::NONE;
     state::SystemState       system_state       = state::SystemState::BOOTING;
     state::PowerState        power_state        = state::PowerState::NORMAL;
     state::EmotionState      emotion_state      = state::EmotionState::NEUTRAL;

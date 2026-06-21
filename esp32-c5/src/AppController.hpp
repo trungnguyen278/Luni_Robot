@@ -57,7 +57,7 @@ private:
     void processQueue();
 
     void onInteractionStateChanged(state::InteractionState, state::InputSource);
-    void onConnectionStateChanged(state::ConnectionState);
+    void onConnectionStateChanged(state::ConnectionState, state::ConnectFailReason);
     void onSystemStateChanged(state::SystemState);
     void sendStatusHeartbeat();
 

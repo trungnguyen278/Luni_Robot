@@ -46,6 +46,9 @@ bool OpusCodec::initCodec()
     opus_encoder_ctl(encoder_, OPUS_SET_DTX(0));                 // Disable DTX for real-time
     opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(0));
     opus_encoder_ctl(encoder_, OPUS_SET_VBR(AudioConfig::OPUS_VBR ? 1 : 0));
+    // Constrained VBR bounds the frame size so [2B len][opus] always fits
+    // in a single SPI payload (see AudioConfig::MAX_ENCODED_BYTES).
+    opus_encoder_ctl(encoder_, OPUS_SET_VBR_CONSTRAINT(AudioConfig::OPUS_VBR_CONSTRAINED ? 1 : 0));
 
     // Create decoder
     decoder_ = opus_decoder_create(AudioConfig::SAMPLE_RATE, AudioConfig::CHANNELS, &err);
@@ -75,7 +78,7 @@ size_t OpusCodec::encode(const int16_t* pcm_in, size_t pcm_samples,
     if (pcm_samples < FRAME_SAMPLES) return 0;
     if (encoded_capacity < MAX_ENCODED_BYTES + 2) return 0;
 
-    // Encode one frame (20ms = 320 samples)
+    // Encode one frame (FRAME_MS worth of samples, see AudioConfig)
     int encoded_len = opus_encode(encoder_, pcm_in, FRAME_SAMPLES,
                                    encoded_out + 2, encoded_capacity - 2);
     if (encoded_len < 0) {

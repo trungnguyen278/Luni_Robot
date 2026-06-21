@@ -16,8 +16,11 @@ idf_component_register(
         "${CMAKE_SOURCE_DIR}/lib/network"
         "${CMAKE_SOURCE_DIR}/lib/spi"
         "${CMAKE_SOURCE_DIR}/lib/touch"
+        "${CMAKE_SOURCE_DIR}/lib/motion"
+        "${CMAKE_SOURCE_DIR}/lib/power"
     REQUIRES
         driver
+        esp_adc
         esp_wifi
         esp_event
         nvs_flash

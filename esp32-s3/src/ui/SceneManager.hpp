@@ -134,5 +134,11 @@ private:
     // LuniMoon.sceneForLunarDay() mapping.
     const VariantDef* pickMoonVariant();
 
+    // Deterministic weather variant for the current condition (from
+    // scene_data_.weather_condition, fed by the server). Without this an
+    // explicit weather scene picked a RANDOM sky — e.g. SNOW on a sunny day
+    // (S11-02). Returns nullptr for unknown/unsynced → caller falls back.
+    const VariantDef* pickWeatherVariant();
+
     SceneData scene_data_;
 };

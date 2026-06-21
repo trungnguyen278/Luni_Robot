@@ -10,8 +10,18 @@
 //             (43/44 = UART0 console, 48 = onboard RGB LED).
 //
 // Responsibilities: Display (ST7789), I2S Audio (Mic+Speaker), Opus codec,
-//   UART bridge to C5, I2C (PCA9685 servo driver + MPU6050 IMU), Camera (OV2640).
-//   The user button has MOVED to the C5 (push-to-talk) to free pins.
+//   UART bridge to C5, SPI3 audio bridge to C5, Camera (OV2640).
+//   The user button has MOVED to the C5 (push-to-talk). The I2C motion bus
+//   (PCA9685 servos + MPU6050 IMU) has ALSO MOVED to the C5 — it is low-rate and
+//   the CAM board has no spare pins; freeing GPIO3/46 (old SDA/SCL) gave the
+//   audio SPI3 lane its pins. See esp32-c5/src/config/PinConfig.hpp.
+//
+// CROSS-MCU WIRING (must match esp32-c5/src/config/PinConfig.hpp):
+//   SPI3 audio lane (S3 master <-> C5 slave):
+//     S3 SCLK 46 <-> C5 SCLK 4     S3 MOSI 3  -> C5 MOSI 2
+//     S3 MISO 38 <-  C5 MISO 3     S3 CS   48 -> C5 CS   5
+//     S3 HS   40 <-  C5 HS   8  (C5 raises HS HIGH when downlink data ready)
+//   UART control/status:  S3 TX 19 -> C5 RX 6     S3 RX 20 <- C5 TX 7
 //
 // NOTE: camera/SD pin numbers follow the standard Freenove ESP32-S3-WROOM
 //       pinout. Cross-check against the official `camera_pins.h` before flashing.
@@ -20,17 +30,25 @@
 namespace PinConfig {
 
 // --- SPI Display (ST7789 240x320) on SPI2 -----------------------------------
-// Relocated off the low GPIOs (now owned by the camera) onto the freed SD-block
-// pins (38/39/40) + 41/42/47. SD is therefore deferred (see SD namespace).
+// Relocated off the low GPIOs (now owned by the camera). GPIO38 (RST) and GPIO40
+// (CS) were FREED for the SPI3 audio lane:
+//   * LCD_RST=-1: the panel's RST is tied to 3V3 on the board; DisplayDriver
+//     already issues a software reset (ST7789 SWRESET 0x01) at init, so no GPIO
+//     reset is needed.
+//   * LCD_CS=-1: the ST7789 is the ONLY device on SPI2, so its CS is tied to GND
+//     (permanently selected). ESP-IDF runs the bus with spics_io_num=-1.
 static constexpr int SPI_MOSI  = 41;
 static constexpr int SPI_SCLK  = 42;
-static constexpr int LCD_CS    = 40;
+static constexpr int LCD_CS    = -1;  // tie panel CS -> GND (freed GPIO40 for SPI3 HS)
 static constexpr int LCD_DC    = 39;
-static constexpr int LCD_RST   = 38;
+static constexpr int LCD_RST   = -1;  // tie panel RST -> 3V3 (freed GPIO38 for SPI3 MISO)
 static constexpr int LCD_BL    = 47;  // Backlight PWM (LEDC_CHANNEL_0 / TIMER_0)
 
 // --- Battery ADC (-1 = no battery, skips PowerManager) ----------------------
-static constexpr int BATTERY_ADC = -1;  // ADC1_CH0 = GPIO1 (now used by I2S BCLK)
+// -1 = NO battery sensor wired. DeviceProfile must NOT report BOOT_POWER=OK in
+// this case (it would be a fake reading); the POWER boot-check + battery UI are
+// hidden until a real ADC divider exists. ADC1_CH0 = GPIO1 is used by I2S BCLK.
+static constexpr int BATTERY_ADC = -1;
 
 // --- Charge status (optional, -1 if not wired) ------------------------------
 static constexpr int CHG_STATUS = -1;
@@ -58,48 +76,31 @@ static constexpr int SPK_GAIN  = -1;  // Hard-wire GAIN (float = 9dB) to save a 
 // --- UART Bridge to ESP32-C5 (control/status messages) ----------------------
 // Relocated to GPIO19/20. This SACRIFICES the native USB-OTG port; flashing and
 // logging still work via UART0 (GPIO43/44) through the on-board CP2102.
-static constexpr int UART_TX       = 19;  // S3 GPIO19 -> C5 GPIO7 (RX)
-static constexpr int UART_RX       = 20;  // S3 GPIO20 <- C5 GPIO6 (TX)
+static constexpr int UART_TX       = 19;  // S3 GPIO19 -> C5 GPIO6 (C5 RX)
+static constexpr int UART_RX       = 20;  // S3 GPIO20 <- C5 GPIO7 (C5 TX)
 // Higher baud for control/status + camera image chunks. MUST match the C5.
 static constexpr int UART_BAUD     = 460800;
 
 // --- SPI3 Bridge to ESP32-C5 (S3=Master, C5=Slave) --------------------------
-// Disabled (-1): no free pins on the CAM board. Audio downlink uses UART path.
-static constexpr int SPI3_MOSI      = -1;
-static constexpr int SPI3_MISO      = -1;
-static constexpr int SPI3_SCLK      = -1;
-static constexpr int SPI3_CS        = -1;
-static constexpr int SPI3_HANDSHAKE = -1;
+// RE-ENABLED. The continuous Opus audio stream (mic uplink + TTS downlink) runs
+// on its own SPI3 lane so it gets DMA + does not contend with the byte-by-byte
+// UART control path (or block on a camera image burst). Pins were freed by
+// moving the I2C motion bus to the C5 (GPIO3/46) and dropping the now-unused
+// LCD_RST/LCD_CS (GPIO38/40) + the RGB status LED (GPIO48). SPI3 uses the GPIO
+// matrix so any free pin works. MUST match the C5 SPI slave pins.
+static constexpr int SPI3_MOSI      = 3;   // -> C5 GPIO2  (was I2C SDA)
+static constexpr int SPI3_MISO      = 38;  // <- C5 GPIO3  (was LCD_RST)
+static constexpr int SPI3_SCLK      = 46;  // -> C5 GPIO4  (was I2C SCL)
+static constexpr int SPI3_CS        = 48;  // -> C5 GPIO5  (was RGB LED)
+static constexpr int SPI3_HANDSHAKE = 40;  // <- C5 GPIO8  (was LCD_CS); HIGH = C5 has data
 
 // --- Battery voltage divider resistors (ohms) -------------------------------
 static constexpr float BAT_R1 = 10000.0f;
 static constexpr float BAT_R2 = 20000.0f;
 
-// =============================================================================
-// I2C bus (shared) - PCA9685 servo driver + MPU6050 IMU
-// =============================================================================
-// Dedicated bus on strapping-tolerant pins (lines idle HIGH via pull-ups, only
-// driven after boot). Optional optimisation: share the camera SCCB bus
-// (Camera::SIOD/SIOC) at 100kHz to free SDA/SCL — not done here for robustness.
-namespace I2C {
-    static constexpr int SDA       = 3;
-    static constexpr int SCL       = 46;
-    static constexpr int PORT      = 0;            // I2C_NUM_0
-    static constexpr int FREQ_HZ   = 400000;       // 400kHz (PCA9685 + MPU6050 OK)
-    static constexpr int PCA9685_ADDR = 0x40;      // servo PWM driver
-    static constexpr int MPU6050_ADDR = 0x68;      // IMU (AD0=GND)
-}
-
-// =============================================================================
-// Servo control - 8 channels on the PCA9685 (NOT GPIO pins)
-// =============================================================================
-// S3 has only 8 LEDC channels and the backlight already owns CHANNEL_0, so 8
-// servos cannot be driven directly. PCA9685 (16-ch, 50Hz, separate V+ supply)
-// is used over I2C. Per-servo calibration lives in MotionConfig.hpp.
-namespace Servo {
-    static constexpr int COUNT      = 8;           // CH0..CH7 on PCA9685
-    static constexpr int PWM_FREQ_HZ = 50;         // standard analog servo
-}
+// NOTE: the I2C motion bus (PCA9685 servos + MPU6050 IMU) and its servo config
+// MOVED to the ESP32-C5 — see esp32-c5/src/config/PinConfig.hpp (namespace I2C)
+// and esp32-c5 MotionConfig.hpp. GPIO3/46 are now SPI3 (above).
 
 // =============================================================================
 // Camera (OV2640) - Freenove ESP32-S3-WROOM FIXED pins (DVP 8-bit)
@@ -134,15 +135,14 @@ namespace Camera {
 // =============================================================================
 // SD card - DEFERRED on this board
 // =============================================================================
-// The board's SDMMC is hard-wired to GPIO 38/39/40, which we now use for the
-// ST7789 display. Display was prioritised, so SD cannot be enabled at the same
-// time. To re-enable SD you must free 38/39/40 (e.g. drop the display or move
-// it). Pins documented here for reference only — DO NOT init SD with this map.
+// The board's SDMMC is hard-wired to GPIO 38/39/40. GPIO39 is LCD_DC; GPIO38 and
+// GPIO40 are now the SPI3 audio lane (MISO / handshake). SD stays deferred.
+// Pins documented here for reference only — DO NOT init SD with this map.
 namespace SD {
     static constexpr bool ENABLED = false;
     static constexpr int  CLK = 39;   // (in use by LCD_DC)
-    static constexpr int  CMD = 38;   // (in use by LCD_RST)
-    static constexpr int  D0  = 40;   // (in use by LCD_CS)
+    static constexpr int  CMD = 38;   // (now SPI3_MISO)
+    static constexpr int  D0  = 40;   // (now SPI3_HANDSHAKE)
 }
 
 } // namespace PinConfig

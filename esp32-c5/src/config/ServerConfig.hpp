@@ -13,6 +13,13 @@ static constexpr uint32_t WS_NETWORK_TIMEOUT_MS      = 10000;
 static constexpr size_t   WS_TX_BUFFER_SIZE          = 32 * 1024;
 static constexpr size_t   WS_TX_BATCH_SIZE           = 2048;
 static constexpr uint32_t WS_TX_TASK_STACK_SIZE      = 4096;
+// Text/JSON frames go through their own queue + task so heartbeat / watchdog /
+// log-flush sends (which run on the shared esp_timer task) never block up to 1s
+// inside esp_websocket_client_send_text. Depth covers a log-flush burst (10) +
+// heartbeat + a few state updates without dropping.
+static constexpr uint32_t WS_TXT_TASK_STACK_SIZE     = 4096;
+static constexpr size_t   WS_TEXT_QUEUE_DEPTH        = 24;
+static constexpr size_t   WS_TEXT_MAX_LEN            = 4096;
 static constexpr uint32_t HEARTBEAT_INTERVAL_MS      = 30000;
 
 // Inter-MCU audio bridge

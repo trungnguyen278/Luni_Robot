@@ -36,7 +36,11 @@ void OtaManager::checkUpdate(const char* current_version, const char* model)
 void OtaManager::startDownload(const char* url, const char* sha256, size_t size)
 {
     if (!sm_ || !url || !sha256) return;
-    if (state_ != state::OtaState::IDLE && state_ != state::OtaState::CHECKING) return;
+    // Allow a fresh start from IDLE/CHECKING, or a retry after a prior FAILED.
+    // Reject only while an OTA is actively in flight.
+    if (state_ != state::OtaState::IDLE &&
+        state_ != state::OtaState::CHECKING &&
+        state_ != state::OtaState::FAILED) return;
 
     strncpy(pending_.url, url, sizeof(pending_.url) - 1);
     strncpy(pending_.sha256, sha256, sizeof(pending_.sha256) - 1);
@@ -56,6 +60,25 @@ void OtaManager::cancel()
     cancel_requested_ = true;
 }
 
+void OtaManager::confirmHealth()
+{
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (!running) return;
+
+    esp_ota_img_states_t ota_state;
+    if (esp_ota_get_state_partition(running, &ota_state) != ESP_OK) return;
+
+    // Only a freshly-OTA'd image sits in PENDING_VERIFY. Marking it valid here
+    // is what stops the bootloader from reverting on the next reset. For any
+    // other state (a normally-booted image) this is a no-op, so it is safe to
+    // call on every WS auth.
+    if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA image health-confirmed on '%s' (mark_app_valid: %s)",
+                 running->label, esp_err_to_name(err));
+    }
+}
+
 void OtaManager::downloadTaskEntry(void* arg)
 {
     static_cast<OtaManager*>(arg)->downloadTask();
@@ -70,6 +93,7 @@ void OtaManager::downloadTask()
         ESP_LOGE(TAG, "No OTA partition found");
         state_ = state::OtaState::FAILED;
         sm_->setOtaState(state::OtaState::FAILED);
+        dl_task_ = nullptr;
         vTaskDelete(nullptr);
         return;
     }
@@ -80,6 +104,7 @@ void OtaManager::downloadTask()
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         state_ = state::OtaState::FAILED;
         sm_->setOtaState(state::OtaState::FAILED);
+        dl_task_ = nullptr;
         vTaskDelete(nullptr);
         return;
     }
@@ -90,20 +115,32 @@ void OtaManager::downloadTask()
 
     HttpClient http;
     size_t total_written = 0;
+    esp_err_t write_err = ESP_OK;
 
     err = http.download(pending_.url, pending_.size,
         [&](const uint8_t* data, size_t len) {
-            esp_ota_write(ota_handle, data, len);
+            if (write_err != ESP_OK || cancel_requested_) return;
+            // SHA must be over the bytes actually committed to flash, not just
+            // the bytes off the wire — so verify the write before hashing.
+            write_err = esp_ota_write(ota_handle, data, len);
+            if (write_err != ESP_OK) {
+                ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(write_err));
+                return;
+            }
             mbedtls_sha256_update(&sha_ctx, data, len);
             total_written += len;
         },
         [&](size_t downloaded, size_t total) {
             uint8_t pct = (total > 0) ? (uint8_t)(downloaded * 100 / total) : 0;
-            progress_ = pct;
+            uint8_t prev = progress_.exchange(pct);
+            if (progress_cb_ && (pct >= prev + 5 || (pct == 100 && prev != 100))) {
+                progress_cb_(pct);
+            }
         });
 
-    if (cancel_requested_ || err != ESP_OK) {
-        ESP_LOGW(TAG, "OTA download %s", cancel_requested_ ? "cancelled" : "failed");
+    if (cancel_requested_ || err != ESP_OK || write_err != ESP_OK) {
+        ESP_LOGW(TAG, "OTA download %s",
+                 cancel_requested_ ? "cancelled" : (write_err != ESP_OK ? "flash-write failed" : "failed"));
         esp_ota_abort(ota_handle);
         mbedtls_sha256_free(&sha_ctx);
         state_ = state::OtaState::FAILED;

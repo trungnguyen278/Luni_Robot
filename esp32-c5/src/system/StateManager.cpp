@@ -95,6 +95,13 @@ bool StateManager::setInteractionState(state::InteractionState s, state::InputSo
         std::lock_guard<std::mutex> lk(mtx_);
         if (s == inter_state_ && src == inter_source_) return true;
 
+        // Soft validation: an off-contract transition is a bug somewhere, but
+        // rejecting it would desync the relay to S3 — warn and apply anyway.
+        if (s != inter_state_ && !state::isValidInteractionTransition(inter_state_, s)) {
+            ESP_LOGW(TAG, "Off-contract interaction transition: %d -> %d (src=%d)",
+                     (int)inter_state_, (int)s, (int)src);
+        }
+
         old_state = inter_state_;
         ESP_LOGI(TAG, "Interaction: %d -> %d (source=%d)", (int)inter_state_, (int)s, (int)src);
         inter_state_ = s;

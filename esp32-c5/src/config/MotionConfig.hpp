@@ -38,6 +38,11 @@ inline constexpr ServoCal SERVOS[JOINT_COUNT] = {
     /* ARM_R   */ { 5, 500, 2500, 1500, true  },
 };
 
+// Auto-relax: nếu không có lệnh chuyển động nào trong khoảng này, nhả toàn bộ
+// servo (allOff) thay vì giữ pulse → hết buzz/giữ-tải/nóng + tiết kiệm điện trên
+// robot chạy pin (S10-03). Lệnh kế tiếp tự cấp xung lại.
+static constexpr int RELAX_IDLE_MS = 4000;
+
 // --- IMU (MPU6050) — đọc rất nhẹ, chỉ để báo sự kiện lên server (không balance) ---
 // Dùng chu kỳ ms (thay vì Hz) để hỗ trợ tần số < 1Hz nếu cần.
 namespace imu {

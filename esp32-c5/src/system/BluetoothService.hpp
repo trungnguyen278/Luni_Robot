@@ -82,6 +82,7 @@ public:
     static constexpr uint8_t CMD_OK           = 0x00;
     static constexpr uint8_t CMD_FAIL         = 0x01;
     static constexpr uint8_t CMD_UNAUTHORIZED = 0x02;
+    static constexpr uint8_t CMD_LOCKED       = 0x03;  // PIN locked out (too many tries)
 
     // NimBLE callbacks need access to instance
     static BluetoothService* s_instance;
@@ -98,7 +99,27 @@ public:
     char pairing_pin_[7] = "000000";
     void generatePairingPin();
 
-    // Admin auth
+    // PIN brute-force lockout. The 6-digit space (10^6) is small enough to walk
+    // through in a provisioning window, so after MAX_PIN_ATTEMPTS wrong tries we
+    // lock all PIN checks for PIN_LOCKOUT_MS. Counter + deadline persist across
+    // BLE reconnects (an attacker must not reset the counter by reconnecting);
+    // both clear only on a correct PIN. The compare itself is constant-time.
+    static constexpr uint8_t  MAX_PIN_ATTEMPTS = 5;
+    static constexpr uint32_t PIN_LOCKOUT_MS   = 30000;
+    uint8_t pin_attempts_     = 0;
+    int64_t pin_lock_until_us_ = 0;
+    // Returns true and serves the result if the PIN gate is locked / now locked.
+    bool checkPinGate(const uint8_t* buf, uint16_t len);
+
+    // Admin auth (Level 2). Nonce-challenge: the device issues a fresh random
+    // nonce (readable on ADMIN_AUTH after Level 1); the app signs mac‖nonce with
+    // admin_secret and writes [hmac:32][nonce:4 LE]. Replaces the old
+    // timestamp-vs-uptime freshness check, which could never pass (the C5 has no
+    // wall clock). The HMAC layout/message/key are unchanged (server + app
+    // already match) — only the freshness factor moved from a timestamp to a
+    // device-issued nonce, killing replay.
+    std::atomic<uint32_t> admin_nonce_{0};
+    void regenerateAdminNonce();
     bool verifyAdminToken(const uint8_t* data, size_t len);
 
     // Current BLE connection handle for notifications
