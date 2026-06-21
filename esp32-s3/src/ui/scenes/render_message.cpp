@@ -449,7 +449,7 @@ static void render_message_sent(GfxEngine& gfx, float t, const ColorContext& col
 
     /* --- Eyes --------------------------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_ROSE], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIs(ph.name, "typing")) {
@@ -470,7 +470,7 @@ static void render_message_sent(GfxEngine& gfx, float t, const ColorContext& col
 const VariantDef MESSAGE_VARIANTS[] = {
     {"message-chat",     "Chat",     14000, TONE_NONE, render_message_chat},
     {"message-incoming", "Incoming", 11000, TONE_NONE, render_message_incoming},
-    {"message-sent",     "Sent",     11000, TONE_NONE, render_message_sent},
+    {"message-sent",     "Sent",     11000, TONE_ROSE, render_message_sent},
 };
 
 extern const CategoryDef CAT_MESSAGE = {

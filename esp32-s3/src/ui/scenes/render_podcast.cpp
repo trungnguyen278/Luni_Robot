@@ -235,7 +235,7 @@ static void render_podcast(GfxEngine& gfx, float t, const ColorContext& colors) 
 
     /* --- Eyes (always on top) ------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_PURPLE], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (phaseIn(ph.name, "onair", "talk1", "chapter", "talk2")) {
@@ -248,7 +248,7 @@ static void render_podcast(GfxEngine& gfx, float t, const ColorContext& colors) 
 }
 
 const VariantDef PODCAST_VARIANTS[] = {
-    {"podcast-main", "Main", 14000, TONE_NONE, render_podcast},
+    {"podcast-onair", "Live on air", 14000, TONE_NONE, render_podcast},
 };
 
 extern const CategoryDef CAT_PODCAST = {

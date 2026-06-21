@@ -29,6 +29,7 @@ enum ChrIdx {
     IDX_WS_URL,
     IDX_COMMIT,
     IDX_USER_ID,
+    IDX_DEV_TOKEN,
     IDX_DEVICE_INFO,
     IDX_DIAG_INFO,
     IDX_AUTH_UNLOCK,
@@ -36,6 +37,7 @@ enum ChrIdx {
     IDX_ADMIN_AUTH,
     IDX_LOG_LEVEL,
     IDX_ADMIN_SECRET,
+    IDX_WIFI_SCAN,
     IDX_COUNT
 };
 
@@ -50,6 +52,7 @@ static ble_uuid16_t chr_uuid_pass  = BLE_UUID16_INIT(0x0002);
 static ble_uuid16_t chr_uuid_ws    = BLE_UUID16_INIT(0x0003);
 static ble_uuid16_t chr_uuid_commit = BLE_UUID16_INIT(0x0004);
 static ble_uuid16_t chr_uuid_uid   = BLE_UUID16_INIT(0x0005);
+static ble_uuid16_t chr_uuid_token = BLE_UUID16_INIT(0x0008);
 static ble_uuid16_t chr_uuid_info  = BLE_UUID16_INIT(0x0006);
 static ble_uuid16_t chr_uuid_diag  = BLE_UUID16_INIT(0x0007);
 static ble_uuid16_t chr_uuid_auth  = BLE_UUID16_INIT(0x0010);
@@ -57,12 +60,20 @@ static ble_uuid16_t chr_uuid_cmd   = BLE_UUID16_INIT(0x0011);
 static ble_uuid16_t chr_uuid_admin = BLE_UUID16_INIT(0x0012);
 static ble_uuid16_t chr_uuid_log   = BLE_UUID16_INIT(0x0013);
 static ble_uuid16_t chr_uuid_sec   = BLE_UUID16_INIT(0x0014);
+static ble_uuid16_t chr_uuid_wifi  = BLE_UUID16_INIT(0x0009);
 
-#define RW_FLAGS  (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE)
-#define RWN_FLAGS (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY)
+// Every sensitive characteristic also requires an ENCRYPTED link (LE Secure
+// Connections, configured in init()). With the *_ENC flags, NimBLE rejects
+// access on a plaintext link with BLE_ATT_ERR_INSUFFICIENT_ENC, which makes the
+// central pair/encrypt before any secret (WiFi pass, device_token, admin_secret,
+// PIN) crosses the air. DEVICE_INFO stays public so the app can read the MAC to
+// identify the robot before pairing.
+#define RW_FLAGS  (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_WRITE_ENC)
+#define RWN_FLAGS (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_WRITE_ENC)
 #define R_FLAGS   BLE_GATT_CHR_F_READ
-#define W_FLAGS   BLE_GATT_CHR_F_WRITE
-#define WN_FLAGS  (BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY)
+#define R_ENC     (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC)
+#define W_FLAGS   (BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC)
+#define WN_FLAGS  (BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_WRITE_ENC)
 
 static const struct ble_gatt_chr_def gatt_chars[] = {
     { .uuid = &chr_uuid_ssid.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_SSID,         .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_SSID] },
@@ -70,13 +81,15 @@ static const struct ble_gatt_chr_def gatt_chars[] = {
     { .uuid = &chr_uuid_ws.u,    .access_cb = gatt_chr_access, .arg = (void*)IDX_WS_URL,        .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_WS_URL] },
     { .uuid = &chr_uuid_commit.u,.access_cb = gatt_chr_access, .arg = (void*)IDX_COMMIT,         .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_COMMIT] },
     { .uuid = &chr_uuid_uid.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_USER_ID,       .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_USER_ID] },
+    { .uuid = &chr_uuid_token.u,.access_cb = gatt_chr_access, .arg = (void*)IDX_DEV_TOKEN,     .flags = W_FLAGS,  .val_handle = &chr_val_handles[IDX_DEV_TOKEN] },
     { .uuid = &chr_uuid_info.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DEVICE_INFO,   .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_DEVICE_INFO] },
-    { .uuid = &chr_uuid_diag.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DIAG_INFO,     .flags = R_FLAGS,  .val_handle = &chr_val_handles[IDX_DIAG_INFO] },
+    { .uuid = &chr_uuid_diag.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_DIAG_INFO,     .flags = R_ENC,  .val_handle = &chr_val_handles[IDX_DIAG_INFO] },
     { .uuid = &chr_uuid_auth.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_AUTH_UNLOCK,   .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_AUTH_UNLOCK] },
     { .uuid = &chr_uuid_cmd.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_COMMAND,       .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_COMMAND] },
-    { .uuid = &chr_uuid_admin.u, .access_cb = gatt_chr_access, .arg = (void*)IDX_ADMIN_AUTH,    .flags = WN_FLAGS, .val_handle = &chr_val_handles[IDX_ADMIN_AUTH] },
+    { .uuid = &chr_uuid_admin.u, .access_cb = gatt_chr_access, .arg = (void*)IDX_ADMIN_AUTH,    .flags = RWN_FLAGS, .val_handle = &chr_val_handles[IDX_ADMIN_AUTH] },
     { .uuid = &chr_uuid_log.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_LOG_LEVEL,     .flags = RW_FLAGS, .val_handle = &chr_val_handles[IDX_LOG_LEVEL] },
     { .uuid = &chr_uuid_sec.u,   .access_cb = gatt_chr_access, .arg = (void*)IDX_ADMIN_SECRET,  .flags = W_FLAGS,  .val_handle = &chr_val_handles[IDX_ADMIN_SECRET] },
+    { .uuid = &chr_uuid_wifi.u,  .access_cb = gatt_chr_access, .arg = (void*)IDX_WIFI_SCAN,     .flags = R_ENC,  .val_handle = &chr_val_handles[IDX_WIFI_SCAN] },
     { 0 }
 };
 
@@ -105,6 +118,8 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg)
             self->connected_ = true;
             self->started_ = false;
             self->access_level_ = BluetoothService::AccessLevel::LEVEL_0;
+            // Fresh admin-auth challenge per connection (anti-replay across links).
+            self->regenerateAdminNonce();
             if (self->conn_cb_) self->conn_cb_(true);
         } else {
             self->started_ = false;
@@ -125,6 +140,23 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg)
 
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "MTU updated: %d", event->mtu.value);
+        break;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        // Pairing/encryption completed (or failed). With LESC enabled, this is
+        // the point where the link becomes safe for secrets.
+        ESP_LOGI(TAG, "BLE encryption change: status=%d", event->enc_change.status);
+        break;
+
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+        // We don't bond, so there is no stored key to collide with — just let
+        // pairing proceed again. (Kept for completeness; rarely reached.)
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        // Just Works (NO_INPUT_NO_OUTPUT) shouldn't ask for a passkey; log if it
+        // somehow does so the failure is visible instead of a silent stall.
+        ESP_LOGW(TAG, "Unexpected passkey action: %d", event->passkey.params.action);
         break;
 
     default:
@@ -152,18 +184,11 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
         os_mbuf_copydata(ctxt->om, 0, len, buf);
 
         switch (idx) {
-        case IDX_AUTH_UNLOCK: {
-            // PIN check → Level 1
-            if (len == 6 && memcmp(buf, self->pairing_pin_, 6) == 0) {
-                self->access_level_ = BluetoothService::AccessLevel::LEVEL_1;
-                ESP_LOGI(TAG, "Auth → Level 1");
-                self->notifyCommandResult(BluetoothService::CMD_OK);
-            } else {
-                ESP_LOGW(TAG, "PIN mismatch");
-                self->notifyCommandResult(BluetoothService::CMD_FAIL);
-            }
+        case IDX_AUTH_UNLOCK:
+            // PIN check → Level 1. Brute-force lockout + constant-time compare
+            // live in checkPinGate (it also serves the notify result).
+            self->checkPinGate(buf, len);
             return 0;
-        }
 
         case IDX_ADMIN_AUTH: {
             if (level < BluetoothService::AccessLevel::LEVEL_1) {
@@ -238,6 +263,12 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             if (level < BluetoothService::AccessLevel::LEVEL_1)
                 return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
             self->temp_cfg_.user_id.assign((char*)buf, len);
+            break;
+
+        case IDX_DEV_TOKEN:
+            if (level < BluetoothService::AccessLevel::LEVEL_1)
+                return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+            self->temp_cfg_.device_token.assign((char*)buf, len);
             break;
 
         case IDX_ADMIN_SECRET:
@@ -317,6 +348,22 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             response = self->temp_cfg_.user_id;
             break;
 
+        case IDX_ADMIN_AUTH: {
+            // Nonce-challenge: hand the app the current 4-byte LE nonce to sign.
+            // Requires Level 1 (post-PIN), same gate as starting admin auth.
+            if (level < BluetoothService::AccessLevel::LEVEL_1)
+                return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+            uint32_t nonce = self->admin_nonce_.load();
+            uint8_t out[4] = {
+                (uint8_t)(nonce & 0xFF),
+                (uint8_t)((nonce >> 8) & 0xFF),
+                (uint8_t)((nonce >> 16) & 0xFF),
+                (uint8_t)((nonce >> 24) & 0xFF),
+            };
+            os_mbuf_append(ctxt->om, out, sizeof(out));
+            return 0;
+        }
+
         case IDX_LOG_LEVEL: {
             if (level < BluetoothService::AccessLevel::LEVEL_2)
                 return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
@@ -328,6 +375,34 @@ static int gatt_chr_access(uint16_t conn_handle, uint16_t attr_handle,
             }
             os_mbuf_append(ctxt->om, &lvl, 1);
             return 0;
+        }
+
+        case IDX_WIFI_SCAN: {
+            // Real WiFi networks scanned at boot, served as a JSON array so the
+            // app can replace its placeholder list. Requires Level 1 (post-PIN).
+            if (level < BluetoothService::AccessLevel::LEVEL_1)
+                return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+
+            // Cap entries so the value stays within the ATT max (512 bytes).
+            constexpr size_t kMaxNetworks = 12;
+            response = "[";
+            size_t count = 0;
+            for (const auto& net : self->wifi_networks_) {
+                if (count >= kMaxNetworks) break;
+                if (net.ssid.empty()) continue;
+                if (count > 0) response += ',';
+                response += "{\"ssid\":\"";
+                for (char c : net.ssid) {       // minimal JSON string escaping
+                    if (c == '"' || c == '\\') response += '\\';
+                    response += c;
+                }
+                response += "\",\"rssi\":";
+                response += std::to_string(net.rssi);
+                response += '}';
+                ++count;
+            }
+            response += "]";
+            break;
         }
 
         default:
@@ -378,13 +453,79 @@ void BluetoothService::generatePairingPin()
 {
     uint32_t r = esp_random();
     snprintf(pairing_pin_, sizeof(pairing_pin_), "%06lu", (unsigned long)(r % 1000000));
-    ESP_LOGI(TAG, "Pairing PIN: %s", pairing_pin_);
+    // DEBUG only: LogManager forwards INFO+ to the cloud, so logging the PIN at
+    // INFO would leak it into server logs. It is shown on the robot screen.
+    ESP_LOGD(TAG, "Pairing PIN generated");
+}
+
+// Constant-time byte compare (no early-out on first mismatch).
+static bool ctEqual(const uint8_t* a, const uint8_t* b, size_t n)
+{
+    uint8_t diff = 0;
+    for (size_t i = 0; i < n; ++i) diff |= (uint8_t)(a[i] ^ b[i]);
+    return diff == 0;
+}
+
+bool BluetoothService::checkPinGate(const uint8_t* buf, uint16_t len)
+{
+    const int64_t now = esp_timer_get_time();
+
+    // Still locked out? Reject without comparing (and without advancing time).
+    if (pin_lock_until_us_ != 0 && now < pin_lock_until_us_) {
+        ESP_LOGW(TAG, "PIN locked out (%lld ms left)",
+                 (long long)((pin_lock_until_us_ - now) / 1000));
+        notifyCommandResult(CMD_LOCKED);
+        return true;
+    }
+    // Lockout expired → start a fresh attempt window.
+    if (pin_lock_until_us_ != 0 && now >= pin_lock_until_us_) {
+        pin_lock_until_us_ = 0;
+        pin_attempts_ = 0;
+    }
+
+    if (len == 6 && ctEqual(buf, (const uint8_t*)pairing_pin_, 6)) {
+        access_level_ = AccessLevel::LEVEL_1;
+        pin_attempts_ = 0;
+        pin_lock_until_us_ = 0;
+        ESP_LOGI(TAG, "Auth → Level 1");
+        notifyCommandResult(CMD_OK);
+        return false;
+    }
+
+    // Wrong PIN. Count it; lock out once the budget is spent. The counter is NOT
+    // reset on reconnect, so reconnecting cannot refresh the brute-force budget.
+    if (pin_attempts_ < 0xFF) pin_attempts_++;
+    if (pin_attempts_ >= MAX_PIN_ATTEMPTS) {
+        pin_lock_until_us_ = now + (int64_t)PIN_LOCKOUT_MS * 1000;
+        ESP_LOGW(TAG, "PIN mismatch (%u/%u) — locking for %lu ms",
+                 pin_attempts_, MAX_PIN_ATTEMPTS, (unsigned long)PIN_LOCKOUT_MS);
+        notifyCommandResult(CMD_LOCKED);
+    } else {
+        ESP_LOGW(TAG, "PIN mismatch (%u/%u)", pin_attempts_, MAX_PIN_ATTEMPTS);
+        notifyCommandResult(CMD_FAIL);
+    }
+    return true;
+}
+
+void BluetoothService::regenerateAdminNonce()
+{
+    // HW RNG. Reroll until non-zero so 0 stays a clean "no challenge" sentinel.
+    uint32_t n = esp_random();
+    while (n == 0) n = esp_random();
+    admin_nonce_.store(n);
 }
 
 bool BluetoothService::verifyAdminToken(const uint8_t* data, size_t len)
 {
-    // Expected format: 32-byte HMAC token + 4-byte LE timestamp
+    // Expected format: 32-byte HMAC token + 4-byte LE challenge value.
+    // Layout/message/key are UNCHANGED from before — only the freshness factor
+    // is now the device-issued nonce (data[32..35]) instead of a wall-clock
+    // timestamp, which the C5 has no source for. Server signs the same
+    // mac‖value_str with admin_secret; see issue_ble_token / generate_ble_token.
     if (len != 36) return false;
+
+    uint32_t challenge = admin_nonce_.load();
+    if (challenge == 0) return false;  // no active challenge issued
 
     // Load admin_secret from NVS
     nvs_handle_t h;
@@ -395,15 +536,24 @@ bool BluetoothService::verifyAdminToken(const uint8_t* data, size_t len)
     nvs_close(h);
     if (err != ESP_OK || secret_len == 0) return false;
 
-    uint32_t ts = data[32] | (data[33] << 8) | (data[34] << 16) | (data[35] << 24);
+    uint32_t value = data[32] | (data[33] << 8) | (data[34] << 16) | (data[35] << 24);
 
-    // Build message: mac || timestamp_str
+    // Freshness: the signed value must be the nonce we just issued. This is the
+    // anti-replay check (was: timestamp within ±300s of device uptime, which
+    // could never line up with the app's Unix epoch → admin auth was dead).
+    if (value != challenge) {
+        ESP_LOGW(TAG, "Admin token nonce mismatch (got %lu, expected %lu)",
+                 (unsigned long)value, (unsigned long)challenge);
+        return false;
+    }
+
+    // Build message: mac || value_str
     const char* mac = getDLuniceEfuseID();
-    char ts_str[16];
-    snprintf(ts_str, sizeof(ts_str), "%lu", (unsigned long)ts);
+    char val_str[16];
+    snprintf(val_str, sizeof(val_str), "%lu", (unsigned long)value);
 
     char msg[192];
-    size_t msg_len = snprintf(msg, sizeof(msg), "%s%s", mac, ts_str);
+    size_t msg_len = snprintf(msg, sizeof(msg), "%s%s", mac, val_str);
 
     // HMAC-SHA256(msg, admin_secret)
     uint8_t expected[32];
@@ -414,14 +564,9 @@ bool BluetoothService::verifyAdminToken(const uint8_t* data, size_t len)
 
     if (memcmp(data, expected, 32) != 0) return false;
 
-    // Timestamp within ±5 minutes (300s)
-    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000);
-    int32_t diff = (int32_t)ts - (int32_t)now;
-    if (diff < -300 || diff > 300) {
-        ESP_LOGW(TAG, "Admin token timestamp out of range: diff=%ld", (long)diff);
-        return false;
-    }
-
+    // Consume the nonce so the same token cannot be replayed within this
+    // connection. The app must re-read ADMIN_AUTH for any further auth.
+    regenerateAdminNonce();
     return true;
 }
 
@@ -505,8 +650,11 @@ void BluetoothService::factoryReset()
 {
     nvs_handle_t h;
     if (nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_erase_key(h, "wifi_ssid");
-        nvs_erase_key(h, "wifi_password");
+        nvs_erase_key(h, "ssid");
+        nvs_erase_key(h, "pass");
+        nvs_erase_key(h, "ws_url");
+        nvs_erase_key(h, "user_id");
+        nvs_erase_key(h, "device_token");
         nvs_erase_key(h, "admin_secret");
         nvs_commit(h);
         nvs_close(h);
@@ -535,6 +683,7 @@ bool BluetoothService::init(const std::string& adv_name,
 
     device_id_str_ = getDLuniceEfuseID();
     generatePairingPin();
+    regenerateAdminNonce();
 
     // Prepare WiFi list (sorted by RSSI, deduplicated)
     wifi_networks_ = cached_networks;
@@ -560,6 +709,19 @@ bool BluetoothService::init(const std::string& adv_name,
     ble_hs_cfg.sync_cb = ble_on_sync;
     ble_hs_cfg.reset_cb = ble_on_reset;
 
+    // LE Secure Connections (QĐ-12): encrypt the provisioning link so WiFi
+    // password / device_token / admin_secret never cross the air in cleartext.
+    // The robot has no display/keyboard usable for a passkey, so pairing is
+    // "Just Works" (encryption, no MITM); authorization is still enforced by the
+    // PIN (Level 1) + admin HMAC nonce (Level 2) on top of the encrypted link.
+    // No bonding: provisioning is short-lived, so we re-pair (and re-encrypt)
+    // each connection rather than depend on a persistent key store — simpler and
+    // it sidesteps stale-bond-after-factory-reset failures.
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_sc = 1;          // require LE Secure Connections
+    ble_hs_cfg.sm_bonding = 0;     // re-pair per connection; no key store needed
+    ble_hs_cfg.sm_mitm = 0;        // Just Works can't prove MITM resistance
+
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
@@ -579,7 +741,9 @@ bool BluetoothService::init(const std::string& adv_name,
     nimble_port_freertos_init(ble_host_task);
 
     initialized_ = true;
-    ESP_LOGI(TAG, "BLE initialized: %s (PIN: %s)", adv_name_.c_str(), pairing_pin_);
+    // Don't log the PIN at INFO — it would be forwarded to the cloud log. The
+    // PIN is shown on the robot's own screen for the user.
+    ESP_LOGI(TAG, "BLE initialized: %s", adv_name_.c_str());
     return true;
 }
 

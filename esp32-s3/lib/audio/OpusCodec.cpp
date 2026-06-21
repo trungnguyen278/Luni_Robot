@@ -29,24 +29,29 @@ bool OpusCodec::initCodec()
     if (initialized_) return true;
 
     int err;
+    const int app = AudioConfig::OPUS_USE_VOIP ? OPUS_APPLICATION_VOIP
+                                               : OPUS_APPLICATION_AUDIO;
 
-    // Create encoder (48kHz for CELT mode — cleaner frame boundaries)
-    encoder_ = opus_encoder_create(48000, 1, OPUS_APPLICATION_AUDIO, &err);
+    // Create encoder. VOIP(SILK) at 16k is ideal for speech and lighter on CPU
+    // than 48k CELT. Sample rate / bitrate / complexity all come from AudioConfig.
+    encoder_ = opus_encoder_create(AudioConfig::SAMPLE_RATE, AudioConfig::CHANNELS, app, &err);
     if (err != OPUS_OK || !encoder_) {
         ESP_LOGE(TAG, "Failed to create Opus encoder: %s", opus_strerror(err));
         return false;
     }
 
-    // Configure encoder — S3 has 240MHz Xtensa dual-core, plenty of CPU on Core 1
-    opus_encoder_ctl(encoder_, OPUS_SET_BITRATE(DEFAULT_BITRATE));
-    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(3));          // Balanced: better than 1, won't starve IDLE1 watchdog
+    opus_encoder_ctl(encoder_, OPUS_SET_BITRATE(AudioConfig::OPUS_BITRATE));
+    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(AudioConfig::OPUS_COMPLEXITY));
     opus_encoder_ctl(encoder_, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
     opus_encoder_ctl(encoder_, OPUS_SET_DTX(0));                 // Disable DTX for real-time
     opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(0));
-    opus_encoder_ctl(encoder_, OPUS_SET_VBR(1));                 // Variable bitrate (better quality)
+    opus_encoder_ctl(encoder_, OPUS_SET_VBR(AudioConfig::OPUS_VBR ? 1 : 0));
+    // Constrained VBR bounds the frame size so [2B len][opus] always fits
+    // in a single SPI payload (see AudioConfig::MAX_ENCODED_BYTES).
+    opus_encoder_ctl(encoder_, OPUS_SET_VBR_CONSTRAINT(AudioConfig::OPUS_VBR_CONSTRAINED ? 1 : 0));
 
     // Create decoder
-    decoder_ = opus_decoder_create(48000, 1, &err);
+    decoder_ = opus_decoder_create(AudioConfig::SAMPLE_RATE, AudioConfig::CHANNELS, &err);
     if (err != OPUS_OK || !decoder_) {
         ESP_LOGE(TAG, "Failed to create Opus decoder: %s", opus_strerror(err));
         opus_encoder_destroy(encoder_);
@@ -55,7 +60,10 @@ bool OpusCodec::initCodec()
     }
 
     initialized_ = true;
-    ESP_LOGI(TAG, "Opus codec initialized (48kHz mono, %d bps, 20ms frames)", DEFAULT_BITRATE);
+    ESP_LOGI(TAG, "Opus codec init (%lu Hz mono, %s, %d bps, %dms frames)",
+             (unsigned long)AudioConfig::SAMPLE_RATE,
+             AudioConfig::OPUS_USE_VOIP ? "VOIP" : "AUDIO",
+             DEFAULT_BITRATE, AudioConfig::FRAME_MS);
     return true;
 }
 
@@ -70,7 +78,7 @@ size_t OpusCodec::encode(const int16_t* pcm_in, size_t pcm_samples,
     if (pcm_samples < FRAME_SAMPLES) return 0;
     if (encoded_capacity < MAX_ENCODED_BYTES + 2) return 0;
 
-    // Encode one frame (20ms = 320 samples)
+    // Encode one frame (FRAME_MS worth of samples, see AudioConfig)
     int encoded_len = opus_encode(encoder_, pcm_in, FRAME_SAMPLES,
                                    encoded_out + 2, encoded_capacity - 2);
     if (encoded_len < 0) {

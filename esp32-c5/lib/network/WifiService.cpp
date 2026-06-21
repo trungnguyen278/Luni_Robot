@@ -263,12 +263,24 @@ void WifiService::wifiEventHandler(esp_event_base_t base, int32_t id, void *data
     {
     case WIFI_EVENT_STA_START:
         ESP_LOGI(TAG, "WIFI_EVENT_STA_START");
+        associated_ = false;
+        break;
+    case WIFI_EVENT_STA_CONNECTED:
+        // Link-layer association succeeded; an IP may still be pending (DHCP).
+        ESP_LOGI(TAG, "WIFI_EVENT_STA_CONNECTED");
+        associated_ = true;
         break;
     case WIFI_EVENT_STA_DISCONNECTED:
-        ESP_LOGW(TAG, "WIFI_EVENT_STA_DISCONNECTED");
+    {
+        auto* d = static_cast<wifi_event_sta_disconnected_t*>(data);
+        last_disconnect_reason_ = d ? d->reason : 0;
+        ESP_LOGW(TAG, "WIFI_EVENT_STA_DISCONNECTED (reason=%d)",
+                 last_disconnect_reason_);
         connected = false;
+        associated_ = false;
         if (status_cb) status_cb(0);
         break;
+    }
     default:
         break;
     }

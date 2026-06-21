@@ -36,4 +36,7 @@ private:
     bool initialized_ = false;
     bool capturing_   = false;
     bool muted_       = false;
+    // DC-blocking high-pass state (y[n] = x[n] - x[n-1] + R*y[n-1])
+    int32_t dc_x1_ = 0;
+    int32_t dc_y1_ = 0;
 };

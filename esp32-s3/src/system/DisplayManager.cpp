@@ -4,6 +4,7 @@
 #include <utility>
 #include <atomic>
 #include <cstring>
+#include <ctime>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -186,6 +187,16 @@ void DisplayManager::setBatteryPercent(uint8_t p)
     battery_percent = p;
 }
 
+void DisplayManager::setMicMuted(bool muted)
+{
+    mic_muted_.store(muted);
+}
+
+void DisplayManager::setCapturing(bool on)
+{
+    capturing_.store(on);
+}
+
 // (toast feature removed)
 
 // ----------------------------------------------------------------------------
@@ -303,6 +314,35 @@ void DisplayManager::update(uint32_t dt_ms)
         gfx_->fillRect(bx + 2, by + 2, 13, 6, cyanColor, 217);
     }
 
+    // Mic privacy indicator (left of the battery) — ALWAYS drawn so an always-on
+    // mic is never invisible (QĐ-10):
+    //   muted     -> red mic + diagonal slash
+    //   listening -> bright mic
+    //   idle/live -> faint mic outline
+    {
+        const int16_t mx = bx - 16;   // mic body left edge
+        const int16_t my = 4;
+        const bool muted = mic_muted_.load();
+        const uint16_t micCol = muted ? TONE_LUT[TONE_RED] : cyanColor;
+        const uint8_t  micA   = (muted || mic_listening_.load()) ? 235 : 90;
+        gfx_->fillRoundedRect(mx, my, 5, 8, 2, micCol, micA);   // capsule body
+        gfx_->drawLine(mx + 2, my + 8, mx + 2, my + 11, micCol, 1, micA);  // stand
+        gfx_->drawLine(mx - 1, my + 11, mx + 5, my + 11, micCol, 1, micA);  // base
+        if (muted) {
+            gfx_->drawLine(mx - 2, my - 1, mx + 7, my + 11, TONE_LUT[TONE_RED], 2, 245);
+        }
+    }
+
+    // Camera capture indicator (center-left) — a red REC dot so a still can never
+    // be taken silently (QĐ-10). Shown for the whole capture+stream window.
+    if (capturing_.load()) {
+        const uint16_t recCol = TONE_LUT[TONE_RED];
+        const int16_t rx = width_ / 2 - 30;
+        gfx_->fillCircle(rx, 10, 3, recCol, 245);
+        gfx_->drawText("REC", rx + 7, 4, recCol, 1,
+                       GfxEngine::TextAlign::LEFT, 245);
+    }
+
     // Flush to display
     gfx_->flush(drv.get());
 }
@@ -312,15 +352,21 @@ void DisplayManager::taskEntry(void *arg)
     auto *self = static_cast<DisplayManager *>(arg);
     self->task_running_.store(true); // ✅ Signal task is running
     TickType_t prev = xTaskGetTickCount();
+    TickType_t wake = prev;
+    const TickType_t period = (self->update_interval_ms_ > 0)
+        ? pdMS_TO_TICKS(self->update_interval_ms_) : 1;
 
     while (self->task_running_.load())
     { // ✅ Check graceful shutdown flag
         TickType_t now = xTaskGetTickCount();
         uint32_t dt_ms = (now - prev) * portTICK_PERIOD_MS;
         prev = now;
-        ESP_LOGD(TAG, "DisplayManager update dt_ms=%u", dt_ms);
         self->update(dt_ms);
-        vTaskDelay(pdMS_TO_TICKS(self->update_interval_ms_));
+        // Fixed-cadence wait: holds the frame period at update_interval_ms_ even
+        // as render time varies. The old `vTaskDelay(interval)` made the real
+        // period (render + interval), so fps sagged below target by the render
+        // time. vTaskDelayUntil absorbs the render duration into the period.
+        vTaskDelayUntil(&wake, period);
     }
 
     // ✅ Graceful exit: cleanup and notify stopper
@@ -334,15 +380,19 @@ void DisplayManager::taskEntry(void *arg)
 
 void DisplayManager::handleInteraction(state::InteractionState s, state::InputSource src)
 {
+    // Mic status-bar indicator: bright while the mic is actively capturing a turn.
+    mic_listening_.store(s == state::InteractionState::TRIGGERED ||
+                         s == state::InteractionState::LISTENING);
     if (booting_.load()) return;
     switch (s)
     {
     case state::InteractionState::TRIGGERED:
     case state::InteractionState::LISTENING:
-        playEmotion("listening");
+        // State-bound: persist until the interaction state changes.
+        playEmotion("listening", SceneManager::HOLD_STICKY);
         break;
     case state::InteractionState::PROCESSING:
-        playEmotion("thinking");
+        playEmotion("thinking", SceneManager::HOLD_STICKY);
         break;
     case state::InteractionState::SPEAKING:
         break;
@@ -350,7 +400,8 @@ void DisplayManager::handleInteraction(state::InteractionState s, state::InputSo
         break;
     case state::InteractionState::IDLE:
     default:
-        playEmotion("normal");
+        // Resting: show normal briefly, then drift into the idle rotation.
+        playEmotion("normal", SceneManager::HOLD_AUTO);
         break;
     }
 }
@@ -359,43 +410,53 @@ void DisplayManager::handleConnectivity(state::ConnectionState s)
 {
     if (booting_.load()) return;
     text_active_ = false;
+    // Non-ONLINE connectivity states are PERSISTENT conditions, not momentary
+    // events: they must stay on screen until connectivity actually changes.
+    // Using HOLD_AUTO here let the scene's finite window expire and drift back
+    // into the idle rotation — so e.g. with the C5 unpowered (never sends a
+    // status update) the robot showed the idle face as if all was well, masking
+    // that it was offline. HOLD_STICKY keeps the status scene until the next
+    // setConnectionState() swaps it out.
     switch (s)
     {
     case state::ConnectionState::OFFLINE:
-        scene_mgr_.showScene("network", "network-offline");
+        scene_mgr_.showScene("network", "network-offline", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WIFI_CONNECTING:
-        scene_mgr_.showScene("network", "network-wifi-scan");
+        scene_mgr_.showScene("network", "network-wifi-scan", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WIFI_CONNECTED:
-        scene_mgr_.showScene("network", "network-wifi-connect");
+        scene_mgr_.showScene("network", "network-wifi-connect", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WS_CONNECTING:
     case state::ConnectionState::WS_AUTHENTICATING:
-        scene_mgr_.showScene("network", "network-server-error");
+        // Normal "connecting to server" progress — NOT an error. (Was wrongly
+        // showing the red network-server-error scene during a healthy connect.)
+        scene_mgr_.showScene("network", "network-ws-connect", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::ONLINE:
-        scene_mgr_.showEmotion("normal");
+        // Connected & resting → normal, then hand off to the idle rotation.
+        scene_mgr_.showEmotion("normal", nullptr, SceneManager::HOLD_AUTO);
         break;
 
     case state::ConnectionState::RECONNECTING:
-        scene_mgr_.showScene("network", "network-wifi-retry");
+        scene_mgr_.showScene("network", "network-wifi-retry", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::BLE_PROVISIONING:
-        scene_mgr_.showScene("network", "network-bt-scan");
+        scene_mgr_.showScene("network", "network-bt-scan", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::WS_ERROR:
-        scene_mgr_.showScene("network", "network-server-error");
+        scene_mgr_.showScene("network", "network-server-error", SceneManager::HOLD_STICKY);
         break;
 
     case state::ConnectionState::BLE_CONNECTED:
-        scene_mgr_.showScene("network", "network-bt-paired");
+        scene_mgr_.showScene("network", "network-bt-paired", SceneManager::HOLD_STICKY);
         break;
     }
 }
@@ -413,11 +474,12 @@ void DisplayManager::handleSystem(state::SystemState s)
         break;
 
     case state::SystemState::ERROR:
-        playEmotion("error");
+        // System-bound: hold until the system state recovers.
+        playEmotion("error", SceneManager::HOLD_STICKY);
         break;
 
     case state::SystemState::MAINTENANCE:
-        playEmotion("loading");
+        playEmotion("loading", SceneManager::HOLD_STICKY);
         break;
     }
 }
@@ -430,17 +492,20 @@ void DisplayManager::handlePower(state::PowerState s)
     case state::PowerState::NORMAL:
         break;
 
+    // There is no "power" scene category — showScene("power",...) was a silent
+    // no-op (charging/full/critical drew nothing). Use the existing emotion
+    // categories instead (S11-03): charging is warm, dead = battery-critical.
     case state::PowerState::CHARGING:
-        scene_mgr_.showScene("power", "power-charging");
+        scene_mgr_.showEmotion("charging", nullptr, SceneManager::HOLD_STICKY);
         break;
 
     case state::PowerState::FULL:
-        scene_mgr_.showScene("power", "power-full");
+        scene_mgr_.showEmotion("happy", nullptr, SceneManager::HOLD_AUTO);
         break;
 
     case state::PowerState::CRITICAL:
         ESP_LOGI(TAG, "CRITICAL: low battery");
-        scene_mgr_.showScene("power", "power-critical");
+        scene_mgr_.showEmotion("dead", nullptr, SceneManager::HOLD_STICKY);
         break;
 
     default:
@@ -515,8 +580,30 @@ void DisplayManager::handleSyncData(const state::SyncDataPacket& data)
     sd.lunar_day = data.lunar_day;
     sd.lunar_month = data.lunar_month;
     strncpy(sd.city, data.city, sizeof(sd.city) - 1);
+    sd.city[sizeof(sd.city) - 1] = '\0';
     sd.weather_valid = true;
-    sd.time_valid = true;
+
+    // Derive the wall-clock fields from unix_time + utc_offset. Before this the
+    // status bar showed a confident-but-wrong "00:00" after the first sync
+    // (hours/minutes were never set) — worse than the honest "--:--". Add the
+    // offset, then break the value down as UTC so gmtime_r yields local
+    // wall-clock time. Only mark time_valid once we have a real timestamp.
+    // (S11-01)
+    if (data.unix_time > 0) {
+        time_t local = (time_t)data.unix_time + (time_t)data.utc_offset * 3600;
+        struct tm tmv{};
+        gmtime_r(&local, &tmv);
+        sd.hours       = (uint8_t)tmv.tm_hour;
+        sd.minutes     = (uint8_t)tmv.tm_min;
+        sd.seconds     = (uint8_t)tmv.tm_sec;
+        sd.day_of_week = (uint8_t)tmv.tm_wday;       // 0 = Sunday
+        sd.day         = (uint8_t)tmv.tm_mday;
+        sd.month       = (uint8_t)(tmv.tm_mon + 1);
+        sd.year        = (uint16_t)(tmv.tm_year + 1900);
+        sd.time_valid  = true;
+    } else {
+        sd.time_valid = false;
+    }
 }
 
 void DisplayManager::handleOtaStatus(state::OtaState ota_state, uint8_t progress)
@@ -547,10 +634,10 @@ void DisplayManager::handleOtaStatus(state::OtaState ota_state, uint8_t progress
 
 // ----------------------------------------------------------------------------
 // Internal asset playback
-void DisplayManager::playEmotion(const std::string &name, int x, int y)
+void DisplayManager::playEmotion(const std::string &name, float hold_ms)
 {
     text_active_ = false;
-    scene_mgr_.showEmotion(name.c_str());
+    scene_mgr_.showEmotion(name.c_str(), nullptr, hold_ms);
 }
 
 void DisplayManager::playText(const std::string &text, int x, int y, uint16_t color, int scale)

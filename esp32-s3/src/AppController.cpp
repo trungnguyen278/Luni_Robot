@@ -7,6 +7,7 @@
 #include "TouchInput.hpp"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <utility>
 
 static const char* TAG = "AppController";
@@ -191,11 +192,20 @@ void AppController::processQueue()
 {
     ESP_LOGI(TAG, "Controller task started");
     AppMessage msg{};
+    inter_since_us_ = esp_timer_get_time();
 
     while (started.load()) {
-        if (xQueueReceive(app_queue, &msg, portMAX_DELAY) == pdTRUE) {
+        // Wake at least every WD_TICK_MS even with no messages so the interaction
+        // watchdog can fire when the C5/UART goes silent without a state change.
+        if (xQueueReceive(app_queue, &msg, pdMS_TO_TICKS(WD_TICK_MS)) != pdTRUE) {
+            checkInteractionWatchdog();
+            continue;
+        }
+        checkInteractionWatchdog();
+        {
             switch (msg.type) {
             case AppMessage::Type::INTERACTION:
+                inter_since_us_ = esp_timer_get_time();
                 onInteractionStateChanged(msg.interaction_state, msg.interaction_source);
                 break;
             case AppMessage::Type::CONNECTIVITY:
@@ -251,12 +261,25 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
 {
     ESP_LOGI(TAG, "Interaction: %d (src=%d)", (int)s, (int)src);
 
-    // Forward interaction state to C5 via UART
+    const auto prev = prev_inter_;
+    prev_inter_ = s;
+
+    // Forward interaction state to C5 via UART.
+    // Trigger sources that own a listening turn: BUTTON (legacy) or WAKEWORD (now).
     if (uart) {
-        if (s == state::InteractionState::LISTENING && src == state::InputSource::BUTTON) {
-            uart->sendControlCmd(uart_proto::ControlCmd::START);
-        } else if (s == state::InteractionState::IDLE && src == state::InputSource::BUTTON) {
+        bool trig = (src == state::InputSource::BUTTON ||
+                     src == state::InputSource::WAKEWORD);
+        if (s == state::InteractionState::LISTENING && trig) {
+            // Carry the trigger source so C5 records WAKEWORD turns as such.
+            uint8_t payload[1] = { (uint8_t)src };
+            uart->sendControlCmd(uart_proto::ControlCmd::START, payload, 1);
+        } else if (s == state::InteractionState::IDLE && trig) {
             uart->sendControlCmd(uart_proto::ControlCmd::END);
+        } else if (s == state::InteractionState::IDLE && !trig &&
+                   prev == state::InteractionState::SPEAKING) {
+            // Playback drained locally (AudioManager) → close the turn on C5.
+            // Echo-safe: if C5 is already IDLE this is a no-op there.
+            uart->sendControlCmd(uart_proto::ControlCmd::SPEAK_DONE);
         }
     }
 
@@ -270,6 +293,34 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
     default:
         break;
     }
+}
+
+void AppController::checkInteractionWatchdog()
+{
+    auto& sm = StateManager::instance();
+    const auto s = sm.getInteractionState();
+    // Only LISTENING (mic open = privacy) and PROCESSING (stuck UI) need the
+    // backstop. SPEAKING is already covered by AudioManager's stale-audio timeout.
+    if (s != state::InteractionState::LISTENING &&
+        s != state::InteractionState::PROCESSING) return;
+
+    const int64_t age_ms = (esp_timer_get_time() - inter_since_us_) / 1000;
+    const int64_t cap = (s == state::InteractionState::LISTENING)
+        ? WD_LISTENING_MAX_MS : WD_PROCESSING_MAX_MS;
+    if (age_ms < cap) return;
+
+    ESP_LOGW(TAG, "S3 watchdog: %s stuck %lldms (C5 silent) — forcing IDLE",
+             s == state::InteractionState::LISTENING ? "LISTENING" : "PROCESSING",
+             (long long)age_ms);
+
+    // Recover locally: cut the mic / drain audio and drop to IDLE. src=SYSTEM so
+    // this isn't read as a user/wakeword release. If the C5 is alive it will
+    // re-sync S3 on its next state push (S3 mirrors the C5); if the C5 is the
+    // thing that died, S3 has at least closed the open mic. No UART nudge — the
+    // C5 has its own turn watchdog and forcing its state from here risks desync.
+    if (audio) audio->stopAll();
+    sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::SYSTEM);
+    inter_since_us_ = esp_timer_get_time();
 }
 
 void AppController::onConnectionStateChanged(state::ConnectionState s)

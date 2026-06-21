@@ -3,6 +3,10 @@
 
 static const char* TAG = "UartBridge";
 
+// Delay between image chunks (ms). Matches the C5's ~1 chunk/RTT WS-forward rate
+// so its 16 KB UART ring never overflows. See sendImage() for the full rationale.
+static constexpr uint32_t CHUNK_PACING_MS = 100;
+
 UartBridge::~UartBridge()
 {
     stop();
@@ -48,7 +52,12 @@ void UartBridge::start()
     if (started_) return;
     started_ = true;
 
-    xTaskCreatePinnedToCore(&UartBridge::rxTaskEntry, "UartBridge", 3072, this, 3, &rx_task_, 0);
+    // 8 KB, not 3 KB: rxLoop dispatches status/device callbacks synchronously,
+    // and those run the full state fan-out on THIS stack — StateManager notify →
+    // DisplayManager.showEmotion (pickVariant + ESP_LOGI) + AudioManager handlers.
+    // That chain (esp. nested ESP_LOGI vprintf) overflowed a 3 KB stack on
+    // SET_EMOTION. Keep heavy work off this task if it grows further.
+    xTaskCreatePinnedToCore(&UartBridge::rxTaskEntry, "UartBridge", 8192, this, 3, &rx_task_, 0);
     ESP_LOGI(TAG, "UartBridge started");
 }
 
@@ -95,6 +104,66 @@ bool UartBridge::sendLogEntry(const uint8_t* data, size_t len)
     return written == (int)frame_len;
 }
 
+bool UartBridge::sendImage(const uint8_t* jpeg, size_t len, uint16_t width, uint16_t height)
+{
+    namespace up = uart_proto;
+    if (!jpeg || len == 0) return false;
+
+    uint8_t payload[up::MAX_PAYLOAD];
+    uint8_t frame[up::MAX_FRAME_SIZE];
+    uint16_t seq = 0;
+    size_t off = 0;
+    bool first = true;
+
+    while (off < len) {
+        size_t p = 0;
+        payload[p++] = (uint8_t)(seq & 0xFF);
+        payload[p++] = (uint8_t)(seq >> 8);
+        size_t flags_idx = p++;            // filled in once we know FIRST/LAST
+        uint8_t flags = 0;
+
+        if (first) {
+            flags |= up::image::FLAG_FIRST;
+            payload[p++] = (uint8_t)(len & 0xFF);
+            payload[p++] = (uint8_t)((len >> 8) & 0xFF);
+            payload[p++] = (uint8_t)((len >> 16) & 0xFF);
+            payload[p++] = (uint8_t)((len >> 24) & 0xFF);
+            payload[p++] = (uint8_t)(width & 0xFF);
+            payload[p++] = (uint8_t)(width >> 8);
+            payload[p++] = (uint8_t)(height & 0xFF);
+            payload[p++] = (uint8_t)(height >> 8);
+            first = false;
+        }
+
+        size_t room = up::MAX_PAYLOAD - p;
+        size_t n = (len - off < room) ? (len - off) : room;
+        for (size_t i = 0; i < n; ++i) payload[p++] = jpeg[off + i];
+        off += n;
+
+        if (off >= len) flags |= up::image::FLAG_LAST;
+        payload[flags_idx] = flags;
+
+        size_t frame_len = up::buildFrame(frame, up::MsgType::IMAGE_CHUNK,
+                                          payload, (uint8_t)p);
+        if (frame_len == 0) return false;
+        if (uart_write_bytes(cfg_.uart_num, frame, frame_len) != (int)frame_len)
+            return false;
+
+        seq++;
+        // Pace the burst to the rate the C5 can actually forward each chunk over
+        // WS (~1 chunk per network RTT; ~100ms over the Cloudflare tunnel). The C5
+        // has no heap to buffer a whole image and its 16 KB UART ring overflowed
+        // when we dumped all ~112 chunks at line rate, losing the tail (incl. the
+        // FLAG_LAST chunk) so the frame never completed. The JPEG lives here in S3
+        // PSRAM, so we throttle the producer instead. No real time cost: the WS
+        // link is the bottleneck (~2.5 KB/s) regardless. TODO: drop once the C5
+        // WS send is de-Nagled / batched and can keep up at line rate.
+        vTaskDelay(pdMS_TO_TICKS(CHUNK_PACING_MS));
+    }
+    ESP_LOGI(TAG, "Image sent: %zu bytes in %u chunks", len, (unsigned)seq);
+    return true;
+}
+
 void UartBridge::rxTaskEntry(void* arg)
 {
     static_cast<UartBridge*>(arg)->rxLoop();
@@ -117,11 +186,13 @@ void UartBridge::rxLoop()
             uint8_t payload_len = parser.getPayloadLen();
 
             if (type == (uint8_t)uart_proto::MsgType::STATUS_UPDATE &&
-                payload_len >= sizeof(uart_proto::StatusPayload)) {
-                auto* sp = reinterpret_cast<const uart_proto::StatusPayload*>(payload);
+                payload_len >= 4) {
+                // 4-byte frames come from pre-fail_reason C5 firmware; the
+                // reason then defaults to NONE.
+                uint8_t fail_reason = (payload_len >= 5) ? payload[4] : 0;
                 if (status_cb_) {
-                    status_cb_(sp->interaction, sp->connection,
-                               sp->system_state, sp->emotion);
+                    status_cb_(payload[0], payload[1],
+                               payload[2], payload[3], fail_reason);
                 }
             } else if (type == (uint8_t)uart_proto::MsgType::CONTROL_CMD &&
                        payload_len >= 1) {

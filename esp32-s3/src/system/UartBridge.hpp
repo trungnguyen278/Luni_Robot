@@ -20,7 +20,8 @@ public:
     };
 
     using StatusUpdateCb = std::function<void(uint8_t interaction, uint8_t connectivity,
-                                               uint8_t system_state, uint8_t emotion)>;
+                                               uint8_t system_state, uint8_t emotion,
+                                               uint8_t fail_reason)>;
     using ControlCmdCb = std::function<void(uart_proto::ControlCmd cmd, const uint8_t* data, size_t len)>;
     using SyncDataCb = std::function<void(const uint8_t* data, size_t len)>;
     using OtaStatusCb = std::function<void(uint8_t state, uint8_t progress)>;
@@ -39,6 +40,10 @@ public:
 
     // Send log entry to C5 for forwarding to server
     bool sendLogEntry(const uint8_t* data, size_t len);
+
+    // Send a JPEG camera frame to C5 (split into IMAGE_CHUNK frames). Blocks
+    // for the duration of the transfer; call from a non-critical context.
+    bool sendImage(const uint8_t* jpeg, size_t len, uint16_t width, uint16_t height);
 
     // Callbacks for messages received from C5
     void onStatusUpdate(StatusUpdateCb cb) { status_cb_ = std::move(cb); }

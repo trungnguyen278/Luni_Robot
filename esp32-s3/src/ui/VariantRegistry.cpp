@@ -64,6 +64,7 @@ extern const CategoryDef CAT_COOKING;
 extern const CategoryDef CAT_WALKING;
 extern const CategoryDef CAT_CELEBRATE;
 extern const CategoryDef CAT_NIGHT;
+extern const CategoryDef CAT_MOON;
 extern const CategoryDef CAT_FITNESS;
 extern const CategoryDef CAT_CALL;
 extern const CategoryDef CAT_MESSAGE;
@@ -152,6 +153,7 @@ const CategoryDef ALL_CATEGORIES[] = {
     CAT_WALKING,
     CAT_CELEBRATE,
     CAT_NIGHT,
+    CAT_MOON,
     CAT_FITNESS,
     CAT_CALL,
     CAT_MESSAGE,

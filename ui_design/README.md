@@ -56,11 +56,18 @@ story — different props, motion, tone, eye emotion and caption:
 | Scene     | Cases | Variants                                                              |
 | --------- | ----- | --------------------------------------------------------------------- |
 | `weather` | **7** | sunny · cloudy · rainy · storm · snow · fog · windy                   |
+| `moon`    | **8** | trăng non/Sóc · lưỡi liềm đầu · thượng huyền · khuyết đầu · Rằm · khuyết cuối · hạ huyền · liềm tàn |
 | `call`    | **3** | incoming · outgoing · missed                                          |
 | `message` | **3** | chat · incoming · sent                                                |
 
 The **host chooses the case** matching the live condition — these don't
-enter the random idle pool. Example:
+enter the random idle pool. `moon` is the lunar version: **Luni *is* the
+moon** — its own disc waxes and wanes and its mood shifts with the phase
+(ngủ vùi at Sóc → rạng rỡ at Rằm → về nghỉ), so the host plays the story
+for tonight's `ngày âm lịch` — `showScene('moon', LuniMoon.sceneId())` (or
+`sceneForLunarDay(15)` for Rằm). The 30 lunar days fold onto the 8 phase
+stories, so the robot lives a different mood per phase instead of only
+dimming the screen like the app. Example:
 
 ```js
 function showWeather(condition) {       // 'sunny' | 'rain' | 'snow' | ...
@@ -125,6 +132,7 @@ emotion-pack-luni{,2,3}   +10 Luni emotions
 scenes-arc-pack-1..3b     the 32 scene arcs (+ authoritative KEYS order)
 scenes-weather.jsx        ← multi-case weather (this work)
 scenes-comms.jsx          ← multi-case call + message (this work)
+scenes-moon.jsx           ← multi-case moon: one story per lunar phase
 app.jsx                   viewer UI
 ```
 

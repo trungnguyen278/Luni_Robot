@@ -20,4 +20,6 @@ private:
     static void handleConfigUpdate(cJSON* payload, NetworkManager* net);
     static void handleInteractionMsg(cJSON* payload, NetworkManager* net);
     static void handleAck(cJSON* payload, NetworkManager* net);
+    static void handleMotion(cJSON* payload, NetworkManager* net);
+    static void handleCameraCapture(cJSON* payload, NetworkManager* net);
 };

@@ -192,10 +192,10 @@ static void render_camera_snap(GfxEngine& gfx, float t, const ColorContext& colo
 }
 
 const VariantDef CAMERA_VARIANTS[] = {
-    {"camera-snap", "Snap", 12000, TONE_NONE, render_camera_snap},
+    {"camera-snap", "Snap & save", 14000, TONE_NONE, render_camera_snap},
 };
 
 extern const CategoryDef CAT_CAMERA = {
-    "camera", "Camera", ContentKind::SCENE, TONE_CYAN,
+    "camera", "Camera", ContentKind::SCENE, TONE_WHITE,
     CAMERA_VARIANTS, sizeof(CAMERA_VARIANTS) / sizeof(CAMERA_VARIANTS[0]), false
 };

@@ -34,7 +34,11 @@ except (ImportError, Exception):
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
-BLOCK_SIZE = 320  # 20ms for Opus, 256 for ADPCM
+BLOCK_SIZE = 960  # 60ms @ 16kHz for Opus (matches firmware AudioConfig), 256 for ADPCM
+OPUS_BITRATE = 24000  # production device contract: 16k VOIP 60ms 24kbps
+# Uplink batch tag the C5 prepends to every audio WS frame (WsProtocol 0xAA);
+# the cloud strips it in handle_device_message before buffering.
+AUDIO_UPLINK_TAG = 0xAA
 
 # ============================================================================
 # ADPCM Codec (same as server)
@@ -136,9 +140,14 @@ class AdpcmDecoder:
 # ============================================================================
 
 class DLuniceSimulator:
-    def __init__(self, server_url: str, codec_type: str):
+    def __init__(self, server_url: str, codec_type: str,
+                 device_token: str = "", mac: str = "SIMDEV000001"):
         self.server_url = server_url
         self.codec_type = codec_type
+        # Production WS auth identity (see WsProtocol.cpp / ws/device.py).
+        # device_token is sim-only; supply via --device-token or env.
+        self.device_token = device_token
+        self.mac = mac
         self.ws = None
         self.recording = False
         self.playing = False
@@ -149,8 +158,14 @@ class DLuniceSimulator:
         # Codec setup
         if codec_type == 'opus' and HAS_OPUS:
             self.encoder = opuslib.Encoder(SAMPLE_RATE, CHANNELS, opuslib.APPLICATION_VOIP)
+            try:
+                self.encoder.bitrate = OPUS_BITRATE
+            except Exception:
+                pass
             self.decoder = opuslib.Decoder(SAMPLE_RATE, CHANNELS)
-            self.frame_size = 320
+            # 60ms @ 16kHz = 960 samples — the production contract (was 320/20ms,
+            # which never matched the firmware or the cloud — S15-05).
+            self.frame_size = 960
         else:
             if codec_type == 'opus' and not HAS_OPUS:
                 print("[WARN] opuslib not available, falling back to ADPCM")
@@ -180,13 +195,21 @@ class DLuniceSimulator:
                     pass
 
     def play_audio(self, encoded_data: bytes):
-        """Decode and queue for playback."""
+        """Decode one or more [len:2 LE][opus] frames and queue for playback.
+
+        The cloud paces audio in batches of several frames per binary WS
+        message (ws_manager._send_audio_local), so a downlink message can carry
+        multiple concatenated [len][opus] units — decode them all.
+        """
         if self.codec_type == 'opus' and HAS_OPUS:
-            if len(encoded_data) < 2:
-                return
-            frame_len = struct.unpack('<H', encoded_data[:2])[0]
-            if frame_len > 0 and frame_len <= len(encoded_data) - 2:
-                opus_data = encoded_data[2:2 + frame_len]
+            off, n = 0, len(encoded_data)
+            while off + 2 <= n:
+                frame_len = struct.unpack('<H', encoded_data[off:off + 2])[0]
+                off += 2
+                if frame_len == 0 or off + frame_len > n:
+                    break
+                opus_data = encoded_data[off:off + frame_len]
+                off += frame_len
                 pcm_bytes = self.decoder.decode(opus_data, self.frame_size)
                 pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
                 self.play_buffer.extend(pcm.tolist())
@@ -200,7 +223,12 @@ class DLuniceSimulator:
             try:
                 data = await asyncio.wait_for(self.audio_queue.get(), timeout=0.1)
                 if self.ws and self.recording:
-                    await self.ws.send(data)
+                    # Prepend the 0xAA uplink batch tag the C5 adds (cloud strips
+                    # it). Opus payload stays [len:2 LE][opus]. (S15-05)
+                    if self.codec_type == 'opus':
+                        await self.ws.send(bytes([AUDIO_UPLINK_TAG]) + data)
+                    else:
+                        await self.ws.send(data)
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
@@ -239,14 +267,22 @@ class DLuniceSimulator:
                 self.ws = ws
                 print("[CONNECTED] WebSocket connected")
 
-                # Send handshake
+                # Production auth handshake (matches firmware createAuthMessage
+                # and the server's _authenticate_device in ws/device.py).
                 handshake = json.dumps({
-                    "cmd": "dLunice_handshake",
-                    "dLunice_id": "SIM_DLuniCE_001",
-                    "firmware_version": "2.0.0-sim",
-                    "dLunice_name": "Luni-Simulator"
+                    "type": "auth",
+                    "id": str(int(time.time() * 1000)),
+                    "ts": int(time.time() * 1000),
+                    "payload": {
+                        "device_token": self.device_token,
+                        "mac": self.mac,
+                        "fw_version": "2.0.0-sim",
+                        "model": "Luni-C5",
+                    },
                 })
                 await ws.send(handshake)
+                print(f"[AUTH] Sent auth (mac={self.mac}, "
+                      f"token={'set' if self.device_token else 'EMPTY'})")
 
                 # Start audio input stream
                 stream = sd.InputStream(
@@ -270,17 +306,34 @@ class DLuniceSimulator:
                 try:
                     async for message in ws:
                         if isinstance(message, str):
-                            print(f"  [SERVER] {message}")
-                            if message in ("SPEAKING", "AUDIO_START"):
+                            # Production downlink is JSON (auth_result, set_emotion,
+                            # tts_play, audio_stop, …) — NOT the legacy toy text
+                            # SPEAKING/IDLE/DONE the old sim listened for (S15-05).
+                            try:
+                                evt = json.loads(message)
+                            except json.JSONDecodeError:
+                                print(f"  [SERVER?] {message}")
+                                continue
+                            etype = evt.get("type")
+                            payload = evt.get("payload", {})
+                            if etype == "auth_result":
+                                status = payload.get("status")
+                                print(f"  [AUTH] {status} {payload}")
+                            elif etype == "audio_stop":
+                                # C5 owns the turn: cloud closes PROCESSING here
+                                # (END uplink → wait for audio → audio_stop).
+                                print("  [TURN] audio_stop — turn closed")
+                                self.playing = False
+                            else:
+                                print(f"  [EVENT] {etype}: {payload}")
+                        elif isinstance(message, bytes):
+                            # Binary downlink = paced [len:2 LE][opus] TTS audio.
+                            if not self.playing:
                                 self.playing = True
                                 self.play_buffer.clear()
                                 if hasattr(self.decoder, 'reset'):
                                     self.decoder.reset()
-                            elif message in ("IDLE", "DONE", "SPEAK_END"):
-                                self.playing = False
-                        elif isinstance(message, bytes):
-                            if self.playing:
-                                self.play_audio(message)
+                            self.play_audio(message)
                 except websockets.exceptions.ConnectionClosed:
                     print("[DISCONNECTED]")
 
@@ -355,15 +408,23 @@ class DLuniceSimulator:
 
 
 async def main(args):
-    sim = DLuniceSimulator(args.server, args.codec)
+    sim = DLuniceSimulator(args.server, args.codec,
+                           device_token=args.device_token, mac=args.mac)
     await sim.run()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Luni V2 DLunice Simulator")
-    parser.add_argument("--server", type=str, default="ws://localhost:8000/ws",
+    parser.add_argument("--server", type=str, default="ws://localhost:8000/ws/device",
                         help="Server WebSocket URL")
-    parser.add_argument("--codec", choices=["opus", "adpcm"], default="adpcm",
-                        help="Audio codec (default: adpcm)")
+    parser.add_argument("--codec", choices=["opus", "adpcm"], default="opus",
+                        help="Audio codec (default: opus — the production cloud "
+                             "only speaks Opus; adpcm is legacy/toy-server only)")
+    parser.add_argument("--device-token", type=str,
+                        default=os.environ.get("LUNI_DEVICE_TOKEN", ""),
+                        help="Device token for WS auth (or env LUNI_DEVICE_TOKEN)")
+    parser.add_argument("--mac", type=str,
+                        default=os.environ.get("LUNI_DEVICE_MAC", "SIMDEV000001"),
+                        help="Device MAC / id, colon-less (or env LUNI_DEVICE_MAC)")
     args = parser.parse_args()
     asyncio.run(main(args))

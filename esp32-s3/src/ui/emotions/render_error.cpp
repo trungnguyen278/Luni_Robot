@@ -6,54 +6,27 @@
 using namespace geom;
 using namespace math;
 
-// error-bang: wide eyes + exclamation mark (!) above blinking
+// error-bang: both eyes become flickering exclamation marks
 static void render_error_bang(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float shake = sinf(t * TAU * 6.0f) * 2.0f;
-    int16_t w = (int16_t)(EYE_W * 1.15f);
-    int16_t h = (int16_t)(EYE_H * 1.15f);
-    gfx.drawEye((int16_t)(LX + shake), CY, w, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye((int16_t)(RX - shake), CY, w, h, EYE_RX, 0, colors.eye);
-
-    // Exclamation mark blinking
-    float blink_val = (sinf(t * TAU * 2.5f) + 1.0f) / 2.0f;
-    uint8_t bangAlpha = (uint8_t)(80 + blink_val * 175.0f);
-
-    // "!" stem
-    int16_t bx = SCX;
-    int16_t by = STATUS_H + 10;
-    gfx.fillRoundedRect(bx - 3, by, 6, 22, 3, colors.accent, bangAlpha);
-    // "!" dot
-    gfx.fillCircle(bx, by + 30, 4, colors.accent, bangAlpha);
+    uint8_t a = (sinf(t * TAU * 6.0f) > 0.0f) ? 255 : 102; // flicker 1.0 / 0.4
+    int16_t cxs[2] = {LX, RX};
+    for (int e = 0; e < 2; e++) {
+        int16_t cx = cxs[e];
+        gfx.fillRoundedRect(cx - 8, CY - 36, 16, 48, 4, colors.accent, a);
+        gfx.fillCircle(cx, CY + 26, 9, colors.accent, a);
+    }
 }
 
-// error-noconn: normal eyes + "wifi icon with X" shape below, blinking
+// error-noconn: full-screen wifi-signal symbol with a slash, fading
 static void render_error_noconn(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t h = (int16_t)(EYE_H * 0.75f);
-    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-
-    // Wifi icon: concentric arcs below eyes
-    float blink_val = (sinf(t * TAU * 1.5f) + 1.0f) / 2.0f;
-    uint8_t wifiAlpha = (uint8_t)(100 + blink_val * 155.0f);
-    int16_t wx = SCX;
-    int16_t wy = SCREEN_H - 30;
-
-    // Three arcs of decreasing radius (wifi-like)
-    for (int i = 0; i < 3; i++) {
-        int16_t r = (int16_t)(28 - i * 8);
-        float start = -PI * 0.75f;
-        float end = -PI * 0.25f;
-        gfx.drawArc(wx, wy, r, start, end, colors.accent, 3, wifiAlpha);
-    }
-    // Center dot
-    gfx.fillCircle(wx, (int16_t)(wy - 2), 3, colors.accent, wifiAlpha);
-
-    // X over the wifi icon
-    int16_t xsz = 14;
-    gfx.drawLine(wx - xsz, wy - xsz - 6, wx + xsz, wy + xsz - 6,
-                 colors.eye, 3, wifiAlpha);
-    gfx.drawLine(wx + xsz, wy - xsz - 6, wx - xsz, wy + xsz - 6,
-                 colors.eye, 3, wifiAlpha);
+    uint8_t a = (uint8_t)((0.4f + fabsf(sinf(t * TAU)) * 0.6f) * 255.0f);
+    int16_t mx = SCREEN_W / 2;
+    gfx.pushAlpha(a);
+    gfx.drawQuadBezier(mx - 50, CY + 12, mx, CY - 38, mx + 50, CY + 12, colors.accent, 6);
+    gfx.drawQuadBezier(mx - 32, CY + 22, mx, CY - 12, mx + 32, CY + 22, colors.accent, 6);
+    gfx.fillCircle(mx, CY + 36, 4, colors.accent);
+    gfx.drawLine(mx - 60, CY - 30, mx + 60, CY + 50, colors.accent, 6);
+    gfx.popAlpha();
 }
 
 // error-pixels: eyes flicker with random block glitches

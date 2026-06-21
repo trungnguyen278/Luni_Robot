@@ -60,11 +60,27 @@ private:
     void onPowerStateChanged(state::PowerState);
     void onEmotionStateChanged(state::EmotionState);
 
+    // Independent S3 interaction watchdog. The turn contract gives the C5 the
+    // primary watchdog (LISTENING 30s / PROCESSING 20s), but if the UART/C5 dies
+    // WITHOUT pushing a state change, S3 would sit in LISTENING (mic open — a
+    // privacy problem) or PROCESSING (stuck UI) forever. This is the backstop:
+    // it runs on the AppCtrl task tick and forces IDLE if a state outlives a
+    // generous cap. Thresholds are LONGER than the C5's so the C5 normally wins.
+    void checkInteractionWatchdog();
+    int64_t inter_since_us_ = 0;  // when the interaction state last changed
+    static constexpr int64_t WD_LISTENING_MAX_MS  = 35000;  // > C5's 30s
+    static constexpr int64_t WD_PROCESSING_MAX_MS = 25000;  // > C5's 20s
+    static constexpr uint32_t WD_TICK_MS          = 1000;
+
     int sub_inter_id   = -1;
     int sub_conn_id    = -1;
     int sub_sys_id     = -1;
     int sub_power_id   = -1;
     int sub_emotion_id = -1;
+
+    // Previous interaction state, to detect the SPEAKING -> IDLE edge that
+    // means "TTS playback fully drained" (reported to C5 as SPEAK_DONE).
+    state::InteractionState prev_inter_ = state::InteractionState::IDLE;
 
     std::unique_ptr<DisplayManager>   display;
     std::unique_ptr<PowerManager>     power;

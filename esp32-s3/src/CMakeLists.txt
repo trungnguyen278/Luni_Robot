@@ -19,6 +19,7 @@ set(app_includes
     ${CMAKE_SOURCE_DIR}/lib/audio
     ${CMAKE_SOURCE_DIR}/lib/touch
     ${CMAKE_SOURCE_DIR}/lib/spi
+    ${CMAKE_SOURCE_DIR}/lib/wakeword
 )
 
 idf_component_register(

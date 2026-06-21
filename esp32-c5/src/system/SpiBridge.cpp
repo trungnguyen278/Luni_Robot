@@ -1,4 +1,5 @@
 #include "SpiBridge.hpp"
+#include "config/ServerConfig.hpp"
 #include "esp_log.h"
 #include <cstring>
 
@@ -61,7 +62,7 @@ bool SpiBridge::init(const Config& cfg)
         return false;
     }
 
-    dl_audio_sb_ = xStreamBufferCreate(48 * 1024, 1);
+    dl_audio_sb_ = xStreamBufferCreate(server_cfg::SPI_DL_AUDIO_BUFFER_SIZE, 1);
     if (!dl_audio_sb_) {
         ESP_LOGE(TAG, "DL audio stream buffer create failed");
         return false;
@@ -188,7 +189,12 @@ void SpiBridge::prepareTxFrame(uint8_t* tx_buf)
 
         uint16_t frame_len = header[0] | ((uint16_t)header[1] << 8);
         if (frame_len == 0 || frame_len > 512) {
-            ESP_LOGW(TAG, "Bad opus header in stream: %u, skipping", frame_len);
+            // The 2 header bytes are already consumed — the stream is
+            // misaligned and every byte after it is garbage. Drop it all;
+            // alignment recovers at the next WS message boundary.
+            ESP_LOGW(TAG, "Bad opus header in stream: %u — resetting downlink buffer", frame_len);
+            xStreamBufferReset(dl_audio_sb_);
+            has_pending_header_ = false;
             break;
         }
 

@@ -179,7 +179,7 @@ static void render_timer_countdown(GfxEngine& gfx, float t, const ColorContext& 
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   colors.eye, colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "count", "ding")) {

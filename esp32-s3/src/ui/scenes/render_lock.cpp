@@ -226,7 +226,7 @@ static void render_lock(GfxEngine& gfx, float t, const ColorContext& colors) {
 
     /* --- Eyes (always on top) ------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_GREEN], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (phaseIn(ph.name, "scan1", "scan2")) {
@@ -239,7 +239,7 @@ static void render_lock(GfxEngine& gfx, float t, const ColorContext& colors) {
 }
 
 const VariantDef LOCK_VARIANTS[] = {
-    {"lock-main", "Main", 14000, TONE_NONE, render_lock},
+    {"lock-bio", "Fingerprint unlock", 14000, TONE_NONE, render_lock},
 };
 
 extern const CategoryDef CAT_LOCK = {

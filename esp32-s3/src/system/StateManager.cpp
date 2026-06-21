@@ -25,11 +25,13 @@ void StateManager::setInteractionState(state::InteractionState s, state::InputSo
     for (auto& [id, cb] : cbs) cb(s, src);
 }
 
-void StateManager::setConnectionState(state::ConnectionState s)
+void StateManager::setConnectionState(state::ConnectionState s,
+                                      state::ConnectFailReason reason)
 {
     decltype(connectivity_cbs) cbs;
     {
         std::lock_guard<std::mutex> lock(mtx);
+        fail_reason = reason;
         if (s == connectivity_state) return;
         connectivity_state = s;
         cbs = connectivity_cbs;
@@ -90,6 +92,7 @@ void StateManager::setOtaState(state::OtaState s)
 state::InteractionState  StateManager::getInteractionState()  { std::lock_guard<std::mutex> lock(mtx); return interaction_state; }
 state::InputSource       StateManager::getInteractionSource() { std::lock_guard<std::mutex> lock(mtx); return interaction_source; }
 state::ConnectionState StateManager::getConnectionState()  { std::lock_guard<std::mutex> lock(mtx); return connectivity_state; }
+state::ConnectFailReason StateManager::getLastFailReason()   { std::lock_guard<std::mutex> lock(mtx); return fail_reason; }
 state::SystemState       StateManager::getSystemState()        { std::lock_guard<std::mutex> lock(mtx); return system_state; }
 state::PowerState        StateManager::getPowerState()         { std::lock_guard<std::mutex> lock(mtx); return power_state; }
 state::EmotionState      StateManager::getEmotionState()       { std::lock_guard<std::mutex> lock(mtx); return emotion_state; }

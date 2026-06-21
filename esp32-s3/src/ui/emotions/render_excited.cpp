@@ -71,31 +71,26 @@ static void render_excited_grin(GfxEngine& gfx, float t, const ColorContext& col
                        mx + 60, SCREEN_H - 36, colors.eye, 6);
 }
 
-// excited-giddy: rapid jittery eyes with random small offsets
+// excited-giddy: eyes orbit in sync with a fast squash wobble
 static void render_excited_giddy(GfxEngine& gfx, float t, const ColorContext& colors) {
-    // Pseudo-random jitter using fast sin combinations
-    float jx = sinf(t * 97.0f) * 3.0f + sinf(t * 131.0f) * 2.0f;
-    float jy = cosf(t * 113.0f) * 3.0f + cosf(t * 79.0f) * 2.0f;
-    int16_t w = (int16_t)(EYE_W * 1.08f);
-    int16_t h = (int16_t)(EYE_H * 1.08f);
-    gfx.drawEye((int16_t)(LX + jx), (int16_t)(CY + jy), w, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye((int16_t)(RX - jx), (int16_t)(CY - jy), w, h, EYE_RX, 0, colors.eye);
+    float bx = sinf(t * TAU * 4.0f) * 6.0f;
+    float by = cosf(t * TAU * 4.0f) * 4.0f;
+    float sq = 1.0f + sinf(t * TAU * 8.0f) * 0.08f;
+    int16_t w = (int16_t)((float)EYE_W / sq);
+    int16_t h = (int16_t)((float)EYE_H * sq);
+    gfx.drawEye((int16_t)(LX + bx), (int16_t)(CY + by), w, h, 30, 0, colors.eye);
+    gfx.drawEye((int16_t)(RX - bx), (int16_t)(CY + by), w, h, 30, 0, colors.eye);
 }
 
-// excited-shockwave: wide eyes + expanding ring circles from center
+// excited-shockwave: normal eyes + rings expanding around each eye
 static void render_excited_shockwave(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t w = (int16_t)(EYE_W * 1.12f);
-    int16_t h = (int16_t)(EYE_H * 1.1f);
-    gfx.drawEye(LX, CY, w, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY, w, h, EYE_RX, 0, colors.eye);
-
-    // Expanding ring circles
+    gfx.drawEyes(colors.eye);
     for (int i = 0; i < 3; i++) {
-        float p = fmodf(t * 1.5f + i * 0.33f, 1.0f);
-        int16_t r = (int16_t)(10.0f + p * 80.0f);
-        uint8_t op = (uint8_t)((1.0f - p) * 180.0f);
-        gfx.pushAlpha(op);
-        gfx.strokeCircle(SCX, CY, r, colors.accent, 3);
+        float p = fmodf(t * 1.2f + i * 0.33f, 1.0f);
+        int16_t r = (int16_t)lerp((float)(EYE_W / 2), (float)EYE_W * 1.8f, p);
+        gfx.pushAlpha((uint8_t)((1.0f - p) * 0.85f * 255.0f));
+        gfx.strokeCircle(LX, CY, r, colors.accent, 2);
+        gfx.strokeCircle(RX, CY, r, colors.accent, 2);
         gfx.popAlpha();
     }
 }

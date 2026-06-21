@@ -175,7 +175,7 @@ static void render_clock_tower(GfxEngine& gfx, float t, const ColorContext& colo
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   colors.eye, colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "handsIn", "sweep", "chime", "settle")) {

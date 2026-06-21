@@ -33,28 +33,14 @@ static void render_dead_fade(GfxEngine& gfx, float t, const ColorContext& colors
     drawXEye(gfx, RX, CY, 24, colors.eye, alpha);
 }
 
-// dead-glitch: X eyes flicker/glitch (appear and disappear rapidly)
+// dead-glitch: whole frame flickers + jitters with a persistent scanline
 static void render_dead_glitch(GfxEngine& gfx, float t, const ColorContext& colors) {
-    // Pseudo-random glitch using fast sin
-    float g1 = sinf(t * 73.0f);
-    float g2 = sinf(t * 127.0f);
-    bool showL = g1 > -0.3f;
-    bool showR = g2 > -0.3f;
-
-    if (showL) {
-        float offx = sinf(t * 41.0f) * 4.0f;
-        drawXEye(gfx, (int16_t)(LX + offx), CY, 24, colors.eye, 255);
-    }
-    if (showR) {
-        float offx = sinf(t * 53.0f) * 4.0f;
-        drawXEye(gfx, (int16_t)(RX + offx), CY, 24, colors.eye, 255);
-    }
-
-    // Occasional horizontal glitch line
-    if (g1 > 0.7f) {
-        int16_t gy = (int16_t)(CY + sinf(t * 200.0f) * 30.0f);
-        gfx.drawLine(0, gy, SCREEN_W, gy, colors.accent, 2, 100);
-    }
+    uint8_t alpha = (sinf(t * TAU * 5.0f) > 0.6f) ? 77 : 255;
+    int16_t dx = (sinf(t * TAU * 7.0f) > 0.85f) ? 4 : 0;
+    drawXEye(gfx, (int16_t)(LX + dx), CY, 24, colors.eye, alpha);
+    drawXEye(gfx, (int16_t)(RX + dx), CY, 24, colors.eye, alpha);
+    gfx.drawLine(dx, CY + 20, (int16_t)(SCREEN_W + dx), CY + 20,
+                 colors.accent, 2, (uint8_t)(alpha >> 1));
 }
 
 // dead-droop: X eyes that slowly sag downward + slack mouth line

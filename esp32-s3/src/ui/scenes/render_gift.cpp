@@ -233,7 +233,7 @@ static void render_gift_unwrap(GfxEngine& gfx, float t, const ColorContext& colo
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "shake", "unwrap")) {
@@ -252,6 +252,6 @@ const VariantDef GIFT_VARIANTS[] = {
 };
 
 extern const CategoryDef CAT_GIFT = {
-    "gift", "Gift", ContentKind::SCENE, TONE_WARM,
+    "gift", "Gift", ContentKind::SCENE, TONE_ROSE,
     GIFT_VARIANTS, sizeof(GIFT_VARIANTS) / sizeof(GIFT_VARIANTS[0]), false
 };

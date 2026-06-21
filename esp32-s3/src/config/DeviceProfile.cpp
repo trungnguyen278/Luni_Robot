@@ -10,6 +10,8 @@
 #include "system/UartBridge.hpp"
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
+#include "system/CameraManager.hpp"
+#include "WakeWordDetector.hpp"
 #include "config/BootSubsystems.hpp"
 #include "ui/SceneManager.hpp"
 
@@ -33,8 +35,27 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char* TAG = "DeviceProfile";
+
+// Optional camera (lazy-init on first CAMERA_CAPTURE). Disabled unless built
+// with -DLUNI_ENABLE_CAMERA (see CameraManager).
+static CameraManager s_camera;
+
+// Camera capture runs on its own task so a multi-second image burst never blocks
+// the UART rx loop (which dispatches state/control). CAMERA_CAPTURE just notifies
+// it. Set in setup() once the UART bridge exists. (S9-01)
+static TaskHandle_t s_camera_task = nullptr;
+static UartBridge*  s_camera_uart = nullptr;
+// Display used by the camera task to flag the on-device capture indicator (QĐ-10).
+// Set once disp_raw exists; the task only reads it after a CAMERA_CAPTURE notify.
+static DisplayManager* s_camera_disp = nullptr;
+
+// On-device wake word ("Hi Luni") — replaces the push-to-talk button. Active
+// only when built with -DLUNI_ENABLE_WAKEWORD + a trained model (WakeWordDetector).
+static WakeWordDetector s_wakeword;
 
 // =============================================================================
 // User settings from NVS
@@ -74,6 +95,34 @@ namespace user_cfg {
         cfg.brightness  = get_u8(h, "brightness", cfg.brightness);
         nvs_close(h);
         return cfg;
+    }
+}
+
+// Camera capture task (S9-01): blocks on a notification, then captures one frame
+// and streams it to the C5. Runs OFF the UART rx task so the multi-second chunk
+// burst (paced at ~100ms/chunk) can never starve incoming state/control frames.
+static void cameraCaptureTask(void*)
+{
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!s_camera_uart) continue;
+        // Privacy: a silent capture is a "spy camera". Light a clear on-device cue
+        // for the WHOLE capture+stream window (QĐ-10) — the always-visible
+        // status-bar REC dot (robust; survives emotion changes) plus the
+        // purpose-built "camera" snap scene (FOCUS/SNAP!/PHOTO).
+        if (s_camera_disp) s_camera_disp->setCapturing(true);
+        SceneManager::instance().showScene("camera", "camera-snap",
+                                           SceneManager::HOLD_STICKY);
+        if (!s_camera.isReady()) s_camera.init();
+        const uint8_t* buf = nullptr; size_t n = 0; uint16_t w = 0, h = 0;
+        if (s_camera.captureJpeg(&buf, &n, &w, &h) && buf && n > 0) {
+            s_camera_uart->sendImage(buf, n, w, h);
+        }
+        s_camera.releaseFrame();
+        if (s_camera_disp) s_camera_disp->setCapturing(false);
+        // Clear the sticky snap scene; the idle rotation / next state takes over.
+        SceneManager::instance().showEmotion("normal", nullptr,
+                                             SceneManager::HOLD_AUTO);
     }
 }
 
@@ -149,9 +198,15 @@ bool DeviceProfile::setup(AppController& app)
         }
         power_mgr->setDisplayManager(display_mgr.get());
     } else {
-        ESP_LOGI(TAG, "Battery ADC not wired, skipping PowerManager");
+        ESP_LOGI(TAG, "Battery ADC not on S3 (BATTERY_ADC=-1); the C5 owns the "
+                      "battery ADC now and reports %% over UART (SET_BATTERY)");
     }
-    bootData.boot_check_results[BOOT_POWER] = BOOT_OK;
+    // No BOOT_POWER check here: the S3 has no local battery sensor. The battery %
+    // + power state arrive from the C5 over UART (ControlCmd::SET_BATTERY, handled
+    // in onDeviceCmd → DisplayManager::setBatteryPercent + StateManager power), so
+    // the status-bar icon shows a REAL value when a divider is wired to the C5,
+    // and is hidden (255) otherwise. POWER stays off the boot splash (no S3 self-
+    // test for it). The local PowerManager block above is dormant (ADC=-1).
 
     // =========================================================
     // 3. MAX98357 CONTROL PINS
@@ -180,11 +235,13 @@ bool DeviceProfile::setup(AppController& app)
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         (i2s_port_t)PinConfig::I2S_NUM, I2S_ROLE_MASTER);
-    // Larger DMA buffer to prevent underrun during Opus decode jitter.
-    // 6 descriptors × 480 frames = 2880 samples (~60ms @ 48kHz).
-    // With only 4×240 (960 samples = 20ms), a single decode stall causes audible pop.
-    chan_cfg.dma_desc_num  = 6;
-    chan_cfg.dma_frame_num = 480;
+    // DMA buffer sizing from AudioConfig (tunable). Larger buffer absorbs Opus
+    // decode jitter and prevents speaker underrun pops.
+    chan_cfg.dma_desc_num  = AudioConfig::DMA_DESC_NUM;
+    chan_cfg.dma_frame_num = AudioConfig::DMA_FRAME_NUM;
+    // On TX underrun, send zeros instead of replaying stale DMA content.
+    // Without this, every underrun audibly repeats the last ~90ms of audio.
+    chan_cfg.auto_clear    = true;
 
     esp_err_t err = i2s_new_channel(&chan_cfg, &tx_chan, &rx_chan);
     if (err != ESP_OK) {
@@ -198,7 +255,7 @@ bool DeviceProfile::setup(AppController& app)
         .pin_bclk    = (gpio_num_t)PinConfig::I2S_BCLK,
         .pin_ws      = (gpio_num_t)PinConfig::I2S_WS,
         .pin_din     = (gpio_num_t)PinConfig::I2S_DIN,
-        .sample_rate = 48000
+        .sample_rate = AudioConfig::SAMPLE_RATE
     };
     auto mic = std::make_unique<I2SAudioInput_ICS43434>(rx_chan, mic_cfg);
 
@@ -207,7 +264,7 @@ bool DeviceProfile::setup(AppController& app)
         .pin_ws      = (gpio_num_t)PinConfig::I2S_WS,
         .pin_dout    = (gpio_num_t)PinConfig::I2S_DOUT,
         .pin_sd      = (gpio_num_t)PinConfig::SPK_SD,
-        .sample_rate = 48000
+        .sample_rate = AudioConfig::SAMPLE_RATE
     };
     auto speaker = std::make_unique<I2SAudioOutput_MAX98357>(tx_chan, spk_cfg);
     speaker->init();
@@ -229,6 +286,42 @@ bool DeviceProfile::setup(AppController& app)
     ESP_LOGI(TAG, "I2S TX enabled (clock source for full-duplex)");
     bootData.boot_check_results[BOOT_AUDIO] = BOOT_OK;
 
+    // NOTE: the motion subsystem (PCA9685 servos + MPU6050 IMU) MOVED to the C5
+    // along with the I2C bus (its pins became the SPI3 audio lane). The C5 now
+    // drives servos on a WS MOTION command and reports IMU events directly. See
+    // esp32-c5 DeviceProfile/MotionManager/WsMessageHandler.
+
+    // =========================================================
+    // 4c. WAKE WORD ("Hi Luni") — the only voice trigger (no button on the board)
+    // =========================================================
+    // On detection, enter LISTENING with InputSource::WAKEWORD: this opens the
+    // mic uplink and makes AppController send START(WAKEWORD) to C5, which tells
+    // the server a turn began. Active only with -DLUNI_ENABLE_WAKEWORD + the
+    // trained model. The mic tap below feeds raw 16 kHz PCM to the detector
+    // while idle (AudioManager keeps the mic always-on once a tap is installed).
+    s_wakeword.onDetected([]() {
+        auto& sm = StateManager::instance();
+        if (sm.getConnectionState() != state::ConnectionState::ONLINE) return;
+        if (sm.getInteractionState() == state::InteractionState::LISTENING) return;
+        sm.setInteractionState(state::InteractionState::LISTENING,
+                               state::InputSource::WAKEWORD);
+    });
+    if (s_wakeword.init()) {
+        audio_mgr->setWakeWordTap([](const int16_t* pcm, size_t n) {
+            s_wakeword.feed(pcm, n);
+        });
+        ESP_LOGI(TAG, "Wake word READY — mic tap wired, always-on listening for 'Hi Luni'");
+    } else {
+        // CRITICAL: the wake word is the ONLY voice trigger (no button on either
+        // MCU — USER_BUTTON=-1). If it fails to load, the device cannot start a
+        // voice turn at all. There is no fallback by design (no QĐ for a button),
+        // so make this loud. (R-DA-RBT-003 / USER-007)
+        ESP_LOGE(TAG, "*** NO VOICE TRIGGER *** wake word inactive (disabled or "
+                      "model load failed) and no button on board — device cannot "
+                      "begin a voice turn. Re-flash with -DLUNI_ENABLE_WAKEWORD + a "
+                      "valid model, or wire a push-to-talk button on the C5.");
+    }
+
     // =========================================================
     // 5. SPI BRIDGE (Communication with C5 via SPI3)
     // =========================================================
@@ -241,7 +334,10 @@ bool DeviceProfile::setup(AppController& app)
             .pin_sclk      = (gpio_num_t)PinConfig::SPI3_SCLK,
             .pin_cs        = (gpio_num_t)PinConfig::SPI3_CS,
             .pin_handshake = (gpio_num_t)PinConfig::SPI3_HANDSHAKE,
-            .clock_speed_hz = 10 * 1000 * 1000  // 10 MHz
+            // 8 MHz: these SPI3 pins are all GPIO-matrix routed (none are native
+            // IOMUX SPI pins) and run over dupont wires, so start conservative —
+            // the hpp default's documented-reliable rate. Raise after HW bring-up.
+            .clock_speed_hz = 8 * 1000 * 1000   // 8 MHz
         };
 
         if (!spi_bridge->init(spi_cfg)) {
@@ -294,6 +390,7 @@ bool DeviceProfile::setup(AppController& app)
         UartBridge::Config uart_cfg{
             .pin_tx = (gpio_num_t)PinConfig::UART_TX,
             .pin_rx = (gpio_num_t)PinConfig::UART_RX,
+            .baud_rate = PinConfig::UART_BAUD,
         };
 
         if (!uart_bridge->init(uart_cfg)) {
@@ -302,8 +399,20 @@ bool DeviceProfile::setup(AppController& app)
         }
 
         UartBridge* uart_raw = uart_bridge.get();
-        uart_bridge->onStatusUpdate([uart_raw](uint8_t interaction, uint8_t connectivity,
-                                                uint8_t system_state, uint8_t emotion) {
+        AudioManager* audio_raw = audio_mgr.get();
+
+        // Camera capture now runs on its own task (S9-01) so the multi-second
+        // image burst can't starve this rx loop. Wire it up here, where the UART
+        // bridge that streams the image exists.
+        s_camera_uart = uart_raw;
+        xTaskCreatePinnedToCore(cameraCaptureTask, "CamCap", 4096, nullptr, 3, &s_camera_task, 0);
+
+        // IMU events moved to the C5 (it owns the IMU now) — no S3 forward here.
+        uart_bridge->onStatusUpdate([uart_raw, audio_raw](uint8_t interaction, uint8_t connectivity,
+                                                uint8_t system_state, uint8_t emotion,
+                                                uint8_t fail_reason) {
+            (void)emotion;  // rendering uses the DEVICE_CMD SET_EMOTION key string;
+                            // the enum byte here is C5 bookkeeping only (see below)
             auto& sm = StateManager::instance();
 
             // C5 reset detection: if S3 is already RUNNING and C5 reports OFFLINE,
@@ -313,33 +422,64 @@ bool DeviceProfile::setup(AppController& app)
                 uart_raw->sendControlCmd(uart_proto::ControlCmd::BOOT_DONE);
             }
 
-            sm.setConnectionState(static_cast<state::ConnectionState>(connectivity));
-            sm.setEmotionState(static_cast<state::EmotionState>(emotion));
+            sm.setConnectionState(static_cast<state::ConnectionState>(connectivity),
+                                  static_cast<state::ConnectFailReason>(fail_reason));
+
+            // NOTE: emotion is deliberately NOT mirrored from this snapshot.
+            // C5's enum only covers 16 of the server's 45 emotion keys (the
+            // rest collapse to NEUTRAL), so applying it here used to clobber
+            // the correct scene shown via DEVICE_CMD SET_EMOTION moments
+            // earlier. The DEVICE_CMD handler is the single emotion path.
 
             auto new_sys = static_cast<state::SystemState>(system_state);
             if (new_sys != state::SystemState::BOOTING) {
                 sm.setSystemState(new_sys);
             }
 
+            // Mirror the interaction state (C5 owns the voice turn). Every
+            // C5 state must be applied — the old partial mapping left S3
+            // stuck in PROCESSING when C5 timed out back to IDLE.
             auto new_inter = static_cast<state::InteractionState>(interaction);
             auto cur_inter = sm.getInteractionState();
-            if (new_inter == state::InteractionState::SPEAKING) {
-                if (cur_inter == state::InteractionState::PROCESSING ||
-                    cur_inter == state::InteractionState::LISTENING ||
-                    cur_inter == state::InteractionState::TRIGGERED) {
+            if (new_inter == cur_inter) return;
+
+            switch (new_inter) {
+            case state::InteractionState::LISTENING:
+                // Open our microphone. Use src=UNKNOWN (NOT BUTTON/WAKEWORD)
+                // so AppController does NOT echo a START back to C5.
+                if (cur_inter == state::InteractionState::SPEAKING && audio_raw) {
+                    audio_raw->stopSpeaking(true);  // barge-in
+                }
+                sm.setInteractionState(state::InteractionState::LISTENING,
+                                       state::InputSource::UNKNOWN);
+                break;
+
+            case state::InteractionState::PROCESSING:
+                if (cur_inter != state::InteractionState::SPEAKING) {
                     sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
                 }
-            } else if (new_inter == state::InteractionState::PROCESSING &&
-                       cur_inter != state::InteractionState::SPEAKING) {
+                break;
+
+            case state::InteractionState::SPEAKING:
                 sm.setInteractionState(new_inter, state::InputSource::UNKNOWN);
-            } else if (new_inter == state::InteractionState::IDLE &&
-                       cur_inter == state::InteractionState::SPEAKING) {
-                sm.setInteractionState(state::InteractionState::IDLE, state::InputSource::UNKNOWN);
+                break;
+
+            case state::InteractionState::IDLE:
+            case state::InteractionState::TRIGGERED:
+            case state::InteractionState::CANCELLING:
+            default:
+                // Treat TRIGGERED/CANCELLING like the IDLE edge: stop audio,
+                // return to rest. Covers button-release, server audio_stop,
+                // and C5 watchdog timeouts (incl. from PROCESSING).
+                sm.setInteractionState(state::InteractionState::IDLE,
+                                       state::InputSource::UNKNOWN);
+                break;
             }
         });
 
         DisplayManager* disp_raw = display_mgr.get();
-        AudioManager* audio_raw = audio_mgr.get();
+        // The camera task flags its on-device capture indicator on this display.
+        s_camera_disp = disp_raw;
         uart_bridge->onControlCmd([disp_raw, audio_raw](uart_proto::ControlCmd cmd,
                                                           const uint8_t* data, size_t len) {
             switch (cmd) {
@@ -360,14 +500,120 @@ bool DeviceProfile::setup(AppController& app)
                 break;
             }
         });
-        uart_bridge->onDeviceCmd([](uart_proto::ControlCmd cmd,
+        uart_bridge->onDeviceCmd([uart_raw, disp_raw, audio_raw](uart_proto::ControlCmd cmd,
                                     const uint8_t* data, size_t len) {
-            if (cmd == uart_proto::ControlCmd::BLE_PIN && len > 0 && len < 8) {
+            if (cmd == uart_proto::ControlCmd::SET_EMOTION && len > 0) {
+                // Emotion key string from the server (relayed by C5) — the ONE
+                // emotion path into the S3. Render the matching category;
+                // SceneManager picks a random variant in it.
+                char key[32];
+                size_t n = (len < sizeof(key) - 1) ? len : sizeof(key) - 1;
+                memcpy(key, data, n);
+                key[n] = '\0';
+                ESP_LOGI("UartDev", "SET_EMOTION: %s", key);
+
+                // Bookkeeping first (may render a generic face via the
+                // DisplayManager subscription), exact key render last so the
+                // full-fidelity scene always wins.
+                static const struct { const char* k; state::EmotionState v; } kMap[] = {
+                    { "neutral",     state::EmotionState::NEUTRAL     },
+                    { "happy",       state::EmotionState::HAPPY       },
+                    { "sad",         state::EmotionState::SAD         },
+                    { "angry",       state::EmotionState::ANGRY       },
+                    { "confused",    state::EmotionState::CONFUSED    },
+                    { "excited",     state::EmotionState::EXCITED     },
+                    { "calm",        state::EmotionState::CALM        },
+                    { "thinking",    state::EmotionState::THINKING    },
+                    { "disgusted",   state::EmotionState::DISGUSTED   },
+                    { "nervous",     state::EmotionState::NERVOUS     },
+                    { "embarrassed", state::EmotionState::EMBARRASSED },
+                    { "curious",     state::EmotionState::CURIOUS     },
+                    { "annoyed",     state::EmotionState::ANNOYED     },
+                    { "cool",        state::EmotionState::COOL        },
+                    { "suspicious",  state::EmotionState::SUSPICIOUS  },
+                    { "determined",  state::EmotionState::DETERMINED  },
+                };
+                auto emo = state::EmotionState::NEUTRAL;
+                for (const auto& m : kMap) {
+                    if (strcmp(key, m.k) == 0) { emo = m.v; break; }
+                }
+                StateManager::instance().setEmotionState(emo);
+
+                SceneManager::instance().showEmotion(key);
+            } else if (cmd == uart_proto::ControlCmd::SET_SCENE && len > 0) {
+                // Scene key from the server (relayed by C5). Render the matching
+                // scene category; an unknown key logs a warning in SceneManager
+                // instead of vanishing silently (R-DA-RBT-006).
+                char key[32];
+                size_t n = (len < sizeof(key) - 1) ? len : sizeof(key) - 1;
+                memcpy(key, data, n);
+                key[n] = '\0';
+                ESP_LOGI("UartDev", "SET_SCENE: %s", key);
+                SceneManager::instance().showScene(key);
+            } else if (cmd == uart_proto::ControlCmd::BLE_PIN && len > 0 && len < 8) {
                 auto& sd = SceneManager::instance().getSceneData();
                 memcpy(sd.ble_pin, data, len);
                 sd.ble_pin[len] = '\0';
                 ESP_LOGI("UartDev", "BLE PIN: %s", sd.ble_pin);
+            } else if (cmd == uart_proto::ControlCmd::CAMERA_CAPTURE) {
+                // Capture + stream happen on the dedicated camera task (S9-01):
+                // just notify it so this rx callback returns immediately and keeps
+                // draining state/control frames. No-op without LUNI_ENABLE_CAMERA.
+                if (s_camera_task) xTaskNotifyGive(s_camera_task);
+            } else if (cmd == uart_proto::ControlCmd::SET_BATTERY && len >= 1) {
+                // Battery report from the C5 (which owns the ADC now). Payload:
+                // [percent (255 = hide)][power_state]. Drive the status-bar icon +
+                // the charging/critical state.
+                if (disp_raw) disp_raw->setBatteryPercent(data[0]);
+                if (len >= 2) {
+                    StateManager::instance().setPowerState((state::PowerState)data[1]);
+                }
+            } else if (cmd == uart_proto::ControlCmd::SET_MIC_MUTE && len >= 1) {
+                // Privacy mute toggled by the C5 button (the mic lives here on the
+                // S3). Cut the I2S input + reflect it on the status-bar mic icon.
+                bool muted = data[0] != 0;
+                if (audio_raw) audio_raw->setMicMuted(muted);
+                if (disp_raw)  disp_raw->setMicMuted(muted);
+                ESP_LOGI("UartDev", "Mic %s (privacy mute)", muted ? "MUTED" : "live");
             }
+            // MOTION_CMD is no longer handled here — servos moved to the C5, which
+            // drives them directly from the WS MOTION message (no UART hop).
+        });
+
+        // Sync data (time/weather/lunar/location) the C5 relayed from the
+        // server. Decode the binary SYNC_DATA payload into a SyncDataPacket and
+        // feed the DisplayManager (status-bar clock, weather/moon scenes). This
+        // was dead before: sync_cb_ was never registered, so the channel was cut
+        // even after the C5 relay was wired (S8-03/S9-05). Layout matches the C5
+        // DataSyncManager::relayToS3 frame:
+        //   [temp:int8][humidity][condition_enum][aqi]
+        //   [unix_time:4 LE][utc_offset:int8][lunar_day][lunar_month]
+        //   [city: null-terminated]
+        uart_bridge->onSyncData([disp_raw](const uint8_t* data, size_t len) {
+            if (!disp_raw || len < 11) return;
+            state::SyncDataPacket pkt{};
+            pkt.temperature = (int8_t)data[0];
+            pkt.humidity    = data[1];
+            pkt.condition   = data[2];
+            pkt.aqi         = data[3];
+            pkt.unix_time   = (uint32_t)data[4] | ((uint32_t)data[5] << 8) |
+                              ((uint32_t)data[6] << 16) | ((uint32_t)data[7] << 24);
+            pkt.utc_offset  = (int8_t)data[8];
+            pkt.lunar_day   = data[9];
+            pkt.lunar_month = data[10];
+            size_t city_len = len - 11;            // last byte is the C5's '\0'
+            if (city_len > sizeof(pkt.city) - 1) city_len = sizeof(pkt.city) - 1;
+            if (city_len > 0) memcpy(pkt.city, &data[11], city_len);
+            pkt.city[city_len] = '\0';
+            disp_raw->handleSyncData(pkt);
+        });
+
+        // OTA progress from C5 → state + the OTA screen (progress bar,
+        // verifying/flashing/reboot/fail panels).
+        uart_bridge->onOtaStatus([disp_raw](uint8_t st, uint8_t pct) {
+            auto s = static_cast<state::OtaState>(st);
+            StateManager::instance().setOtaState(s);
+            if (disp_raw) disp_raw->handleOtaStatus(s, pct);
         });
     } else {
         ESP_LOGI(TAG, "UART bridge not wired, skipping UartBridge");
@@ -375,25 +621,30 @@ bool DeviceProfile::setup(AppController& app)
     bootData.boot_check_results[BOOT_COMMS] = BOOT_OK;
 
     // =========================================================
-    // 7. TOUCH INPUT (Button)
+    // 7. TOUCH INPUT (Button) — MOVED to ESP32-C5
     // =========================================================
-    auto touch_input = std::make_unique<TouchInput>();
-    TouchInput::Config touch_cfg{
-        .pin = (gpio_num_t)PinConfig::BUTTON,
-        .active_low = true,
-        .long_press_ms = 1200
-    };
-
-    if (!touch_input->init(touch_cfg)) {
-        ESP_LOGE(TAG, "TouchInput init failed");
-        return false;
+    // The push-to-talk button now lives on the C5 (PinConfig::USER_BUTTON). S3
+    // follows the LISTENING state pushed by C5 over UART (see onStatusUpdate).
+    // A local button is only created if one is explicitly wired (BUTTON >= 0).
+    std::unique_ptr<TouchInput> touch_input;
+    if (PinConfig::BUTTON >= 0) {
+        touch_input = std::make_unique<TouchInput>();
+        TouchInput::Config touch_cfg{
+            .pin = (gpio_num_t)PinConfig::BUTTON,
+            .active_low = true,
+            .long_press_ms = 1200
+        };
+        if (!touch_input->init(touch_cfg)) {
+            ESP_LOGE(TAG, "TouchInput init failed");
+            return false;
+        }
+        touch_input->onEvent([&app](TouchInput::Event e) {
+            if (e == TouchInput::Event::PRESS)   app.postEvent(event::AppEvent::USER_BUTTON);
+            if (e == TouchInput::Event::RELEASE) app.postEvent(event::AppEvent::RELEASE_BUTTON);
+        });
+    } else {
+        ESP_LOGI(TAG, "Button on C5; S3 follows LISTENING via UART status");
     }
-
-    touch_input->onEvent([&app](TouchInput::Event e) {
-        if (e == TouchInput::Event::PRESS)   app.postEvent(event::AppEvent::USER_BUTTON);
-        if (e == TouchInput::Event::RELEASE) app.postEvent(event::AppEvent::RELEASE_BUTTON);
-    });
-    bootData.boot_check_results[BOOT_TOUCH] = BOOT_OK;
 
     // =========================================================
     // 8. ATTACH MODULES -> APP CONTROLLER

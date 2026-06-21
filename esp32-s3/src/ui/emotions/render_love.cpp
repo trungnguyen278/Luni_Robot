@@ -62,18 +62,14 @@ static void render_love_wink(GfxEngine& gfx, float t, const ColorContext& colors
     }
 }
 
-// love-blush: heart eyes + pink cheek circles below eyes
+// love-blush: heart eyes + flat pink blush streaks under each eye
 static void render_love_blush(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float s = (1.0f + sinf(t * TAU * 2.0f) * 0.08f) * (float)EYE_W * 0.9f;
-    fillHeart(gfx, LX, CY, s, colors.eye);
-    fillHeart(gfx, RX, CY, s, colors.eye);
-
-    // Blushing cheek circles
-    float blush = (sinf(t * TAU) + 1.0f) / 2.0f;
-    int16_t cr = (int16_t)lerp(6.0f, 10.0f, blush);
-    uint8_t op = (uint8_t)lerp(120.0f, 200.0f, blush);
-    gfx.fillCircle(LX - 8, CY + 42, cr, colors.accent, op);
-    gfx.fillCircle(RX + 8, CY + 42, cr, colors.accent, op);
+    float p2 = 1.0f + sinf(t * TAU * 2.0f) * 0.06f;
+    float s = (float)EYE_W * 0.85f * p2;
+    fillHeart(gfx, LX, CY - 6, s, colors.eye);
+    fillHeart(gfx, RX, CY - 6, s, colors.eye);
+    gfx.fillEllipse(LX, CY + 42, 16, 5, colors.accent, 153);
+    gfx.fillEllipse(RX, CY + 42, 16, 5, colors.accent, 153);
 }
 
 // love-shower: normal eyes + falling heart shapes from top
@@ -82,13 +78,13 @@ static void render_love_shower(GfxEngine& gfx, float t, const ColorContext& colo
     gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
     gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
 
-    for (int i = 0; i < 6; i++) {
-        float p = fmodf(t * 1.2f + i * 0.166f, 1.0f);
-        float x = 30.0f + i * 52.0f + sinf(p * TAU + (float)i * 1.5f) * 10.0f;
-        float y = lerp((float)(STATUS_H + 4), (float)(SCREEN_H - 10), p);
-        float sz = 12.0f + (1.0f - p) * 4.0f;
-        uint8_t op = (uint8_t)((1.0f - p) * 200.0f);
-        fillHeart(gfx, (int16_t)x, (int16_t)y, sz, colors.accent, op);
+    for (int i = 0; i < 8; i++) {
+        float p = fmodf(t + i * 0.125f, 1.0f);
+        float x = 24.0f + i * 38.0f + sinf(p * TAU + (float)i) * 6.0f;
+        float y = lerp((float)(STATUS_H + 4), (float)(SCREEN_H - 4), p);
+        float sz = 10.0f + (i % 3) * 4.0f;
+        uint8_t op = (uint8_t)((1.0f - p) * 0.9f * 255.0f);
+        fillHeart(gfx, (int16_t)x, (int16_t)y, sz * (1.0f - p * 0.3f), colors.accent, op);
     }
 }
 

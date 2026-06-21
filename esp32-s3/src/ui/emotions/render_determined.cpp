@@ -14,13 +14,24 @@ static void drawDeterminedBrows(GfxEngine& gfx, float t, uint16_t color) {
     gfx.drawLine(RX + 36, (int16_t)(CY - 48 - sh), RX - 28, CY - 30, color, 8);
 }
 
-// determined-stare: narrow angled eyes with strong V-brow lines above
+// determined-stare: steady stare with pupils, focus-V brows, firm mouth, subtle breathing
 static void render_determined_stare(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float sh = sinf(t * TAU * 2.0f) * 0.5f;
-    int16_t h = (int16_t)(EYE_H * 0.5f);
-    gfx.drawEye((int16_t)(LX + sh), CY, EYE_W, h, 8, 0, colors.eye);
-    gfx.drawEye((int16_t)(RX - sh), CY, EYE_W, h, 8, 0, colors.eye);
-    drawDeterminedBrows(gfx, t, colors.eye);
+    float bre = sinf(t * TAU) * 1.5f;
+    int16_t y = (int16_t)(CY + bre);
+    int16_t h = (int16_t)(EYE_H * 0.7f);
+    gfx.drawEye(LX, y, EYE_W, h, 12, 0, colors.eye);
+    gfx.drawEye(RX, y, EYE_W, h, 12, 0, colors.eye);
+
+    // Pupils
+    gfx.fillCircle(LX, y, 8, colors.bg);
+    gfx.fillCircle(RX, y, 8, colors.bg);
+
+    // Focus V-brows (slightly tighter than the shared shape, matching JSX stare)
+    gfx.drawLine(LX - 34, CY - 38, LX + 30, CY - 26, colors.eye, 7);
+    gfx.drawLine(RX + 34, CY - 38, RX - 30, CY - 26, colors.eye, 7);
+
+    // Firm mouth line
+    gfx.drawLine(SCX - 24, SCREEN_H - 24, SCX + 24, SCREEN_H - 24, colors.eye, 5);
 }
 
 // determined-fire: narrow eyes + small flame shapes flickering above head center

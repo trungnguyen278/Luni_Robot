@@ -152,7 +152,7 @@ static void render_reading(GfxEngine& gfx, float t, const ColorContext& colors) 
 
     /* --- Eyes (always on top) ----------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_WARM], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "read1", "turn", "read2")) {
@@ -165,7 +165,7 @@ static void render_reading(GfxEngine& gfx, float t, const ColorContext& colors) 
 }
 
 const VariantDef READING_VARIANTS[] = {
-    {"reading-main", "Reading", 14000, TONE_NONE, render_reading},
+    {"reading-book", "Story time", 14000, TONE_NONE, render_reading},
 };
 
 extern const CategoryDef CAT_READING = {

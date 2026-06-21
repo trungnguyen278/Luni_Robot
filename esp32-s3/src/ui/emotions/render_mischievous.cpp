@@ -6,50 +6,38 @@
 using namespace geom;
 using namespace math;
 
-// mischievous-grin: narrow eyes with angled brows (inner-high, outer-low), small grin arc
+// mischievous-grin: narrow eyes, lower lids slanting up, wide cunning smile
 static void render_mischievous_grin(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float bob = sinf(t * TAU * 0.8f) * 1.5f;
-    int16_t h = (int16_t)(EYE_H * 0.45f);
-    int16_t y = (int16_t)(CY + 6 + bob);
+    float wob = sinf(t * TAU * 2.0f) * 1.5f;
+    int16_t h = (int16_t)(EYE_H * 0.5f);
+    int16_t y = CY + 4;
+    gfx.drawEye(LX, y, EYE_W, h, 14, 0, colors.eye);
+    gfx.drawEye(RX, y, EYE_W, h, 14, 0, colors.eye);
 
-    gfx.drawEye(LX, y, EYE_W, h, 10, 0, colors.eye);
-    gfx.drawEye(RX, y, EYE_W, h, 10, 0, colors.eye);
+    // lower-lid bg masks slanting up toward the outer corners
+    gfx.fillTriangle(LX - 50, (int16_t)(CY + 20 + wob), LX + 50, (int16_t)(CY + 14 - wob), LX + 50, CY + 60, colors.bg);
+    gfx.fillTriangle(LX - 50, (int16_t)(CY + 20 + wob), LX + 50, CY + 60, LX - 50, CY + 60, colors.bg);
+    gfx.fillTriangle(RX - 50, (int16_t)(CY + 14 + wob), RX + 50, (int16_t)(CY + 20 - wob), RX + 50, CY + 60, colors.bg);
+    gfx.fillTriangle(RX - 50, (int16_t)(CY + 14 + wob), RX + 50, CY + 60, RX - 50, CY + 60, colors.bg);
 
-    // Angled brows: inner-high, outer-low (opposite of angry)
-    gfx.drawLine(LX - 34, CY - 26, LX + 30, (int16_t)(CY - 44 + bob), colors.eye, 8);
-    gfx.drawLine(RX + 34, CY - 26, RX - 30, (int16_t)(CY - 44 - bob), colors.eye, 8);
-
-    // Small grin arc
-    int16_t mx = SCX;
-    int16_t my = SCREEN_H - 32;
-    gfx.drawQuadBezier(mx - 20, my, mx, my + 12, mx + 20, my,
-                       colors.eye, 5);
+    int16_t mx = SCREEN_W / 2, my = SCREEN_H - 32;
+    gfx.drawQuadBezier(mx - 50, my, mx, my + 12, mx + 50, my, colors.eye, 5);
 }
 
-// mischievous-laugh: shake + smile arcs (like happy but with narrower, angled eyes)
+// mischievous-laugh: shaking narrow eyes, slanted lids, extra-wide smile
 static void render_mischievous_laugh(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float shake = sinf(t * TAU * 5.0f) * 3.0f;
-    float sv = cosf(t * TAU * 3.0f) * 1.5f;
+    float sh = sinf(t * TAU * 5.0f) * 2.0f;
+    int16_t h = (int16_t)(EYE_H * 0.35f);
+    gfx.drawEye(LX, (int16_t)(CY + 6 + sh), EYE_W, h, 14, 0, colors.eye);
+    gfx.drawEye(RX, (int16_t)(CY + 6 - sh), EYE_W, h, 14, 0, colors.eye);
 
-    gfx.pushTransform();
-    gfx.translate(shake, sv);
+    gfx.fillTriangle(LX - 50, CY + 18, LX + 50, CY + 12, LX + 50, CY + 60, colors.bg);
+    gfx.fillTriangle(LX - 50, CY + 18, LX + 50, CY + 60, LX - 50, CY + 60, colors.bg);
+    gfx.fillTriangle(RX - 50, CY + 12, RX + 50, CY + 18, RX + 50, CY + 60, colors.bg);
+    gfx.fillTriangle(RX - 50, CY + 12, RX + 50, CY + 60, RX - 50, CY + 60, colors.bg);
 
-    int16_t h = (int16_t)(EYE_H * 0.4f);
-    gfx.drawEye(LX, CY + 4, EYE_W, h, 8, 4, colors.eye);
-    gfx.drawEye(RX, CY + 4, EYE_W, h, 8, -4, colors.eye);
-
-    // Angled brows
-    gfx.drawLine(LX - 30, CY - 22, LX + 26, CY - 38, colors.eye, 7);
-    gfx.drawLine(RX + 30, CY - 22, RX - 26, CY - 38, colors.eye, 7);
-
-    // Smile arcs
-    int16_t hw = (EYE_W - 10) / 2;
-    gfx.drawQuadBezier(LX - hw, CY + 16, LX, CY + 30, LX + hw, CY + 16,
-                       colors.eye, 8);
-    gfx.drawQuadBezier(RX - hw, CY + 16, RX, CY + 30, RX + hw, CY + 16,
-                       colors.eye, 8);
-
-    gfx.popTransform();
+    int16_t mx = SCREEN_W / 2, my = SCREEN_H - 32;
+    gfx.drawQuadBezier(mx - 55, my, mx, my + 18, mx + 55, my, colors.eye, 5);
 }
 
 // mischievous-side: narrow eyes with pupils shifted to one side, one eyebrow raised

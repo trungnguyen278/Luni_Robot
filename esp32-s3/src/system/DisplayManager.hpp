@@ -68,7 +68,16 @@ public:
     // Exposed controls
     // Update battery percentage overlay (255 hides it).
     void setBatteryPercent(uint8_t p);
-    
+
+    // --- Privacy indicators (top status bar) ---
+    // Mic privacy state (QĐ-10): shows a mic icon on the status bar —
+    // red+slash when muted, bright when listening, faint otherwise — so the
+    // always-on mic is never invisible.
+    void setMicMuted(bool muted);
+    // Camera capture in progress (QĐ-10): shows a red REC dot so a photo can
+    // never be taken silently ("spy camera"). Driven by the camera task.
+    void setCapturing(bool on);
+
 
     // ======= OTA Update UI =======
     // Show OTA update screen and reset progress state.
@@ -115,8 +124,11 @@ public:
     SceneManager* getSceneManager() { return &scene_mgr_; }
 
     // --- Asset Playback (for testing/direct control) ---
-    // Play a named emotion animation at coordinates (default centers animation).
-    void playEmotion(const std::string& name, int x = 0, int y = 0);
+    // Play a named emotion category. `hold_ms` controls how long it stays before
+    // the idle rotation resumes (see SceneManager hold sentinels); pass
+    // SceneManager::HOLD_STICKY for state-bound faces that must persist.
+    void playEmotion(const std::string& name,
+                     float hold_ms = SceneManager::HOLD_AUTO);
 
     // Render a text message (centers when x or y < 0); stops animation while active.
     void playText(const std::string& text,
@@ -151,10 +163,19 @@ private:
 private:
     std::unique_ptr<DisplayDriver> drv; // owned low-level driver
     std::unique_ptr<GfxEngine> gfx_;              // procedural RGB565
-    SceneManager scene_mgr_;
+    // The render path and the data/SET_EMOTION path (DeviceProfile, the scene
+    // render_*() helpers) must share one SceneManager — bind to the singleton so
+    // server-pushed emotions, sync data and boot results all reach what we draw.
+    SceneManager& scene_mgr_ = SceneManager::instance();
 
     // battery
     uint8_t battery_percent = 255;
+
+    // privacy indicators (status bar). Cross-task: written by the UART/camera
+    // tasks, read by the render task — atomic so the read is always coherent.
+    std::atomic<bool> mic_muted_{false};
+    std::atomic<bool> capturing_{false};
+    std::atomic<bool> mic_listening_{false};  // set from handleInteraction
 
     // text playback state (mutually exclusive with animation)
     bool text_active_ = false;

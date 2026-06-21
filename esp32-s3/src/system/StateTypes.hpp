@@ -5,6 +5,8 @@ namespace state
 {
 
 // === Connection State (mirrored from C5 via UART) ===
+// KEEP IN SYNC with esp32-c5/src/system/StateTypes.hpp — these values cross
+// the UART as raw bytes (StatusPayload).
 enum class ConnectionState : uint8_t
 {
     OFFLINE,
@@ -17,6 +19,32 @@ enum class ConnectionState : uint8_t
     BLE_PROVISIONING,
     WS_ERROR,
     BLE_CONNECTED,
+};
+
+// === Connection Fail Reason (mirrored from C5 via UART) ===
+// KEEP IN SYNC with esp32-c5/src/system/StateTypes.hpp.
+enum class ConnectFailReason : uint8_t
+{
+    NONE,
+
+    // WiFi layer
+    WIFI_NOT_FOUND,
+    WIFI_AUTH_FAIL,
+    WIFI_TIMEOUT,
+    DHCP_FAIL,
+
+    // Internet layer
+    DNS_FAIL,
+    INTERNET_CHECK_FAIL,
+
+    // Server layer
+    SERVER_UNREACHABLE,
+    WS_HANDSHAKE_FAIL,
+    TLS_ERROR,
+
+    // Auth layer
+    AUTH_REJECTED,
+    AUTH_TIMEOUT,
 };
 
 // === Interaction State (shared S3 + C5) ===
@@ -85,11 +113,15 @@ enum class EmotionState : uint8_t
 };
 
 // === Input Source ===
+// KEEP IN SYNC with esp32-c5/src/system/StateTypes.hpp — the source byte
+// crosses the UART (CONTROL_CMD START payload), so the numeric values must
+// match on both MCUs.
 enum class InputSource : uint8_t
 {
     BUTTON,
     SERVER_COMMAND,
     SYSTEM,
+    WAKEWORD,
     UNKNOWN
 };
 

@@ -1,7 +1,17 @@
 """
-Luni V2 - Test WebSocket + MQTT Server
+Luni V2 - Test WebSocket + MQTT Server  (LEGACY local audio toy)
 ========================================
-Simulates the Luni cloud server for local audio testing.
+Simulates a *toy* echo/WAV loopback for offline audio-codec testing only.
+
+⚠️  This is NOT the production cloud protocol. It speaks a legacy downlink
+(text "PROCESSING"/"SPEAKING"/"IDLE" markers) that the real cloud
+(`Luni_Cloud/server/app/api/ws/device.py`) does NOT use. Production sends
+binary [len:2 LE][opus] audio + a JSON {"type":"audio_stop"} and the C5 owns the
+turn (END → PROCESSING → audio → audio_stop). `device_sim.py` now defaults to
+the REAL endpoint (ws://localhost:8000/ws/device) and the production protocol;
+point it here only to bench the codec round-trip in isolation. For a faithful,
+automated voice-turn check see `Luni_Cloud/server/tests/test_voice_e2e.py`
+(S15-05).
 
 Features:
 - WebSocket server on port 8000 at /ws
@@ -48,9 +58,15 @@ except (ImportError, Exception):
 
 import numpy as np
 
-SAMPLE_RATE = 48000
+# === Audio contract — MUST match firmware AudioConfig.hpp ===
+# 16 kHz mono, Opus VOIP, 60 ms frames, 24 kbps, [len:2 LE][opus] framing.
+SAMPLE_RATE = 16000
 CHANNELS = 1
 SAMPLE_WIDTH = 2  # 16-bit
+FRAME_MS = 60
+OPUS_BITRATE = 24000
+# Audio uplink WS messages from the C5 are tagged with a leading 0xAA byte.
+WS_AUDIO_UPLINK_TAG = 0xAA
 
 # ADPCM tables (IMA)
 ADPCM_INDEX_TABLE = [
@@ -184,14 +200,14 @@ class AdpcmEncoder:
 
 
 class OpusCodecWrapper:
-    """Wrapper for Opus encode/decode."""
+    """Wrapper for Opus encode/decode. Matches firmware: 16k mono VOIP 60ms."""
 
-    FRAME_SIZE = 960  # 20ms @ 48kHz
+    FRAME_SIZE = SAMPLE_RATE * FRAME_MS // 1000  # 960 samples = 60ms @ 16kHz
 
     def __init__(self):
         if HAS_OPUS:
-            self.encoder = opuslib.Encoder(SAMPLE_RATE, CHANNELS, opuslib.APPLICATION_AUDIO)
-            self.encoder.bitrate = 64000  # 64kbps
+            self.encoder = opuslib.Encoder(SAMPLE_RATE, CHANNELS, opuslib.APPLICATION_VOIP)
+            self.encoder.bitrate = OPUS_BITRATE
             self.encoder.complexity = 10  # Max quality (server has plenty of CPU)
             self.decoder = opuslib.Decoder(SAMPLE_RATE, CHANNELS)
         else:
@@ -309,6 +325,29 @@ async def handle_dLunice(websocket, args):
                 # Handle handshake
                 try:
                     data = json.loads(message)
+                    # Production auth handshake (matches firmware + ws/device.py).
+                    if data.get('type') == 'auth':
+                        payload = data.get('payload', {})
+                        session.dLunice_id = payload.get('mac', 'unknown')
+                        token = payload.get('device_token', '')
+                        expected = os.environ.get('LUNI_SIM_EXPECTED_TOKEN')
+                        ok = (expected is None) or (token == expected)
+                        await websocket.send(json.dumps({
+                            "type": "auth_result",
+                            "id": data.get('id'),
+                            "payload": {
+                                "status": "ok" if ok else "fail",
+                                "reason": None if ok else "token_mismatch",
+                            },
+                        }))
+                        print(f"  [AUTH] mac={session.dLunice_id} "
+                              f"fw={payload.get('fw_version', '?')} -> "
+                              f"{'ok' if ok else 'fail'}")
+                        if not ok:
+                            await websocket.close(code=4001, reason="auth_failed")
+                            return
+                        continue
+                    # Back-compat: legacy audio-sim handshake.
                     if data.get('cmd') == 'dLunice_handshake':
                         session.dLunice_id = data.get('dLunice_id', 'unknown')
                         print(f"  [HANDSHAKE] DLunice ID: {session.dLunice_id}")
@@ -352,10 +391,14 @@ async def handle_dLunice(websocket, args):
                             await websocket.send("SPEAKING")
                             print(f"  [TEXT] -> SPEAKING ({len(response_frames)} frames, {source})")
 
-                            # Stream audio in batches to reduce WS overhead
-                            # Batch 10 frames (~200ms audio) per WS message
-                            # Send at ~1.05x real-time to build buffer gradually
-                            BATCH_SIZE = 10
+                            # Stream audio: burst ~1.2s up-front to fill the
+                            # device prebuffer fast, then pace slightly faster
+                            # than real-time. Unpaced sends overflow the C5's
+                            # 24KB downlink buffer on long utterances → frame
+                            # drops → audible gaps.
+                            BATCH_SIZE = 5                      # frames per WS message (~300ms)
+                            BURST_FRAMES = 20                   # ~1.2s sent without pacing
+                            pace = FRAME_MS / 1000.0 * 0.9      # 0.9x real-time
                             for i in range(0, len(response_frames), BATCH_SIZE):
                                 batch = response_frames[i:i + BATCH_SIZE]
                                 batch_data = b''.join(batch)
@@ -363,12 +406,12 @@ async def handle_dLunice(websocket, args):
                                     await websocket.send(batch_data)
                                 except Exception:
                                     break
-                                # 19ms/frame: slightly faster than 20ms real-time
-                                await asyncio.sleep(0.019 * len(batch))
+                                if i + BATCH_SIZE > BURST_FRAMES:
+                                    await asyncio.sleep(pace * len(batch))
                                 sent = i + len(batch)
                                 if sent % 100 < BATCH_SIZE:
-                                    print(f"  [STREAM] {sent}/{len(response_frames)} frames sent ({sent*0.02:.1f}s)", end='\r')
-                            print(f"  [STREAM] Done: {len(response_frames)} frames sent ({len(response_frames)*0.02:.1f}s)    ")
+                                    print(f"  [STREAM] {sent}/{len(response_frames)} frames sent ({sent*FRAME_MS/1000:.1f}s)", end='\r')
+                            print(f"  [STREAM] Done: {len(response_frames)} frames sent ({len(response_frames)*FRAME_MS/1000:.1f}s)    ")
 
                         # Send IDLE
                         await websocket.send("IDLE")
@@ -376,7 +419,10 @@ async def handle_dLunice(websocket, args):
                         session.state = 'IDLE'
 
             elif isinstance(message, bytes):
-                # Binary message: may contain multiple length-prefixed Opus frames
+                # Binary message: may contain multiple length-prefixed Opus frames.
+                # The C5 tags each audio batch with a leading 0xAA byte.
+                if message and message[0] == WS_AUDIO_UPLINK_TAG:
+                    message = message[1:]
                 if session.state == 'LISTENING':
                     offset = 0
                     while offset + 2 <= len(message):
@@ -437,7 +483,7 @@ def load_wav_as_encoded(wav_path: str) -> list:
     # Encode in Opus frames
     frames = []
     codec = OpusCodecWrapper()
-    frame_size = 960  # 20ms @ 48kHz
+    frame_size = OpusCodecWrapper.FRAME_SIZE  # 960 samples = 60ms @ 16kHz
     for i in range(0, len(data) - frame_size + 1, frame_size):
         chunk = data[i:i + frame_size]
         encoded = codec.encode_frame(chunk)

@@ -1,6 +1,18 @@
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 
+# Flash size MUST match the real C5 module (4MB) + platformio board_build.flash_size
+# + partitions_4mb.csv. The committed sdkconfig had a stale "2MB" which made the
+# bootloader log 2MB and put SPIFFS (@0x3B0000) outside the addressable window.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# Dual-slot A/B OTA (QĐ-01): partitions_4mb.csv now has ota_0/ota_1/otadata.
+# Enable bootloader rollback so a freshly OTA'd image boots in PENDING_VERIFY
+# and self-reverts unless the app confirms health (OtaManager::confirmHealth()
+# on WS auth). This is the durability guarantee — a bad OTA reverts with no cable.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # Memory optimization for ESP32-C5 (limited ~200KB heap)
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=4
@@ -12,3 +24,5 @@ CONFIG_LWIP_TCP_WND_DEFAULT=2880
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y

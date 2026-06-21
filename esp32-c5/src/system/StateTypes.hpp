@@ -68,6 +68,24 @@ enum class OtaState : uint8_t
     FAILED,
 };
 
+// Stable lowercase phase names sent to the server in `ota_progress` so the
+// cloud can advance OTAHistory.status. MUST stay in sync with the cloud's
+// ws_manager ota_progress handler.
+inline const char* otaPhaseName(OtaState s)
+{
+    switch (s) {
+    case OtaState::IDLE:        return "idle";
+    case OtaState::CHECKING:    return "checking";
+    case OtaState::AVAILABLE:   return "available";
+    case OtaState::DOWNLOADING: return "downloading";
+    case OtaState::VERIFYING:   return "verifying";
+    case OtaState::FLASHING:    return "flashing";
+    case OtaState::REBOOTING:   return "rebooting";
+    case OtaState::FAILED:      return "failed";
+    }
+    return "idle";
+}
+
 // === System State ===
 enum class SystemState : uint8_t
 {
@@ -110,11 +128,15 @@ enum class EmotionState : uint8_t
 };
 
 // === Input Source ===
+// KEEP IN SYNC with esp32-s3/src/system/StateTypes.hpp — the source byte
+// crosses the UART (CONTROL_CMD START payload), so the numeric values must
+// match on both MCUs.
 enum class InputSource : uint8_t
 {
     BUTTON,
     SERVER_COMMAND,
     SYSTEM,
+    WAKEWORD,
     UNKNOWN
 };
 
@@ -164,6 +186,14 @@ inline bool isValidConnectionTransition(ConnectionState from, ConnectionState to
     return false;
 }
 
+// Voice-turn contract (C5 owns the turn, S3 mirrors via STATUS_UPDATE):
+//   IDLE -> LISTENING       press / wake word
+//   LISTENING -> PROCESSING release or 30s cap (END sent to server)
+//   LISTENING -> IDLE       cancel / went offline
+//   PROCESSING -> SPEAKING  first TTS binary from server
+//   PROCESSING -> IDLE      server audio_stop / empty reply / 20s watchdog
+//   SPEAKING -> IDLE        S3 SPEAK_DONE / audio_stop / 15s no-data watchdog
+//   SPEAKING|PROCESSING -> LISTENING  barge-in (new press / wake word)
 inline bool isValidInteractionTransition(InteractionState from, InteractionState to)
 {
     using IS = InteractionState;
@@ -171,15 +201,15 @@ inline bool isValidInteractionTransition(InteractionState from, InteractionState
 
     switch (from) {
     case IS::IDLE:
-        return to == IS::TRIGGERED;
+        return to == IS::TRIGGERED || to == IS::LISTENING;
     case IS::TRIGGERED:
         return to == IS::LISTENING || to == IS::IDLE;
     case IS::LISTENING:
-        return to == IS::PROCESSING || to == IS::CANCELLING;
+        return to == IS::PROCESSING || to == IS::CANCELLING || to == IS::IDLE;
     case IS::PROCESSING:
-        return to == IS::SPEAKING || to == IS::IDLE;
+        return to == IS::SPEAKING || to == IS::IDLE || to == IS::LISTENING;
     case IS::SPEAKING:
-        return to == IS::IDLE || to == IS::CANCELLING;
+        return to == IS::IDLE || to == IS::CANCELLING || to == IS::LISTENING;
     case IS::CANCELLING:
         return to == IS::IDLE;
     }
@@ -193,9 +223,11 @@ inline bool isValidOtaTransition(OtaState from, OtaState to)
 
     switch (from) {
     case OS::IDLE:
-        return to == OS::CHECKING;
+        // Server push goes straight to DOWNLOADING (no client-side CHECKING/
+        // AVAILABLE handshake in the WS push model), so allow it directly.
+        return to == OS::CHECKING || to == OS::DOWNLOADING;
     case OS::CHECKING:
-        return to == OS::AVAILABLE || to == OS::IDLE;
+        return to == OS::AVAILABLE || to == OS::DOWNLOADING || to == OS::IDLE;
     case OS::AVAILABLE:
         return to == OS::DOWNLOADING || to == OS::IDLE;
     case OS::DOWNLOADING:
@@ -207,7 +239,8 @@ inline bool isValidOtaTransition(OtaState from, OtaState to)
     case OS::REBOOTING:
         return false;
     case OS::FAILED:
-        return to == OS::IDLE || to == OS::CHECKING;
+        // Allow a fresh OTA push to restart download after a prior failure.
+        return to == OS::IDLE || to == OS::CHECKING || to == OS::DOWNLOADING;
     }
     return false;
 }

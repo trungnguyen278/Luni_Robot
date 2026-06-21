@@ -2,6 +2,7 @@
 #include <memory>
 #include <atomic>
 #include <cstdint>
+#include <vector>
 #include "system/StateManager.hpp"
 #include "system/StateTypes.hpp"
 #include "system/BluetoothService.hpp"
@@ -41,6 +42,11 @@ public:
                        std::unique_ptr<SpiBridge> spiIn,
                        std::unique_ptr<UartBridge> uartIn);
 
+    // Context captured at boot (scanned WiFi list + current settings) used to
+    // populate the BLE provisioning service when it later starts at runtime.
+    void setProvisioningContext(std::vector<WifiInfo> networks,
+                                BluetoothService::ConfigData cfg);
+
 private:
     AppController() = default;
     ~AppController();
@@ -51,7 +57,7 @@ private:
     void processQueue();
 
     void onInteractionStateChanged(state::InteractionState, state::InputSource);
-    void onConnectionStateChanged(state::ConnectionState);
+    void onConnectionStateChanged(state::ConnectionState, state::ConnectFailReason);
     void onSystemStateChanged(state::SystemState);
     void sendStatusHeartbeat();
 
@@ -73,4 +79,6 @@ private:
 
     BluetoothService ble_;
     bool ble_active_ = false;
+    std::vector<WifiInfo> prov_networks_;
+    BluetoothService::ConfigData prov_cfg_;
 };

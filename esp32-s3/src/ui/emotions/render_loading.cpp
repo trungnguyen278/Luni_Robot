@@ -69,29 +69,18 @@ static void render_loading_rings(GfxEngine& gfx, float t, const ColorContext& co
     }
 }
 
-// loading-bricks: normal eyes + horizontal progress bar filling at bottom
+// loading-bricks: narrow eyes + a row of 10 bricks lighting up in sequence
 static void render_loading_bricks(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t h = (int16_t)(EYE_H * 0.6f);
-    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    int16_t h = (int16_t)(EYE_H * 0.4f);
+    gfx.drawEye(LX, CY, EYE_W, h, 8, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, 8, 0, colors.eye);
 
-    // Progress bar as segmented bricks
-    int16_t bx = 40, by = SCREEN_H - 24;
-    int16_t totalW = SCREEN_W - 80;
-    constexpr int segs = 10;
-    int16_t segW = totalW / segs;
-    int filled = (int)(t * (float)segs);
-    float partial = t * (float)segs - (float)filled;
-
-    for (int i = 0; i < segs; i++) {
-        int16_t sx = bx + i * segW;
-        if (i < filled) {
-            gfx.fillRoundedRect(sx + 1, by, segW - 2, 6, 2, colors.accent);
-        } else if (i == filled) {
-            int16_t pw = (int16_t)((float)(segW - 2) * partial);
-            if (pw > 0)
-                gfx.fillRoundedRect(sx + 1, by, pw, 6, 2, colors.accent, 180);
-        }
+    constexpr int N = 10;
+    float total = fmodf(t * (float)N, (float)N);
+    for (int i = 0; i < N; i++) {
+        uint8_t op = ((float)i < total) ? 255 : 46; // lit vs 0.18 dim
+        gfx.fillRoundedRect((int16_t)(24 + i * 28), SCREEN_H - 22, 22, 10, 2,
+                            colors.accent, op);
     }
 }
 

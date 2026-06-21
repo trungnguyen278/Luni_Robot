@@ -6,43 +6,54 @@
 using namespace geom;
 using namespace math;
 
-// proud-puffed: slightly larger eyes, raised position, wide brow lines
-static void render_proud_puffed(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float breath = sinf(t * TAU * 0.8f) * 2.0f;
-    float sc = 1.05f + sinf(t * TAU * 0.6f) * 0.02f;
-    int16_t w = (int16_t)(EYE_W * sc);
-    int16_t h = (int16_t)(EYE_H * sc);
-    int16_t y = (int16_t)(CY - 6 + breath);
-
-    gfx.drawEye(LX, y, w, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, y, w, h, EYE_RX, 0, colors.eye);
-
-    // Wide brow lines
-    gfx.drawLine(LX - 36, (int16_t)(y - 50 + breath * 0.5f),
-                 LX + 36, (int16_t)(y - 50 + breath * 0.5f), colors.eye, 8);
-    gfx.drawLine(RX - 36, (int16_t)(y - 50 - breath * 0.5f),
-                 RX + 36, (int16_t)(y - 50 - breath * 0.5f), colors.eye, 8);
+// Simple 5-pointed star using triangles (matches JSX starPath).
+static void fillStar(GfxEngine& gfx, int16_t cx, int16_t cy, float r1, float r2,
+                     uint16_t color, uint8_t alpha = 255) {
+    for (int i = 0; i < 5; i++) {
+        float a1 = -1.5708f + i * (TAU / 5.0f);
+        float a2 = a1 + TAU / 10.0f;
+        float a3 = a1 + TAU / 5.0f;
+        gfx.fillTriangle((int16_t)(cx + cosf(a1) * r1), (int16_t)(cy + sinf(a1) * r1),
+                         (int16_t)(cx + cosf(a2) * r2), (int16_t)(cy + sinf(a2) * r2),
+                         cx, cy, color, alpha);
+        gfx.fillTriangle((int16_t)(cx + cosf(a2) * r2), (int16_t)(cy + sinf(a2) * r2),
+                         (int16_t)(cx + cosf(a3) * r1), (int16_t)(cy + sinf(a3) * r1),
+                         cx, cy, color, alpha);
+    }
 }
 
-// proud-glow: normal eyes + radial glow lines emanating outward from center, soft alpha
-static void render_proud_glow(GfxEngine& gfx, float t, const ColorContext& colors) {
-    int16_t h = (int16_t)(EYE_H * 0.9f);
-    gfx.drawEye(LX, CY - 4, EYE_W, h, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, CY - 4, EYE_W, h, EYE_RX, 0, colors.eye);
+// proud-puffed: confident half-lidded eyes + a closed smile
+static void render_proud_puffed(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float lift = sinf(t * TAU) * 2.0f;
+    int16_t h = (int16_t)(EYE_H * 0.55f);
+    int16_t y = (int16_t)(CY - 4 + lift);
+    gfx.drawEye(LX, y, EYE_W, h, 12, 0, colors.eye);
+    gfx.drawEye(RX, y, EYE_W, h, 12, 0, colors.eye);
+    // upper-lid bg shadow masking the top of each eye
+    int16_t lidBot = (int16_t)(CY - 10 + lift);
+    gfx.fillRect(LX - 50, CY - 50, 100, (int16_t)(lidBot - (CY - 50)), colors.bg);
+    gfx.fillRect(RX - 50, CY - 50, 100, (int16_t)(lidBot - (CY - 50)), colors.bg);
+    // confident closed-smile
+    int16_t mx = SCREEN_W / 2, my = SCREEN_H - 30;
+    gfx.drawQuadBezier(mx - 30, my, mx, my + 10, mx + 30, my, colors.eye, 5);
+}
 
-    // Radial glow lines from center
-    int numRays = 8;
-    for (int i = 0; i < numRays; i++) {
-        float angle = (float)i / (float)numRays * TAU + t * TAU * 0.3f;
-        float p = fmodf(t * 0.8f + (float)i / (float)numRays, 1.0f);
-        float innerR = 50.0f + p * 10.0f;
-        float outerR = innerR + 18.0f + sinf(t * TAU + (float)i) * 4.0f;
-        int16_t x0 = (int16_t)(SCX + cosf(angle) * innerR);
-        int16_t y0 = (int16_t)(CY + sinf(angle) * innerR);
-        int16_t x1 = (int16_t)(SCX + cosf(angle) * outerR);
-        int16_t y1 = (int16_t)(CY + sinf(angle) * outerR);
-        uint8_t op = (uint8_t)((0.3f + sinf(t * TAU * 2.0f + (float)i) * 0.2f) * 255);
-        gfx.drawLine(x0, y0, x1, y1, colors.accent, 2, op);
+// proud-glow: soft glow halo behind eyes + a little crown of sparkles
+static void render_proud_glow(GfxEngine& gfx, float t, const ColorContext& colors) {
+    float p = (sinf(t * TAU) + 1.0f) / 2.0f;
+    int16_t r = (int16_t)lerp((float)EYE_W / 2.0f * 1.1f, (float)EYE_W / 2.0f * 1.2f, p);
+    uint8_t glowOp = (uint8_t)((0.18f + p * 0.18f) * 255.0f);
+    gfx.fillCircle(LX, CY, r, colors.accent, glowOp);
+    gfx.fillCircle(RX, CY, r, colors.accent, glowOp);
+
+    int16_t h = (int16_t)(EYE_H * 0.95f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+
+    for (int i = -1; i <= 1; i++) {
+        int16_t x = (int16_t)(SCREEN_W / 2 + i * 18);
+        int16_t y = (int16_t)(STATUS_H + 22 - (i == 0 ? 0 : 4));
+        fillStar(gfx, x, y, 6.0f, 2.5f, colors.accent, 217);
     }
 }
 

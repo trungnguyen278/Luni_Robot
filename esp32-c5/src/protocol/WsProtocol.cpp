@@ -30,6 +30,8 @@ static constexpr MsgTypeEntry MSG_TYPE_MAP[] = {
     { "config_update",     MsgType::CONFIG_UPDATE },
     { "interaction_msg",   MsgType::INTERACTION_MSG },
     { "ack",               MsgType::ACK },
+    { "motion",            MsgType::MOTION },
+    { "camera_capture",    MsgType::CAMERA_CAPTURE },
 };
 
 static constexpr size_t MSG_TYPE_MAP_SIZE = sizeof(MSG_TYPE_MAP) / sizeof(MSG_TYPE_MAP[0]);
@@ -70,7 +72,7 @@ cJSON* createMessage(MsgType type, const char* id)
     return root;
 }
 
-cJSON* createAuthMessage(const char* mac,
+cJSON* createAuthMessage(const char* mac, const char* device_token,
                          const char* fw_version, const char* model)
 {
     cJSON* root = createMessage(MsgType::AUTH);
@@ -78,6 +80,7 @@ cJSON* createAuthMessage(const char* mac,
 
     cJSON* payload = cJSON_AddObjectToObject(root, "payload");
     if (payload) {
+        cJSON_AddStringToObject(payload, "device_token", device_token);
         cJSON_AddStringToObject(payload, "mac", mac);
         cJSON_AddStringToObject(payload, "fw_version", fw_version);
         cJSON_AddStringToObject(payload, "model", model);
@@ -111,6 +114,19 @@ cJSON* createStateUpdate(const char* category, uint8_t old_val, uint8_t new_val)
         cJSON_AddStringToObject(payload, "category", category);
         cJSON_AddNumberToObject(payload, "old", old_val);
         cJSON_AddNumberToObject(payload, "new", new_val);
+    }
+    return root;
+}
+
+cJSON* createStateUpdateStr(const char* category, const char* new_val)
+{
+    cJSON* root = createMessage(MsgType::STATE_UPDATE);
+    if (!root) return nullptr;
+
+    cJSON* payload = cJSON_AddObjectToObject(root, "payload");
+    if (payload) {
+        cJSON_AddStringToObject(payload, "category", category);
+        cJSON_AddStringToObject(payload, "new", new_val ? new_val : "");
     }
     return root;
 }

@@ -18,11 +18,12 @@ struct AppMessage {
         APP_EVENT
     } type;
 
-    state::InteractionState interaction_state;
-    state::InputSource      interaction_source;
-    state::ConnectionState  connection_state;
-    state::SystemState      system_state;
-    event::AppEvent         app_event;
+    state::InteractionState  interaction_state;
+    state::InputSource       interaction_source;
+    state::ConnectionState   connection_state;
+    state::ConnectFailReason fail_reason;
+    state::SystemState       system_state;
+    event::AppEvent          app_event;
 };
 
 AppController& AppController::instance()
@@ -51,6 +52,13 @@ void AppController::attachModules(std::unique_ptr<NetworkManager> networkIn,
     uart    = std::move(uartIn);
 }
 
+void AppController::setProvisioningContext(std::vector<WifiInfo> networks,
+                                           BluetoothService::ConfigData cfg)
+{
+    prov_networks_ = std::move(networks);
+    prov_cfg_ = std::move(cfg);
+}
+
 bool AppController::init()
 {
     ESP_LOGI(TAG, "init()");
@@ -71,9 +79,10 @@ bool AppController::init()
         });
 
     sub_conn_id = sm.subscribeConnection(
-        [this](state::ConnectionState s, state::ConnectFailReason) {
+        [this](state::ConnectionState s, state::ConnectFailReason reason) {
             AppMessage msg{}; msg.type = AppMessage::Type::CONNECTION;
             msg.connection_state = s;
+            msg.fail_reason = reason;
             if (app_queue) xQueueSend(app_queue, &msg, 0);
         });
 
@@ -160,7 +169,8 @@ void AppController::sendStatusHeartbeat()
         (uint8_t)sm.getInteractionState(),
         (uint8_t)sm.getConnectionState(),
         (uint8_t)sm.getSystemState(),
-        (uint8_t)sm.getEmotionState());
+        (uint8_t)sm.getEmotionState(),
+        (uint8_t)sm.getLastFailReason());
 }
 
 void AppController::processQueue()
@@ -175,7 +185,7 @@ void AppController::processQueue()
                 onInteractionStateChanged(msg.interaction_state, msg.interaction_source);
                 break;
             case AppMessage::Type::CONNECTION:
-                onConnectionStateChanged(msg.connection_state);
+                onConnectionStateChanged(msg.connection_state, msg.fail_reason);
                 break;
             case AppMessage::Type::SYSTEM:
                 onSystemStateChanged(msg.system_state);
@@ -208,13 +218,15 @@ void AppController::onInteractionStateChanged(state::InteractionState s, state::
             (uint8_t)s,
             (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)StateManager::instance().getSystemState(),
-            (uint8_t)StateManager::instance().getEmotionState());
+            (uint8_t)StateManager::instance().getEmotionState(),
+            (uint8_t)StateManager::instance().getLastFailReason());
     }
 }
 
-void AppController::onConnectionStateChanged(state::ConnectionState s)
+void AppController::onConnectionStateChanged(state::ConnectionState s,
+                                             state::ConnectFailReason reason)
 {
-    ESP_LOGI(TAG, "Connection: %d", (int)s);
+    ESP_LOGI(TAG, "Connection: %d (reason=%d)", (int)s, (int)reason);
 
     if (s == state::ConnectionState::BLE_PROVISIONING) {
         startBleProvisioning();
@@ -227,7 +239,8 @@ void AppController::onConnectionStateChanged(state::ConnectionState s)
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)s,
             (uint8_t)StateManager::instance().getSystemState(),
-            (uint8_t)StateManager::instance().getEmotionState());
+            (uint8_t)StateManager::instance().getEmotionState(),
+            (uint8_t)reason);
     }
 }
 
@@ -235,7 +248,14 @@ void AppController::startBleProvisioning()
 {
     if (ble_active_) return;
 
-    if (!ble_.init("Luni")) {
+    // Prefer the freshest scan: NetworkManager captures a live scan right before
+    // entering BLE provisioning at runtime; fall back to the boot scan otherwise.
+    const std::vector<WifiInfo>* networks = &prov_networks_;
+    if (network && !network->scannedNetworks().empty()) {
+        networks = &network->scannedNetworks();
+    }
+
+    if (!ble_.init("Luni", *networks, &prov_cfg_)) {
         ESP_LOGE(TAG, "BLE init failed");
         return;
     }
@@ -261,15 +281,20 @@ void AppController::startBleProvisioning()
                 nvs_set_str(h, "ws_url", cfg.ws_url.c_str());
             if (!cfg.user_id.empty())
                 nvs_set_str(h, "user_id", cfg.user_id.c_str());
+            if (!cfg.device_token.empty())
+                nvs_set_str(h, "device_token", cfg.device_token.c_str());
             if (!cfg.admin_secret.empty())
                 nvs_set_str(h, "admin_secret", cfg.admin_secret.c_str());
             nvs_commit(h);
             nvs_close(h);
         }
 
-        if (network) {
-            network->setCredentials(cfg.ssid, cfg.pass);
-        }
+        // Persist only — do NOT tear down BLE or connect live here. The app's
+        // pairing flow expects to keep the BLE link after COMMIT to send the
+        // RESTART command; on reboot the device reads the new creds + token from
+        // NVS and connects normally (device_token now present → no auth-fail loop).
+        // Releasing provisioning here would drop the app's connection mid-flow.
+        ESP_LOGI(TAG, "Provisioning saved to NVS; awaiting app RESTART");
     });
 
     ble_.start();
@@ -301,6 +326,7 @@ void AppController::onSystemStateChanged(state::SystemState s)
             (uint8_t)StateManager::instance().getInteractionState(),
             (uint8_t)StateManager::instance().getConnectionState(),
             (uint8_t)s,
-            (uint8_t)StateManager::instance().getEmotionState());
+            (uint8_t)StateManager::instance().getEmotionState(),
+            (uint8_t)StateManager::instance().getLastFailReason());
     }
 }

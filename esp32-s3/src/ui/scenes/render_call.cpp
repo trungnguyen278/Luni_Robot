@@ -177,7 +177,7 @@ static void render_call_incoming(GfxEngine& gfx, float t, const ColorContext& co
 
     /* --- Eyes --------------------------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_GREEN], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "ring", "ringing")) {
@@ -310,7 +310,7 @@ static void render_call_outgoing(GfxEngine& gfx, float t, const ColorContext& co
 
     /* --- Eyes --------------------------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_GREEN], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "dial", "wait")) {
@@ -437,7 +437,7 @@ static void render_call_missed(GfxEngine& gfx, float t, const ColorContext& colo
 
     /* --- Eyes --------------------------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_RED], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label -------------------------------------------------------- */
     if (phaseIn(ph.name, "ring", "ringing")) {
@@ -456,7 +456,7 @@ static void render_call_missed(GfxEngine& gfx, float t, const ColorContext& colo
 const VariantDef CALL_VARIANTS[] = {
     {"call-incoming", "Incoming", 14000, TONE_NONE, render_call_incoming},
     {"call-outgoing", "Outgoing", 13000, TONE_NONE, render_call_outgoing},
-    {"call-missed",   "Missed",   12000, TONE_NONE, render_call_missed},
+    {"call-missed",   "Missed",   12000, TONE_RED,  render_call_missed},
 };
 
 extern const CategoryDef CAT_CALL = {

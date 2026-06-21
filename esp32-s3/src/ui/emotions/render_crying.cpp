@@ -44,25 +44,23 @@ static void render_crying_waterfall(GfxEngine& gfx, float t, const ColorContext&
     }
 }
 
-// crying-sob: vertical shake + tear spray (multiple small circles)
+// crying-sob: whole-face sob bob + a big teardrop falling from each side
 static void render_crying_sob(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float shake = sinf(t * TAU * 6.0f) * 3.0f;
+    float sob = sinf(t * TAU * 3.0f) * 3.0f;
+    gfx.pushTransform();
+    gfx.translate(0.0f, sob);
     int16_t hw = EYE_W / 2;
-    int16_t cy = (int16_t)(CY + 10 + shake);
+    int16_t cy = CY + 8;
     gfx.drawQuadBezier(LX - hw, cy, LX, cy + 22, LX + hw, cy, colors.eye, 12);
     gfx.drawQuadBezier(RX - hw, cy, RX, cy + 22, RX + hw, cy, colors.eye, 12);
-
-    // Tear spray: small circles shooting outward
-    for (int i = 0; i < 6; i++) {
-        float p = fmodf(t * 3.0f + i * 0.17f, 1.0f);
-        float angle = (i < 3) ? (PI * 0.3f + i * 0.2f) : (PI * 0.5f + i * 0.2f);
-        int16_t base_x = (i < 3) ? LX : RX;
-        int16_t dir = (i < 3) ? -1 : 1;
-        int16_t tx = (int16_t)(base_x + dir * (10 + p * 30) * cosf(angle));
-        int16_t ty = (int16_t)(cy + 14 + p * 40);
-        uint8_t op = (uint8_t)((1.0f - p) * 200.0f);
-        gfx.fillCircle(tx, ty, (int16_t)(2 + (1.0f - p) * 3), colors.accent, op);
+    for (int side = 0; side < 2; side++) {
+        int16_t x = (side == 0) ? (int16_t)(LX - 30) : (int16_t)(RX + 30);
+        float p = fmodf(t * 1.4f + side * 0.5f, 1.0f);
+        int16_t cy0 = (int16_t)(CY + 16 + p * 70);
+        uint8_t op = (uint8_t)((1.0f - p * 0.4f) * 255.0f);
+        gfx.fillEllipse(x, (int16_t)(cy0 + 16), 7, 16, colors.accent, op);
     }
+    gfx.popTransform();
 }
 
 // crying-trickle: single tear forms and falls slowly from each eye

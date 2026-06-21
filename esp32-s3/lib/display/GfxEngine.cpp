@@ -40,18 +40,23 @@ void GfxEngine::clear(uint16_t color) {
     if (color == 0) {
         memset(fb_, 0, count * 2);
     } else {
-        for (size_t i = 0; i < count; i++) fb_[i] = color;
+        // COLOR_BG (0x0841) isn't 0, so memset can't be used — but writing two
+        // pixels per 32-bit word halves the PSRAM store count vs a scalar loop.
+        uint32_t pair = ((uint32_t)color << 16) | color;
+        uint32_t* p32 = (uint32_t*)fb_;
+        size_t words = count / 2;
+        for (size_t i = 0; i < words; i++) p32[i] = pair;
+        if (count & 1) fb_[count - 1] = color;  // odd tail pixel
     }
 }
 
 void GfxEngine::flush(DisplayDriver* drv) {
     if (!fb_ || !drv) return;
     size_t count = width_ * height_;
-    for (size_t i = 0; i < count; i++) {
-        fb_[i] = (fb_[i] >> 8) | (fb_[i] << 8);
-    }
+    // Endian swap is folded into writePixels' PSRAM->bounce copy (swap_bytes),
+    // removing the separate full-frame read+write pass we used to do here.
     drv->setWindow(0, 0, width_ - 1, height_ - 1);
-    drv->writePixels(fb_, count * 2);
+    drv->writePixels(fb_, count * 2, /*swap_bytes=*/true);
 }
 
 // ─────────────────────────────────────────────────────────

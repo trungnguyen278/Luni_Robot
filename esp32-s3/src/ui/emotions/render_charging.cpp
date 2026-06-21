@@ -30,16 +30,14 @@ static void drawBolt(GfxEngine& gfx, int16_t cx, int16_t cy, float s,
     gfx.fillTriangle(x5, y5, x4, y4, x3, y3, color, alpha);
 }
 
-// charging-bolt: normal eyes + lightning bolt shape at center that flashes
+// charging-bolt: narrow eyes + a pulsing lightning bolt overhead
 static void render_charging_bolt(GfxEngine& gfx, float t, const ColorContext& colors) {
-    float bob = sinf(t * TAU * 1.5f) * 2.0f;
-    gfx.drawEye(LX, (int16_t)(CY + bob), EYE_W, EYE_H, EYE_RX, 0, colors.eye);
-    gfx.drawEye(RX, (int16_t)(CY + bob), EYE_W, EYE_H, EYE_RX, 0, colors.eye);
-
-    // Lightning bolt at center, alternating opacity
-    float flash = (sinf(t * TAU * 3.0f) + 1.0f) / 2.0f;
-    uint8_t boltAlpha = (uint8_t)(80 + flash * 175.0f);
-    drawBolt(gfx, SCX, CY, 20.0f, colors.accent, boltAlpha);
+    float pulseB = 0.5f + fabsf(sinf(t * TAU)) * 0.5f;
+    int16_t h = (int16_t)(EYE_H * 0.55f);
+    gfx.drawEye(LX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    gfx.drawEye(RX, CY, EYE_W, h, EYE_RX, 0, colors.eye);
+    drawBolt(gfx, SCREEN_W / 2, STATUS_H + 28, 22.0f, colors.accent,
+             (uint8_t)(pulseB * 255.0f));
 }
 
 // charging-fill: eyes with progress bar below them that fills left-to-right over time

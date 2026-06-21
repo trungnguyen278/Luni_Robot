@@ -255,7 +255,7 @@ static void render_stopwatch(GfxEngine& gfx, float t, const ColorContext& colors
 
     /* --- Eyes (always on top) ------------------------------------- */
     drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t,
-                   TONE_LUT[TONE_ORANGE], colors.bg);
+                   TONE_LUT[TONE_CYAN], colors.bg);
 
     /* --- Label ---------------------------------------------------- */
     if (ticking) {
@@ -268,7 +268,7 @@ static void render_stopwatch(GfxEngine& gfx, float t, const ColorContext& colors
 }
 
 const VariantDef STOPWATCH_VARIANTS[] = {
-    {"stopwatch-main", "Main", 14000, TONE_NONE, render_stopwatch},
+    {"stopwatch-lap", "Lap timer", 14000, TONE_NONE, render_stopwatch},
 };
 
 extern const CategoryDef CAT_STOPWATCH = {

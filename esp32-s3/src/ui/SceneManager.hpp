@@ -56,8 +56,21 @@ class SceneManager {
 public:
     SceneManager() = default;
 
-    void showScene(const char* categoryKey, const char* variantId = nullptr);
-    void showEmotion(const char* categoryKey, const char* variantId = nullptr);
+    // Hold-window sentinels for showScene/showEmotion `hold_ms`:
+    //   HOLD_AUTO   → window picked from content kind (one play for a scene,
+    //                 DEFAULT_EMOTION_HOLD_MS for an emotion), then return to idle.
+    //   HOLD_STICKY → stay until the caller explicitly swaps it out. Use for
+    //                 interaction-bound faces (listening/thinking/error) whose
+    //                 lifetime is owned by a state, not a timer.
+    //   >= 0        → explicit window in milliseconds.
+    static constexpr float HOLD_AUTO   = -1.0f;
+    static constexpr float HOLD_STICKY = -2.0f;
+    static constexpr float DEFAULT_EMOTION_HOLD_MS = 6000.0f;
+
+    void showScene(const char* categoryKey, const char* variantId = nullptr,
+                   float hold_ms = HOLD_AUTO);
+    void showEmotion(const char* categoryKey, const char* variantId = nullptr,
+                     float hold_ms = HOLD_AUTO);
     void exitScene();
 
     bool isSceneActive() const { return scene_active_; }
@@ -69,7 +82,9 @@ public:
     // Call every frame with delta time in ms
     void update(GfxEngine& gfx, float dt_ms);
 
-    // Pick random variant from a category (with recency filter)
+    // Pick random variant from a category (with recency filter).
+    // The `moon` category is special-cased: it never picks randomly — the
+    // variant is the one matching tonight's lunar day (see pickMoonVariant).
     const VariantDef* pickVariant(const char* categoryKey);
 
     // Idle loop management
@@ -91,6 +106,12 @@ private:
     bool scene_active_ = false;
     bool idle_active_ = true;
 
+    // Explicitly shown content (showScene/showEmotion) with a finite lifetime:
+    // when `holding_`, update() returns to the idle rotation once elapsed_ms_
+    // reaches `hold_ms_`. Idle-driven content leaves these false.
+    bool  holding_ = false;
+    float hold_ms_ = 0.0f;
+
     // Recency filter (variants)
     static constexpr int RECENT_SIZE = 6;
     const char* recent_ids_[RECENT_SIZE] = {};
@@ -107,6 +128,17 @@ private:
     float idle_timer_ms_ = 0;
     float idle_interval_ms_ = 4000;
     const CategoryDef* pickIdleCategory();
+
+    // Deterministic moon-phase variant for tonight's lunar day (from
+    // scene_data_.lunar_day, fed by the server). Mirrors the JSX
+    // LuniMoon.sceneForLunarDay() mapping.
+    const VariantDef* pickMoonVariant();
+
+    // Deterministic weather variant for the current condition (from
+    // scene_data_.weather_condition, fed by the server). Without this an
+    // explicit weather scene picked a RANDOM sky — e.g. SNOW on a sunny day
+    // (S11-02). Returns nullptr for unknown/unsynced → caller falls back.
+    const VariantDef* pickWeatherVariant();
 
     SceneData scene_data_;
 };

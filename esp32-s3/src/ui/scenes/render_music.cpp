@@ -108,7 +108,7 @@ static void render_music_jam(GfxEngine& gfx, float t, const ColorContext& colors
         }
     }
 
-    drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t, colors.eye, colors.bg);
+    drawPlacedEyes(gfx, eyeCx, eyeCy, eyeScale, eyeEmo, t, TONE_LUT[TONE_CYAN], colors.bg);
 
     const char* label =
         phaseIs(ph.name, "neutral") ? "SILENCE..." :
