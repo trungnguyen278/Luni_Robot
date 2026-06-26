@@ -5,19 +5,10 @@
 
 static const char* TAG = "SpiBridge";
 
-// Static handshake pin for SPI slave post_setup callback.
-// Set HIGH after DMA is loaded, so master sees handshake only when slave is ready.
-static gpio_num_t s_handshake_pin = GPIO_NUM_NC;
-static bool s_handshake_pending = false;
-
-static void IRAM_ATTR spi_post_setup_cb(spi_slave_transaction_t* trans)
-{
-    // Set handshake to accurately reflect data availability.
-    // HIGH = this frame has real data OR more data waiting.
-    // LOW = sending EMPTY and nothing else queued.
-    // This fires AFTER DMA is loaded, so master won't clock garbage.
-    gpio_set_level(s_handshake_pin, s_handshake_pending ? 1 : 0);
-}
+// Handshake line removed: the S3 master polls instead (GPIO40 became LCD CS).
+// The slave stays gapless (2 pre-queued transactions, see slaveLoop) so a poll
+// never lands in a re-arm gap — that, not the handshake, is what now prevents
+// dropped frames.
 
 SpiBridge::~SpiBridge()
 {
@@ -29,14 +20,7 @@ bool SpiBridge::init(const Config& cfg)
 {
     cfg_ = cfg;
 
-    // Init handshake GPIO as output (LOW = no data)
-    gpio_config_t hs_cfg = {};
-    hs_cfg.pin_bit_mask = (1ULL << cfg_.pin_handshake);
-    hs_cfg.mode = GPIO_MODE_OUTPUT;
-    hs_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
-    hs_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    gpio_config(&hs_cfg);
-    gpio_set_level(cfg_.pin_handshake, 0);
+    // No handshake GPIO (S3 polls; GPIO40 freed for LCD CS).
 
     // Init SPI slave
     spi_bus_config_t bus_cfg = {};
@@ -47,14 +31,11 @@ bool SpiBridge::init(const Config& cfg)
     bus_cfg.quadhd_io_num = -1;
     bus_cfg.max_transfer_sz = spi_proto::FRAME_SIZE;
 
-    s_handshake_pin = cfg_.pin_handshake;
-
     spi_slave_interface_config_t slave_cfg = {};
     slave_cfg.mode = 0;
     slave_cfg.spics_io_num = cfg_.pin_cs;
-    slave_cfg.queue_size = 1;
+    slave_cfg.queue_size = 2;   // gapless: keep 2 transactions in flight (see slaveLoop)
     slave_cfg.flags = 0;
-    slave_cfg.post_setup_cb = spi_post_setup_cb;
 
     esp_err_t err = spi_slave_initialize(SPI2_HOST, &bus_cfg, &slave_cfg, SPI_DMA_CH_AUTO);
     if (err != ESP_OK) {
@@ -68,9 +49,8 @@ bool SpiBridge::init(const Config& cfg)
         return false;
     }
 
-    ESP_LOGI(TAG, "SpiBridge init OK (MOSI=%d MISO=%d SCLK=%d CS=%d HS=%d)",
-             cfg_.pin_mosi, cfg_.pin_miso, cfg_.pin_sclk, cfg_.pin_cs,
-             cfg_.pin_handshake);
+    ESP_LOGI(TAG, "SpiBridge init OK (MOSI=%d MISO=%d SCLK=%d CS=%d, no HS — gapless poll)",
+             cfg_.pin_mosi, cfg_.pin_miso, cfg_.pin_sclk, cfg_.pin_cs);
     return true;
 }
 
@@ -98,7 +78,6 @@ void SpiBridge::resetDownlink()
 {
     if (dl_audio_sb_) {
         xStreamBufferReset(dl_audio_sb_);
-        gpio_set_level(cfg_.pin_handshake, 0);
         ESP_LOGI(TAG, "Downlink buffer reset");
     }
 }
@@ -123,10 +102,9 @@ bool SpiBridge::sendAudioDownlink(const uint8_t* data, size_t len)
         return false;
     }
 
+    // No handshake to raise — the S3 master polls and will pick this up on its
+    // next poll. The gapless slave guarantees it won't miss the transaction.
     size_t sent = xStreamBufferSend(dl_audio_sb_, data, len, 0);
-    if (sent > 0) {
-        gpio_set_level(cfg_.pin_handshake, 1);
-    }
     return sent == len;
 }
 
@@ -239,60 +217,57 @@ void SpiBridge::slaveTaskEntry(void* arg)
 
 void SpiBridge::slaveLoop()
 {
-    ESP_LOGI(TAG, "Slave task started");
+    ESP_LOGI(TAG, "Slave task started (gapless, no handshake)");
 
-    // DMA-capable buffers
-    uint8_t* tx_buf = (uint8_t*)heap_caps_malloc(spi_proto::FRAME_SIZE, MALLOC_CAP_DMA);
-    uint8_t* rx_buf = (uint8_t*)heap_caps_malloc(spi_proto::FRAME_SIZE, MALLOC_CAP_DMA);
+    // Two transaction slots kept in flight at all times. While one slot is being
+    // clocked by the master or refilled here, the OTHER stays armed in HW — so the
+    // S3 master (which now POLLS instead of waiting on a handshake line) can clock
+    // at any instant without landing in a re-arm gap. A gap would lose that frame
+    // in BOTH directions; the old single-transaction loop relied on the handshake
+    // to keep the master out of the gap, but GPIO40 became the LCD CS.
+    constexpr int N = 2;
+    uint8_t* tx_buf[N] = {};
+    uint8_t* rx_buf[N] = {};
+    spi_slave_transaction_t trans[N] = {};
 
-    if (!tx_buf || !rx_buf) {
-        ESP_LOGE(TAG, "Failed to allocate DMA buffers");
-        free(tx_buf);
-        free(rx_buf);
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    while (started_) {
-        // Prepare TX frame: control/status > audio downlink > EMPTY
-        prepareTxFrame(tx_buf);
-
-        // Tell post_setup_cb whether to raise handshake after DMA is loaded.
-        // The callback fires inside spi_slave_transmit, AFTER DMA registers
-        // are configured but BEFORE the master clocks — eliminating the race
-        // where master sees handshake HIGH but slave DMA isn't ready yet.
-        s_handshake_pending =
-            (dl_audio_sb_ && xStreamBufferBytesAvailable(dl_audio_sb_) > 0);
-
-        spi_slave_transaction_t t = {};
-        t.length = spi_proto::FRAME_SIZE * 8;
-        t.tx_buffer = tx_buf;
-        t.rx_buffer = rx_buf;
-
-        // Block forever — no timeout. This prevents stale transactions from
-        // piling up in the hardware queue (size=1). When timeout was used,
-        // the timed-out transaction stayed pending, blocking the next call
-        // and causing cascading deadlocks.
-        // Producer (sendAudioDownlink) sets handshake HIGH
-        // to wake S3, which polls and completes this transaction.
-        // S3 also polls when it has uplink data (audio/control).
-        esp_err_t err = spi_slave_transmit(SPI2_HOST, &t, portMAX_DELAY);
-        if (err == ESP_OK) {
-            handleRxFrame(rx_buf);
-
-            // Only pull handshake LOW when buffer is empty. Keeping it HIGH
-            // while data is pending prevents S3 from entering its 5ms idle
-            // poll delay between back-to-back transactions.
-            if (!dl_audio_sb_ || xStreamBufferBytesAvailable(dl_audio_sb_) == 0) {
-                gpio_set_level(cfg_.pin_handshake, 0);
-            }
-
-            taskYIELD();
+    for (int i = 0; i < N; ++i) {
+        tx_buf[i] = (uint8_t*)heap_caps_malloc(spi_proto::FRAME_SIZE, MALLOC_CAP_DMA);
+        rx_buf[i] = (uint8_t*)heap_caps_malloc(spi_proto::FRAME_SIZE, MALLOC_CAP_DMA);
+        if (!tx_buf[i] || !rx_buf[i]) {
+            ESP_LOGE(TAG, "Failed to allocate DMA buffers");
+            for (int j = 0; j < N; ++j) { free(tx_buf[j]); free(rx_buf[j]); }
+            vTaskDelete(nullptr);
+            return;
         }
     }
 
-    free(tx_buf);
-    free(rx_buf);
+    // Prime both slots so the HW always has a transaction armed from the start.
+    for (int i = 0; i < N; ++i) {
+        prepareTxFrame(tx_buf[i]);
+        trans[i].length    = spi_proto::FRAME_SIZE * 8;
+        trans[i].tx_buffer = tx_buf[i];
+        trans[i].rx_buffer = rx_buf[i];
+        spi_slave_queue_trans(SPI2_HOST, &trans[i], portMAX_DELAY);
+    }
+
+    while (started_) {
+        // Wait for the master to clock the oldest armed transaction. The peer slot
+        // stays armed during this wait → the bus is always covered (no gap).
+        spi_slave_transaction_t* done = nullptr;
+        if (spi_slave_get_trans_result(SPI2_HOST, &done, portMAX_DELAY) != ESP_OK || !done)
+            continue;
+
+        int idx = (int)(done - trans);   // which slot completed (0 or 1)
+        handleRxFrame(rx_buf[idx]);
+
+        // Refill this slot's TX and re-queue it; the peer slot keeps the bus
+        // covered while we touch this one → still gapless.
+        prepareTxFrame(tx_buf[idx]);
+        done->length = spi_proto::FRAME_SIZE * 8;
+        spi_slave_queue_trans(SPI2_HOST, done, portMAX_DELAY);
+    }
+
+    for (int i = 0; i < N; ++i) { free(tx_buf[i]); free(rx_buf[i]); }
     ESP_LOGW(TAG, "Slave task ended");
     vTaskDelete(nullptr);
 }

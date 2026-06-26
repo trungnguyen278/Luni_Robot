@@ -149,7 +149,7 @@ void AudioManager::pauseListening()
     if (!listening) return;
     ESP_LOGI(TAG, "Pause listening");
     // The turn moved to PROCESSING: stop uplink. Keep the mic capturing when a
-    // wake-word tap is installed so "Hi Luni" still works while we wait.
+    // wake-word tap is installed so "Hey Luni" still works while we wait.
     listening = false;
     if (!mic_always_on) input->stopCapture();
 }
@@ -225,7 +225,7 @@ void AudioManager::micReadLoop()
             }
             // Always-on mic for wake word: keep capturing and feed the detector
             // while idle. Skip while speaking so the robot's own TTS coming back
-            // through the mic can't self-trigger "Hi Luni".
+            // through the mic can't self-trigger "Hey Luni".
             input->startCapture();  // idempotent
             size_t s = input->readPcm(pcm_buf, PCM_FRAME);
             if (s == 0) { vTaskDelay(1); continue; }

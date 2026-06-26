@@ -1,4 +1,4 @@
-# Wake word "Hi Luni" — train FREE on Colab (microWakeWord)
+# Wake word "Hey Luni" — train FREE on Colab (microWakeWord)
 
 Luni dùng wake word **on-device** trên ESP32-S3 (nơi có mic + 8MB PSRAM) để thay
 nút nhấn. Vì **custom wake word của ESP-SR (Espressif) KHÔNG miễn phí**, ta dùng
@@ -10,9 +10,13 @@ Colab, chính là cơ chế ESPHome dùng.
 
 ## 0. CÔNG THỨC ĐÃ CHẠY ĐƯỢC (2026-06) — train lại / train từ khác
 
-> **"Hi Luni" đã train + nhúng xong rồi**: `lib/wakeword/model_hi_luni.h` (60840 byte, ký hiệu
-> `g_hi_luni_model`), và `src/config/WakeWordConfig.hpp` đã set `DETECT_THRESHOLD=0.60`,
-> `STRIDE_MS=10`. Chất lượng: recall ~0.98, **0 lần kích nhầm/giờ** trên 5.3 giờ tiếng ồn tiệc.
+> **Đã chuyển "Hi Luni" → "Hey Luni"** ("Hi" quá ngắn → dễ kích nhầm/sót; "Hey" nguyên âm dài
+> hơn nên detector phân biệt tốt hơn). **Train + nhúng XONG (Colab T4, 2026-06-26):**
+> `lib/wakeword/model_hey_luni.h` (60896 byte, ký hiệu `g_hey_luni_model`, sha256
+> `7882068ee72520b8…`); firmware đã trỏ sang model này; `DETECT_THRESHOLD=0.75` chọn từ bảng mục 7
+> (recall **0.975** @ **0.37 false-accept/giờ** trên 5.3h nhiễu tiệc DiPCo); `STRIDE_MS=10`.
+> Phiên âm Piper = `"hey loonie"`. **Còn lại: flash S3 + test/tinh chỉnh ngưỡng trên phần cứng thật.**
+> (Model "Hi Luni" cũ đã gỡ.)
 
 **Muốn train lại hoặc đổi từ khác → dùng notebook có sẵn: [`tools/train_wakeword.ipynb`](../tools/train_wakeword.ipynb)**
 
@@ -44,7 +48,7 @@ Còn lại: **flash + tinh chỉnh `DETECT_THRESHOLD` trên phần cứng thật
 
 1. Mở repo **microWakeWord**: <https://github.com/kahrendt/microWakeWord> → notebook
    `basic_training_notebook.ipynb` trên **Colab** (chọn Runtime GPU — miễn phí).
-2. Đặt cụm từ: `"Hi Luni"` (tiếng Việt cũng được — Piper tự sinh giọng).
+2. Đặt cụm từ: `"Hey Luni"` (viết phiên âm `"hey loonie"` để Piper đọc đúng "loo-nee").
 3. Notebook sẽ:
    - sinh **mẫu dương** bằng **Piper TTS** (nhiều giọng) + augment (noise, pitch),
    - lấy **mẫu âm nền/negative** từ dataset có sẵn,
@@ -55,7 +59,7 @@ Còn lại: **flash + tinh chỉnh `DETECT_THRESHOLD` trên phần cứng thật
 
 ```bash
 # chuyển .tflite -> C array
-xxd -i hi_luni.tflite > esp32-s3/lib/wakeword/model_hi_luni.h
+xxd -i hey_luni.tflite > esp32-s3/lib/wakeword/model_hey_luni.h
 ```
 
 Cập nhật ngưỡng trong `esp32-s3/lib/wakeword/WakeWordConfig.hpp` theo manifest
@@ -70,7 +74,7 @@ Bám đúng pipeline microWakeWord của ESPHome để model train trên Colab c
    microfrontend (`tensorflow/lite/experimental/microfrontend/lib`) + op resource-variable
    cho model streaming.
 2. `init()`: `FrontendConfig` (16 kHz, 30 ms/10 ms, 40 kênh, band 125–7500, noise-reduction
-   + PCAN + log-scale = hằng số microWakeWord), `tflite::GetModel(g_hi_luni_model)`,
+   + PCAN + log-scale = hằng số microWakeWord), `tflite::GetModel(g_hey_luni_model)`,
    `MicroMutableOpResolver<20>` (CallOnce, VarHandle, Reshape, ReadVariable, StridedSlice,
    Concatenation, AssignVariable, Conv2D, Mul, Add, Mean, FullyConnected, Logistic, Quantize,
    DepthwiseConv2D, AveragePool2D, MaxPool2D, Pad, Pack, SplitV), `MicroResourceVariables::Create(...,20)`,
@@ -100,6 +104,6 @@ nguồn kích hoạt.)
 
 ## Vì sao KHÔNG dùng ESP-SR WakeNet
 
-WakeNet built-in chỉ có sẵn vài wake word tiếng Anh/Trung; muốn custom "Hi Luni"
+WakeNet built-in chỉ có sẵn vài wake word tiếng Anh/Trung; muốn custom "Hey Luni"
 phải đặt **Espressif train (mất phí/đăng ký)**. microWakeWord cho train custom
 **miễn phí** trên Colab → đúng yêu cầu.

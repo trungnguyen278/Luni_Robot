@@ -170,7 +170,9 @@ bool DisplayDriver::init(const Config &cfg)
     width_ = cfg.width;
     height_ = cfg.height;
 
-    ESP_LOGI(TAG, "Init ST7789 %dx%d", width_, height_);
+    ESP_LOGI(TAG, "Init ST7789 %dx%d (CS=%d DC=%d RST=%d @ %luMHz)",
+             width_, height_, cfg.pin_cs, cfg.pin_dc, cfg.pin_rst,
+             (unsigned long)(cfg.spi_speed_hz / 1000000));
 
     // 1. Init SPI bus
     spi_bus_config_t buscfg = {};

@@ -4,7 +4,7 @@
 #include <functional>
 
 // =============================================================================
-// WakeWordDetector — on-device "Hi Luni" wake word (microWakeWord / TFLite-Micro)
+// WakeWordDetector — on-device "Hey Luni" wake word (microWakeWord / TFLite-Micro)
 // running on the ESP32-S3. Replaces the push-to-talk button.
 //
 // Audio is the native 16 kHz mono mic stream (AudioConfig::SAMPLE_RATE) so no

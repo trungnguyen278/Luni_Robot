@@ -28,7 +28,7 @@ bool I2SAudioOutput_MAX98357::init()
 
     i2s_std_config_t std_cfg = {};
 
-    // Use configured rate directly — compensation may not be needed at 48kHz
+    // Use AudioConfig's rate directly (currently 16 kHz for mic/speaker/Opus).
     ESP_LOGI(TAG, "I2S clock: rate=%luHz", (unsigned long)cfg_.sample_rate);
     std_cfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(cfg_.sample_rate);
 

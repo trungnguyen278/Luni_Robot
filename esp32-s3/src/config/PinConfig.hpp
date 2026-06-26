@@ -39,9 +39,11 @@ namespace PinConfig {
 //     (permanently selected). ESP-IDF runs the bus with spics_io_num=-1.
 static constexpr int SPI_MOSI  = 41;
 static constexpr int SPI_SCLK  = 42;
-static constexpr int LCD_CS    = -1;  // tie panel CS -> GND (freed GPIO40 for SPI3 HS)
+static constexpr int LCD_CS    = 40;  // CHỐT: CS BẮT BUỘC chân SẠCH (non-strapping). GPIO40 là chân sạch trống duy nhất → CS module -> GPIO40.
+                                       // GPIO0 & GPIO45 ĐỀU FAIL cho CS (chân strapping có tụ → méo cạnh tốc-độ-cao). Chỉ hợp tín hiệu chậm.
+                                       // GPIO40 vốn là SPI3 handshake → phải BỎ handshake (S3 poll + C5 slave gapless) để nhường cho CS.
 static constexpr int LCD_DC    = 39;
-static constexpr int LCD_RST   = -1;  // tie panel RST -> 3V3 (freed GPIO38 for SPI3 MISO)
+static constexpr int LCD_RST   = -1;  // CHỐT: RST tie 3V3 chạy tốt (RST chưa bao giờ là vấn đề). RST module -> 3V3.
 static constexpr int LCD_BL    = 47;  // Backlight PWM (LEDC_CHANNEL_0 / TIMER_0)
 
 // --- Battery ADC (-1 = no battery, skips PowerManager) ----------------------
@@ -61,16 +63,15 @@ static constexpr int CHG_FULL   = -1;
 static constexpr int BUTTON    = -1;
 
 // --- I2S Audio (Full-Duplex, shared BCLK/WS for mic+speaker) ----------------
-static constexpr int I2S_BCLK  = 1;   // Shared bit clock
-static constexpr int I2S_WS    = 2;   // Shared word select
-static constexpr int I2S_DIN   = 14;  // ICS43434 mic data in
-static constexpr int I2S_DOUT  = 21;  // MAX98357 speaker data out
+static constexpr int I2S_BCLK  = 1;   // Shared bit clock (BCLK on MAX98357, SCK on Mic)
+static constexpr int I2S_WS    = 2;   // Shared word select (LRC on MAX98357, WS on Mic)
+static constexpr int I2S_DIN   = 14;  // Mic data in (SD on Mic)
+static constexpr int I2S_DOUT  = 21;  // Speaker data out (DIN on MAX98357)
 static constexpr int I2S_NUM   = 0;   // I2S0
 
 // --- Speaker (MAX98357) control ---------------------------------------------
-static constexpr int SPK_SD    = 45;  // MAX98357 shutdown (LOW=off, HIGH=on)
-                                       // GPIO45 = VDD_SPI strapping: default-LOW at
-                                       // boot keeps amp muted, set HIGH after boot.
+static constexpr int SPK_SD    = 45;  // MAX98357 shutdown (LOW=off, HIGH=on). GPIO45 = VDD_SPI strapping nhưng SD đổi chậm +
+                                       // S3 tự lái + MAX98357 SD là input high-Z → an toàn boot, tụ vô hại. (CS cần chân sạch nên không dùng 45.)
 static constexpr int SPK_GAIN  = -1;  // Hard-wire GAIN (float = 9dB) to save a pin
 
 // --- UART Bridge to ESP32-C5 (control/status messages) ----------------------
@@ -88,11 +89,13 @@ static constexpr int UART_BAUD     = 460800;
 // moving the I2C motion bus to the C5 (GPIO3/46) and dropping the now-unused
 // LCD_RST/LCD_CS (GPIO38/40) + the RGB status LED (GPIO48). SPI3 uses the GPIO
 // matrix so any free pin works. MUST match the C5 SPI slave pins.
-static constexpr int SPI3_MOSI      = 3;   // -> C5 GPIO2  (was I2C SDA)
+static constexpr int SPI3_MOSI      = 3;   // -> C5 GPIO2. SPI3 audio (S3 poll + C5 gapless). SpiBridge init giờ NON-FATAL nên
+                                            // display luôn boot dù SPI3 lỗi → đọc log để biết SPI3 init OK/fail. Để -1 nếu muốn bench yên tĩnh.
 static constexpr int SPI3_MISO      = 38;  // <- C5 GPIO3  (was LCD_RST)
 static constexpr int SPI3_SCLK      = 46;  // -> C5 GPIO4  (was I2C SCL)
 static constexpr int SPI3_CS        = 48;  // -> C5 GPIO5  (was RGB LED)
-static constexpr int SPI3_HANDSHAKE = 40;  // <- C5 GPIO8  (was LCD_CS); HIGH = C5 has data
+static constexpr int SPI3_HANDSHAKE = -1;  // BỎ: GPIO40 nay là LCD_CS (line 42). KHÔNG để =40 — sẽ đè display CS → màn đen khi SPI3 bật.
+                                            // S3 poll thay HS (SpiBridge guard HS<0) + C5 slave gapless. Tháo dây C5-GPIO8↔S3-GPIO40.
 
 // --- Battery voltage divider resistors (ohms) -------------------------------
 static constexpr float BAT_R1 = 10000.0f;

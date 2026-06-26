@@ -5,9 +5,7 @@
 
 // MAX98357 I2S Amplifier driver (ESP-IDF 5.x new I2S API)
 // Accepts a pre-created TX channel handle for full-duplex sharing with mic.
-// I2S runs at 2x the audio sample rate (e.g., 32kHz for 16kHz audio).
-// writePcm performs 2x linear interpolation to smooth the output for
-// the filterless Class-D amplifier.
+// I2S timing follows AudioConfig::SAMPLE_RATE; data is sent as mono 32-bit slots.
 class I2SAudioOutput_MAX98357 : public AudioOutput {
 public:
     struct Config {

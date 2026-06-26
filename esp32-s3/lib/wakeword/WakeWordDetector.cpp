@@ -6,7 +6,7 @@ static const char* TAG = "WakeWord";
 #ifdef LUNI_ENABLE_WAKEWORD
 
 #include "WakeWordConfig.hpp"
-#include "model_hi_luni.h"
+#include "model_hey_luni.h"
 
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -28,7 +28,7 @@ namespace {
 
 // ---------------------------------------------------------------------------
 // microWakeWord on-device pipeline (matches ESPHome's micro_wake_word so the
-// Colab-trained "Hi Luni" model behaves the same on device):
+// Colab-trained "Hey Luni" model behaves the same on device):
 //   PCM 16k → microfrontend (40-ch log-mel spectrogram, 30ms win / 10ms hop)
 //           → int8 quantize → streaming TFLM model (per-stride invoke, keeps
 //             internal state via resource variables) → uint8 probability
@@ -77,6 +77,11 @@ struct WakeImpl {
     uint8_t cutoff_u8 = 0;       // DETECT_THRESHOLD * 255
     uint32_t last_detect_ms = 0;
     uint32_t last_feed_ms = 0;
+#ifdef LUNI_WAKEWORD_LOG_SCORES
+    uint8_t log_peak_prob = 0;
+    uint32_t log_window_start_ms = 0;
+    uint32_t log_invokes = 0;
+#endif
 
     // sample buffer feeding the frontend (frontend consumes in step chunks)
     std::vector<int16_t> sample_buf;
@@ -89,6 +94,11 @@ void resetState(WakeImpl* w)
     w->prob_head = 0;
     w->prob_count = 0;
     w->sample_buf.clear();
+#ifdef LUNI_WAKEWORD_LOG_SCORES
+    w->log_peak_prob = 0;
+    w->log_window_start_ms = nowMs();
+    w->log_invokes = 0;
+#endif
     // last_detect_ms intentionally kept so a reset doesn't bypass refractory.
 }
 
@@ -160,7 +170,7 @@ bool WakeWordDetector::init()
     }
 
     // --- TFLM model ---
-    w->model = tflite::GetModel(g_hi_luni_model);
+    w->model = tflite::GetModel(g_hey_luni_model);
     if (w->model->version() != TFLITE_SCHEMA_VERSION) {
         ESP_LOGE(TAG, "model schema %lu != %d",
                  (unsigned long)w->model->version(), TFLITE_SCHEMA_VERSION);
@@ -255,6 +265,9 @@ bool WakeWordDetector::init()
     w->cutoff_u8 = (uint8_t)(WakeWordConfig::DETECT_THRESHOLD * 255.0f);
     w->probs.assign((size_t)WakeWordConfig::MOVING_AVG_FRAMES, 0);
     w->sample_buf.reserve(960);
+#ifdef LUNI_WAKEWORD_LOG_SCORES
+    w->log_window_start_ms = nowMs();
+#endif
 
     impl_ = w;
     ready_ = true;
@@ -318,6 +331,21 @@ void WakeWordDetector::feed(const int16_t* pcm16k, size_t samples)
         }
 
         uint8_t prob = w->output->data.uint8[0];
+#ifdef LUNI_WAKEWORD_LOG_SCORES
+        uint32_t t = nowMs();
+        if (prob > w->log_peak_prob) w->log_peak_prob = prob;
+        w->log_invokes++;
+        if (w->log_window_start_ms == 0) w->log_window_start_ms = t;
+        if ((t - w->log_window_start_ms) >= 1000) {
+            ESP_LOGI(TAG, "wake word score: peak=%u/255 cutoff=%u/255 invokes=%lu",
+                     w->log_peak_prob,
+                     w->cutoff_u8,
+                     (unsigned long)w->log_invokes);
+            w->log_peak_prob = 0;
+            w->log_invokes = 0;
+            w->log_window_start_ms = t;
+        }
+#endif
         if (pushAndDetect(w, prob)) {
             ESP_LOGI(TAG, "wake word detected (prob=%u/255)", prob);
             if (cb_) cb_();

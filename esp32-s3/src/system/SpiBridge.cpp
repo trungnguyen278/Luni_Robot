@@ -14,13 +14,17 @@ bool SpiBridge::init(const Config& cfg)
 {
     cfg_ = cfg;
 
-    // Init handshake GPIO as input
-    gpio_config_t hs_cfg = {};
-    hs_cfg.pin_bit_mask = (1ULL << cfg_.pin_handshake);
-    hs_cfg.mode = GPIO_MODE_INPUT;
-    hs_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
-    hs_cfg.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    gpio_config(&hs_cfg);
+    // Init handshake GPIO as input — skip when no HS pin (GPIO40 freed for LCD CS).
+    // Without HS the poll loop falls back to fixed-cadence polling; C5 slave is
+    // gapless so no frames drop. NB: (1ULL<<-1) is UB → "GPIO_PIN mask error".
+    if ((int)cfg_.pin_handshake >= 0) {
+        gpio_config_t hs_cfg = {};
+        hs_cfg.pin_bit_mask = (1ULL << cfg_.pin_handshake);
+        hs_cfg.mode = GPIO_MODE_INPUT;
+        hs_cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+        hs_cfg.pull_down_en = GPIO_PULLDOWN_ENABLE;
+        gpio_config(&hs_cfg);
+    }
 
     // Init SPI3 bus
     spi_bus_config_t bus_cfg = {};
@@ -182,7 +186,12 @@ void SpiBridge::pollLoop()
 
     while (started_) {
         bool has_tx = (uxQueueMessagesWaiting(tx_queue_) > 0);
-        bool c5_ready = (gpio_get_level(cfg_.pin_handshake) == 1);
+        // No HS pin (GPIO40 → LCD CS): poll every loop; the 1-tick yield below
+        // paces it to ~100Hz, plenty for the 3KB/s opus downlink. C5 slave is
+        // gapless so a poll never lands in a re-arm gap.
+        bool c5_ready = ((int)cfg_.pin_handshake >= 0)
+                            ? (gpio_get_level(cfg_.pin_handshake) == 1)
+                            : true;
 
         if (!has_tx && !c5_ready) {
             // Minimum 1 tick delay (10ms at HZ=100); pdMS_TO_TICKS(2) = 0!

@@ -32,8 +32,8 @@ bool OpusCodec::initCodec()
     const int app = AudioConfig::OPUS_USE_VOIP ? OPUS_APPLICATION_VOIP
                                                : OPUS_APPLICATION_AUDIO;
 
-    // Create encoder. VOIP(SILK) at 16k is ideal for speech and lighter on CPU
-    // than 48k CELT. Sample rate / bitrate / complexity all come from AudioConfig.
+    // Create encoder. VOIP/SILK at 16 kHz is speech-focused and lighter on CPU.
+    // Sample rate / bitrate / complexity all come from AudioConfig.
     encoder_ = opus_encoder_create(AudioConfig::SAMPLE_RATE, AudioConfig::CHANNELS, app, &err);
     if (err != OPUS_OK || !encoder_) {
         ESP_LOGE(TAG, "Failed to create Opus encoder: %s", opus_strerror(err));

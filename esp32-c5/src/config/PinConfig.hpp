@@ -15,7 +15,7 @@
 //   SPI3 audio lane (S3 master  <-> C5 slave):
 //     S3 SCLK 46  <-> C5 SCLK 4      S3 MOSI 3  -> C5 MOSI 2
 //     S3 MISO 38  <-  C5 MISO 3      S3 CS   48 -> C5 CS   5
-//     S3 HS   40  <-  C5 HS   8   (C5 raises HS HIGH when downlink data ready)
+//     (HS line BỎ — S3 GPIO40 thành LCD CS; S3 poll, C5 slave gapless)
 //   UART control/status (S3 <-> C5):
 //     S3 TX 19 -> C5 RX 6           S3 RX 20 <- C5 TX 7
 // =============================================================================
@@ -28,7 +28,8 @@ static constexpr int SPI_MOSI      = 2;   // C5 GPIO2  <- S3 GPIO3   (MOSI)
 static constexpr int SPI_MISO      = 3;   // C5 GPIO3  -> S3 GPIO38  (MISO)
 static constexpr int SPI_SCLK      = 4;   // C5 GPIO4  <- S3 GPIO46  (SCLK)
 static constexpr int SPI_CS        = 5;   // C5 GPIO5  <- S3 GPIO48  (CS)
-static constexpr int SPI_HANDSHAKE = 8;   // C5 GPIO8  -> S3 GPIO40  (HIGH = C5 has data)
+static constexpr int SPI_HANDSHAKE = -1;  // BỎ: S3 GPIO40 đã thành LCD CS (panel cần chân sạch). S3 poll + C5 slave gapless
+                                          // (queue 2 ping-pong) → không cần HS, không rớt frame. GPIO8 nay trống. Tháo dây C5-GPIO8↔S3-GPIO40.
 
 // --- SPI Configuration ---
 static constexpr int SPI_NUM       = 2;   // SPI2
@@ -94,7 +95,7 @@ static constexpr int USER_BUTTON   = -1;
 static constexpr int MUTE_BUTTON   = 10;
 
 // --- Free GPIOs ---
-// GPIO 11, 14 available for future use (push-to-talk / mode / volume / LED ...).
+// GPIO 8, 11, 14 available for future use (8 freed: SPI HS bỏ; push-to-talk / mode / volume / LED ...).
 // GPIO 10 = mic-mute button (above); GPIO 12/13 = I2C motion bus;
 // GPIO 1 = battery ADC (above).
 
